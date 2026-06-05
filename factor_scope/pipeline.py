@@ -14,6 +14,7 @@ import json
 
 from factor_scope.config import Config
 from factor_scope.contract import Dashboard, DashboardItem, Evidence, ListName
+from factor_scope.factors import FactorContext, compute_gate, compute_states
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 
@@ -75,11 +76,14 @@ def _build_items(store: PointInTimeStore, as_of: str) -> list[DashboardItem]:
             evidence.append(
                 Evidence(src="akshare:fund_etf_hist", as_of=price.as_of, one_line=one_line)
             )
+        ctx = FactorContext(code=pos.key, as_of=as_of, store=store)
         items.append(
             DashboardItem(
                 item=str(pos.payload["name"]),
                 list=ListName(pos.payload["list"]),
                 gain=gain,
+                states=compute_states(ctx),
+                gate=compute_gate(ctx),
                 evidence=evidence,
             )
         )

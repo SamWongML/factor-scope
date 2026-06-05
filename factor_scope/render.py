@@ -7,13 +7,27 @@ current phase simply read as "—".
 
 from __future__ import annotations
 
-from factor_scope.contract import Dashboard, DashboardItem, ListName
+from factor_scope.contract import Band, Dashboard, DashboardItem, ListName
 
 _LIST_TITLES = {
     ListName.HOLDINGS: "HOLDINGS  (hold · trim · exit?)",
     ListName.WATCHLIST: "WATCHLIST  (buy-early trigger?)",
     ListName.EMERGING: "EMERGING  (promote a weak signal?)",
 }
+
+
+def _states_line(item: DashboardItem) -> str:
+    """A compact read of the factor battery: valid count + the active (non-neutral) reads."""
+
+    if not item.states:
+        return "        states: —"
+    valid = [s for s in item.states if s.valid]
+    active = [s for s in valid if s.level is not Band.NEUTRAL]
+    head = f"        states: {len(valid)}/{len(item.states)} valid"
+    if not active:
+        return head + " (all neutral)"
+    reads = "; ".join(f"{s.factor} {s.level.value}→{s.direction}" for s in active)
+    return f"{head}\n          {reads}"
 
 
 def _item_line(item: DashboardItem) -> str:
@@ -26,6 +40,7 @@ def _item_line(item: DashboardItem) -> str:
     return (
         f"    • {item.item}  (gain {gain})\n"
         f"        lean: {lean}  (conf {conf})  gate: {gate}{flag}\n"
+        f"{_states_line(item)}\n"
         f"        evidence: {evidence}"
     )
 
