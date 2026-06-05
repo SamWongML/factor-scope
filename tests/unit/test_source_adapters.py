@@ -2,7 +2,7 @@
 
 import pytest
 
-from factor_scope.ingest import edgar, fred, fund_holdings, prices
+from factor_scope.ingest import edgar, fred, fund_holdings, prices, theme_funds, themes
 from factor_scope.ingest.base import IngestError
 
 pytestmark = pytest.mark.unit
@@ -40,3 +40,31 @@ def test_edgar_keys_each_position() -> None:
     readings = edgar.parse(text, fetched_at="x")
     assert readings[0].key == "0001067983/COHR"
     assert readings[0].payload["shares"] == 1250000.0
+
+
+def test_themes_keys_by_name_and_coerces_flags() -> None:
+    text = (
+        "theme,as_of,acceleration,base_level,breadth,crowding,"
+        "broad_adoption,path_to_profit,fad_resistant,lead_chain,wrapper_exists\n"
+        "储能,2026-05-31,0.62,0.30,6,0.35,1,1,1,1,0\n"
+    )
+    readings = themes.parse(text, fetched_at="x")
+    assert readings[0].series == "themes"
+    assert readings[0].key == "储能"
+    assert readings[0].as_of == "2026-05-31"  # the research date, not the run date
+    assert readings[0].payload["breadth"] == 6  # parsed as an int
+    assert readings[0].payload["broad_adoption"] is True
+    assert readings[0].payload["wrapper_exists"] is False  # 0 → False
+
+
+def test_theme_funds_keys_by_code() -> None:
+    text = (
+        "theme,code,name,as_of,methodology,fee,aum,tracking_error,top10_weight\n"
+        "储能,561160,储能ETF,2026-05-31,0.90,0.005,82,0.010,0.55\n"
+    )
+    readings = theme_funds.parse(text, fetched_at="x")
+    assert readings[0].series == "theme_funds"
+    assert readings[0].key == "561160"
+    assert readings[0].payload["theme"] == "储能"
+    assert readings[0].payload["name"] == "储能ETF"
+    assert readings[0].payload["fee"] == 0.005

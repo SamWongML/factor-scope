@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from factor_scope.cli import app
 from factor_scope.config import Config
-from factor_scope.contract import Dashboard, GateState
+from factor_scope.contract import Dashboard, GateState, ListName
 from factor_scope.pipeline import build_dashboard
 
 pytestmark = pytest.mark.system
@@ -29,6 +29,11 @@ def test_run_attaches_states_and_gate(tmp_path) -> None:
     for item in dash.items:
         assert item.states, f"{item.item} has no states"
         assert len(item.states) == 8
+
+    # The priced core book (holdings + watchlist) always has a computed gate; a faint emerging
+    # candidate may stay `unknown` until it has 200 sessions of history (spec §07 — missing ≠ bad).
+    core = [it for it in dash.items if it.list_name is not ListName.EMERGING]
+    for item in core:
         assert item.gate is not GateState.UNKNOWN
 
     gates = {it.gate for it in dash.items}

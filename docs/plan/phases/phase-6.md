@@ -1,4 +1,4 @@
-# Phase 6 — Emerging radar funnel (L3)  ·  STATUS: todo
+# Phase 6 — Emerging radar funnel (L3)  ·  STATUS: done
 
 Spec: §07. Two-stage funnel: qualify the **industry**, then screen its **funds** to a top 3.
 
