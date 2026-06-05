@@ -13,8 +13,21 @@ from __future__ import annotations
 import json
 
 from factor_scope.config import Config
-from factor_scope.contract import Dashboard, DashboardItem, Evidence, ListName
+from factor_scope.contract import (
+    Dashboard,
+    DashboardItem,
+    Evidence,
+    GateState,
+    ListName,
+)
 from factor_scope.factors import FactorContext, compute_gate, compute_states
+from factor_scope.graph import (
+    DuckDBGraphStore,
+    GraphStore,
+    Holding,
+    build_connections,
+    build_graph_from_store,
+)
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 
@@ -38,6 +51,10 @@ def _open_store(config: Config) -> DuckDBStore:
     return DuckDBStore(":memory:" if config.store_path is None else config.store_path)
 
 
+def _open_graph(config: Config) -> DuckDBGraphStore:
+    return DuckDBGraphStore(":memory:" if config.graph_path is None else config.graph_path)
+
+
 def _gather(config: Config, as_of: str) -> list[Reading]:
     if config.source == "fixtures":
         return gather_fixture_readings(config, as_of=as_of)
@@ -45,21 +62,25 @@ def _gather(config: Config, as_of: str) -> list[Reading]:
 
 
 def ingest(config: Config) -> int:
-    """Fill the store from the configured source. Returns the number of rows appended."""
+    """Fill the store + connection graph from the source. Returns the number of rows appended."""
 
     as_of = _resolve_as_of(config)
     store = _open_store(config)
+    graph = _open_graph(config)
     try:
-        return store.append(_gather(config, as_of))
+        n = store.append(_gather(config, as_of))
+        build_graph_from_store(graph, store)
+        return n
     finally:
         store.close()
+        graph.close()
 
 
-def _build_items(store: PointInTimeStore, as_of: str) -> list[DashboardItem]:
-    """Project the point-in-time store into dashboard items (positions + priced evidence)."""
+def _build_items(store: PointInTimeStore, as_of: str) -> list[tuple[str, DashboardItem]]:
+    """Project the store into ``(code, item)`` pairs (positions + priced evidence + states/gate)."""
 
     prices = {r.key: r for r in store.read_as_of("prices", as_of)}
-    items: list[DashboardItem] = []
+    items: list[tuple[str, DashboardItem]] = []
     for pos in store.read_as_of("positions", as_of):
         cost_basis = float(pos.payload["cost_basis"])
         gain: float | None = None
@@ -77,17 +98,67 @@ def _build_items(store: PointInTimeStore, as_of: str) -> list[DashboardItem]:
                 Evidence(src="akshare:fund_etf_hist", as_of=price.as_of, one_line=one_line)
             )
         ctx = FactorContext(code=pos.key, as_of=as_of, store=store)
-        items.append(
-            DashboardItem(
-                item=str(pos.payload["name"]),
-                list=ListName(pos.payload["list"]),
-                gain=gain,
-                states=compute_states(ctx),
-                gate=compute_gate(ctx),
-                evidence=evidence,
-            )
+        item = DashboardItem(
+            item=str(pos.payload["name"]),
+            list=ListName(pos.payload["list"]),
+            gain=gain,
+            states=compute_states(ctx),
+            gate=compute_gate(ctx),
+            evidence=evidence,
         )
+        items.append((pos.key, item))
     return items
+
+
+def _build_book(store: PointInTimeStore, as_of: str) -> list[Holding]:
+    """My funds + my portfolio weight in each (by market value: shares × point-in-time NAV).
+
+    A not-yet-held watch name has zero weight — it can still surface in an overlap, but adds no
+    look-through exposure. If nothing is held (every value zero) all weights are zero.
+    """
+
+    prices = {r.key: r for r in store.read_as_of("prices", as_of)}
+    rows: list[tuple[str, str, float]] = []  # (code, name, market value)
+    for pos in store.read_as_of("positions", as_of):
+        shares = float(pos.payload.get("shares", 0) or 0)
+        price = prices.get(pos.key)
+        nav = float(price.payload["nav"]) if price is not None else 0.0
+        rows.append((pos.key, str(pos.payload["name"]), shares * nav))
+    total = sum(value for _, _, value in rows)
+    return [
+        Holding(code=code, name=name, weight=(value / total if total > 0 else 0.0))
+        for code, name, value in rows
+    ]
+
+
+def _is_down(item: DashboardItem) -> bool:
+    """A fund is at downside risk if the trend gate is capped or it reads reversal-DOWN risk."""
+
+    if item.gate is GateState.CAPPED:
+        return True
+    return any(s.valid and "reversal-DOWN" in s.direction for s in item.states)
+
+
+def _attach_connections(
+    pairs: list[tuple[str, DashboardItem]],
+    graph: GraphStore,
+    book: list[Holding],
+    as_of: str,
+) -> None:
+    """Fill each item's ``connections[]`` + ``connections_flag`` via the exact look-through.
+
+    A held security is flagged falling (``↓``) when *any* of my funds holding it is at downside
+    risk — so the shared name inherits the warning across the whole book.
+    """
+
+    down: set[str] = set()
+    for code, item in pairs:
+        if _is_down(item):
+            down.update(e.security for e in graph.securities_of(code, as_of))
+    for code, item in pairs:
+        connections, flag = build_connections(graph, code, as_of, book, down)
+        item.connections = connections
+        item.connections_flag = flag
 
 
 def build_dashboard(config: Config) -> Dashboard:
@@ -99,13 +170,20 @@ def build_dashboard(config: Config) -> Dashboard:
 
     as_of = _resolve_as_of(config)
     store = _open_store(config)
+    graph = _open_graph(config)
     try:
         if store.count("positions") == 0:
             # Empty store → auto-ingest so `run` works without a separate `ingest` step.
             store.append(_gather(config, as_of))
-        items = _build_items(store, as_of)
+        if graph.count() == 0:
+            # Empty graph → build it from the (durable or just-ingested) holdings readings.
+            build_graph_from_store(graph, store)
+        pairs = _build_items(store, as_of)
+        _attach_connections(pairs, graph, _build_book(store, as_of), as_of)
+        items = [item for _, item in pairs]
     finally:
         store.close()
+        graph.close()
 
     return Dashboard(as_of=as_of, generated_at=f"{as_of}T22:00:00Z", items=items)
 

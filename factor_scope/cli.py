@@ -44,6 +44,11 @@ def run(
         "--store-path",
         help="Read from a durable store (else an in-memory one auto-ingested from the source).",
     ),
+    graph_path: Path | None = typer.Option(
+        None,
+        "--graph-path",
+        help="Read from a durable connection graph (else one built in-memory from the store).",
+    ),
     provider: str = typer.Option(
         "fake", help="LLM provider for digestion: fake (default) | claude_code | deepseek."
     ),
@@ -57,6 +62,7 @@ def run(
         as_of=as_of,
         output_path=output,
         store_path=store_path,
+        graph_path=graph_path,
         provider=provider,
     )
     dash = run_pipeline(config)
@@ -81,17 +87,23 @@ def ingest(
     store_path: Path = typer.Option(
         Path("out") / "store.duckdb", "--store-path", help="The durable store to append into."
     ),
+    graph_path: Path = typer.Option(
+        Path("out") / "graph.duckdb",
+        "--graph-path",
+        help="The durable connection graph to materialise from the holdings feeds.",
+    ),
 ) -> None:
-    """Fill the point-in-time store from a source (append-only), so `run` can read it."""
+    """Fill the point-in-time store + connection graph from a source, so `run` can read them."""
 
     config = Config(
         source="fixtures" if fixtures else "live",
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         store_path=store_path,
+        graph_path=graph_path,
     )
     n = ingest_pipeline(config)
-    typer.echo(f"✓ appended {n} readings to {store_path}", err=True)
+    typer.echo(f"✓ appended {n} readings to {store_path}; built graph at {graph_path}", err=True)
 
 
 @app.command()

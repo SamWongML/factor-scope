@@ -30,6 +30,18 @@ def _states_line(item: DashboardItem) -> str:
     return f"{head}\n          {reads}"
 
 
+def _connections_line(item: DashboardItem) -> str | None:
+    """The look-through overlaps: shared names, who else of mine holds them, and my weight."""
+
+    if not item.connections:
+        return None
+    reads = "; ".join(
+        f"{c.shared} also in {', '.join(c.also_in)} (look-through {c.lookthrough_wt:.1%})"
+        for c in item.connections
+    )
+    return f"        connections: {reads}"
+
+
 def _item_line(item: DashboardItem) -> str:
     lean = item.lean.text if item.lean else "—"
     conf = f"{item.lean.confidence:.2f}" if item.lean else "—"
@@ -37,12 +49,16 @@ def _item_line(item: DashboardItem) -> str:
     gate = item.gate.value
     flag = " ⚠connections" if item.connections_flag else ""
     evidence = item.evidence[0].one_line if item.evidence else "—"
-    return (
-        f"    • {item.item}  (gain {gain})\n"
-        f"        lean: {lean}  (conf {conf})  gate: {gate}{flag}\n"
-        f"{_states_line(item)}\n"
-        f"        evidence: {evidence}"
-    )
+    lines = [
+        f"    • {item.item}  (gain {gain})",
+        f"        lean: {lean}  (conf {conf})  gate: {gate}{flag}",
+        _states_line(item),
+    ]
+    connections = _connections_line(item)
+    if connections is not None:
+        lines.append(connections)
+    lines.append(f"        evidence: {evidence}")
+    return "\n".join(lines)
 
 
 def render(dash: Dashboard) -> str:
