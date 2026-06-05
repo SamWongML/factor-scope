@@ -29,6 +29,7 @@ from factor_scope.graph import (
     build_graph_from_store,
 )
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
+from factor_scope.scoring import build_scorecard, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 
 
@@ -161,6 +162,23 @@ def _attach_connections(
         item.connections_flag = flag
 
 
+def _attach_scorecard(
+    pairs: list[tuple[str, DashboardItem]], store: PointInTimeStore, as_of: str
+) -> None:
+    """Score the prior calls knowable tonight and attach the rolling mirror to each item (spec §06).
+
+    One descriptive scorecard is built from *all* resolved calls — the book-wide calibration mirror
+    tomorrow's digest reads — and shared onto every item. It is read-only: it never touches an
+    item's states or gate (see ``test_guardrails``). With no calls logged, nothing is attached.
+    """
+
+    if store.count("calls") == 0:
+        return
+    scorecard = build_scorecard(score_calls(store, as_of))
+    for _, item in pairs:
+        item.scorecard = scorecard
+
+
 def build_dashboard(config: Config) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
 
@@ -180,6 +198,7 @@ def build_dashboard(config: Config) -> Dashboard:
             build_graph_from_store(graph, store)
         pairs = _build_items(store, as_of)
         _attach_connections(pairs, graph, _build_book(store, as_of), as_of)
+        _attach_scorecard(pairs, store, as_of)
         items = [item for _, item in pairs]
     finally:
         store.close()

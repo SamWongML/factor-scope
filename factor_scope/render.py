@@ -7,7 +7,7 @@ current phase simply read as "—".
 
 from __future__ import annotations
 
-from factor_scope.contract import Band, Dashboard, DashboardItem, ListName
+from factor_scope.contract import Band, Dashboard, DashboardItem, ListName, Scorecard
 
 _LIST_TITLES = {
     ListName.HOLDINGS: "HOLDINGS  (hold · trim · exit?)",
@@ -61,6 +61,23 @@ def _item_line(item: DashboardItem) -> str:
     return "\n".join(lines)
 
 
+def _scorecard_lines(card: Scorecard) -> list[str]:
+    """The self-scoring mirror (spec §06): how the last leans resolved. Descriptive only."""
+
+    head = f"  SELF-SCORING MIRROR  —  n={card.n} resolved calls ({card.window})"
+    if card.brier is None:  # gated: too thin a record to read
+        return [head + " — gated (sample too small)", ""]
+    skill = card.skill_vs_baserate or "n/a"
+    lines = [head, f"    Brier {card.brier:.3f}   skill vs base-rate {skill}"]
+    for b in card.reliability:
+        note = f"  ({b.note})" if b.note else ""
+        lines.append(f"    conf {b.bucket:.1f} → realised {b.realised:.0%}{note}")
+    for w in card.weak_patterns:
+        lines.append(f"    ⚠ {w}")
+    lines.append("")
+    return lines
+
+
 def render(dash: Dashboard) -> str:
     """Return the morning artifact as plain text."""
 
@@ -69,6 +86,9 @@ def render(dash: Dashboard) -> str:
     lines.append(f"  as_of: {dash.as_of}   generated_at: {dash.generated_at}")
     lines.append(f"  items: {len(dash.items)}   (schema v{dash.schema_version})")
     lines.append("")
+    card = next((it.scorecard for it in dash.items if it.scorecard is not None), None)
+    if card is not None:
+        lines.extend(_scorecard_lines(card))
 
     for name in (ListName.HOLDINGS, ListName.WATCHLIST, ListName.EMERGING):
         group = dash.by_list(name)
