@@ -19,9 +19,15 @@ _LIST_TITLES = {
 def _item_line(item: DashboardItem) -> str:
     lean = item.lean.text if item.lean else "—"
     conf = f"{item.lean.confidence:.2f}" if item.lean else "—"
+    gain = f"{item.gain:+.1%}" if item.gain is not None else "—"
     gate = item.gate.value
     flag = " ⚠connections" if item.connections_flag else ""
-    return f"    • {item.item}\n        lean: {lean}  (conf {conf})  gate: {gate}{flag}"
+    evidence = item.evidence[0].one_line if item.evidence else "—"
+    return (
+        f"    • {item.item}  (gain {gain})\n"
+        f"        lean: {lean}  (conf {conf})  gate: {gate}{flag}\n"
+        f"        evidence: {evidence}"
+    )
 
 
 def render(dash: Dashboard) -> str:

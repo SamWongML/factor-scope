@@ -22,4 +22,8 @@ class Config:
     fixtures_dir: Path = field(default=DEFAULT_FIXTURES_DIR)
     as_of: str | None = None  # None → take the as-of stamped in the fixtures (deterministic)
     output_path: Path = field(default=Path("out") / "dashboard.json")
+    # Where the point-in-time store lives. None → an ephemeral in-memory store that `run`
+    # auto-populates from the source, so the entrypoint works standalone. A path → a durable
+    # append-only store that `ingest` fills and `run` reads (point-in-time).
+    store_path: Path | None = None
     provider: str = "fake"  # LLM provider: "fake" (default) | "claude_code" | "deepseek"
