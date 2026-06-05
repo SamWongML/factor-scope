@@ -4,13 +4,12 @@
 > current `phases/phase-N.md` and resumes. Update status + **NEXT ACTION** whenever a unit or phase
 > closes, then commit. Statuses: `todo` · `wip` · `done`.
 
-**Current phase:** Phase 7 — Scheduling, packaging & ops
-**NEXT ACTION:** Start Phase 7 (spec §11). Wire the nightly e2e job on fixtures + ship a **launchd**
-plist (the Mac-mini production path, D4; cron noted for Linux) and the ops/runbook docs. The
-pipeline already emits a schema-valid, byte-for-byte-deterministic `dashboard.json` end-to-end
-(ingest→store→graph→states/gate→connections→scorecard→digest→**emerging funnel**), so Phase 7 is the
-scheduling/packaging wrapper around `factor-scope run`, not new artifact content. See
-`phases/phase-7.md`.
+**Current phase:** Phase 7 — Scheduling, packaging & ops — **done**. All 8 phases complete.
+**NEXT ACTION:** The roadmap is fully built (Phases 0–7). The next move is the **graduate tier**
+(documented, not built — see `docs/ops/RUNBOOK.md` §graduate): ArcticDB bitemporal backtesting under
+DSR/PBO/CPCV + parameter-stability, and an optional local vector store. Add only when backtesting
+begins. Otherwise the engine is feature-complete against the spec; remaining work is live-source
+wiring (behind `--live`) and real-provider hardening (`claude_code`), both opt-in and never in CI.
 
 | Phase | Status | Closed by (commit) | System test |
 |-------|--------|--------------------|-------------|
@@ -20,8 +19,34 @@ scheduling/packaging wrapper around `factor-scope run`, not new artifact content
 | 3 — Connection graph + look-through | **done** | _Phase 3 commit_ | `make system` ✓ (10 tests) |
 | 4 — Self-scoring loop | **done** | _Phase 4 commit_ | `make system` ✓ (11 tests) |
 | 5 — Digestion: LLM provider + bull/bear | **done** | _Phase 5 commit_ | `make system` ✓ (16 tests) |
-| 6 — Emerging radar funnel | **done** | _this commit_ | `make system` ✓ (20 tests) |
-| 7 — Scheduling, packaging & ops | todo | — | — |
+| 6 — Emerging radar funnel | **done** | _Phase 6 commit_ | `make system` ✓ (20 tests) |
+| 7 — Scheduling, packaging & ops | **done** | _this commit_ | `make system` ✓ (23 tests) |
+
+## Phase 7 — done
+RED→GREEN→REFACTOR complete. Delivered:
+- **Scheduling adapter** (`factor_scope/schedule/`, spec §11, D4): a thin **pure renderer** off a
+  `ScheduleSpec`, no platform code on the critical path. `deploy.render_launchd_plist` builds a macOS
+  launchd plist via `plistlib` (`StartCalendarInterval` daily at hour:minute, `RunAtLoad=false` — a
+  batch, not a daemon; the Mac-mini production path) and `deploy.render_cron_line` the Linux
+  alternative. Both deterministic and reviewable before install. Surfaced as `factor-scope schedule`
+  (`--kind launchd|cron`, `-o` to write a file).
+- **The one-shot nightly job** `factor-scope nightly` + `pipeline.nightly(config)` — ingest → compute
+  → digest → write `dashboard.json` → append one ops record → persist calls. Differs from `run` only
+  in **operable defaults**: a **durable** store/graph (so each night's leans accumulate as falsifiable
+  calls for the §06 loop) and an append-only **JSONL run log**. Re-running the **same night is
+  idempotent** (`_night_already_ingested` keys on tonight's positions `as_of` → skips re-ingest →
+  artifact stays byte-for-byte, audit-trail scorer never double-counts); a new night ingests fresh.
+- **Ops run log** (`schedule/runlog.py`): one `RunRecord` per run (`as_of`, start/end, per-list item
+  counts, `n_abstain`, `provider`, `n_calls_logged` = tomorrow's scoring fuel, `output_path`,
+  `cost_note`) appended as JSONL. It's *telemetry, not the artifact*, so wall-clock timestamps are
+  allowed (injected `clock` for deterministic tests); only `dashboard.json` stays clock-free. The
+  `cost_note` flags the **Agent-SDK credit** metering for `claude_code` from 2026-06-15 (sizing).
+- **Docs:** `docs/ops/RUNBOOK.md` (the nightly job, run log, launchd/cron install, provider budget,
+  the documented-not-built **graduate tier**); README gained a "Nightly setup" section + status.
+  Decision **D11** records the design.
+- Green: `make check` (142 passed, 2 live skipped), `make system` (23 tests). `factor-scope run
+  --fixtures` still emits the same byte-for-byte artifact; two `nightly` runs of the same night
+  reproduce `dashboard.json` exactly and append two ops records.
 
 ## Phase 6 — done
 RED→GREEN→REFACTOR complete. Delivered:

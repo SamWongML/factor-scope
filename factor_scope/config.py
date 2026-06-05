@@ -32,3 +32,5 @@ class Config:
     # Digestion judgment provider: "fake" (default, offline) | "claude_code". DeepSeek is a chore
     # model (off the judgment path, spec §08), not a judgment provider — see digest.get_provider.
     provider: str = "fake"
+    # Where the nightly job appends its append-only ops run log (one JSON record per run, spec §11).
+    log_path: Path = field(default=Path("out") / "nightly.jsonl")

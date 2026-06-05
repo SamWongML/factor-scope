@@ -1,0 +1,92 @@
+"""Unit tests for the scheduling adapter (spec §11, D4).
+
+The adapter is a *thin renderer*: given a :class:`ScheduleSpec` it emits a macOS **launchd** plist
+(the Mac-mini production path) or a **cron** line (the Linux alternative). No platform code on the
+critical path — these are pure, deterministic string renders so the nightly job is reproducible
+and reviewable before it is ever installed.
+"""
+
+import plistlib
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from factor_scope.cli import app
+from factor_scope.schedule import ScheduleSpec, render_cron_line, render_launchd_plist
+
+pytestmark = pytest.mark.unit
+
+runner = CliRunner()
+
+
+def _spec(**over: object) -> ScheduleSpec:
+    base = dict(
+        label="com.factor-scope.nightly",
+        program_arguments=("factor-scope", "nightly", "--fixtures"),
+        hour=22,
+        minute=30,
+        working_directory=Path("/srv/factor-scope"),
+        stdout_path=Path("/var/log/fs.out"),
+        stderr_path=Path("/var/log/fs.err"),
+    )
+    base.update(over)
+    return ScheduleSpec(**base)  # type: ignore[arg-type]
+
+
+def test_cron_line_fires_at_the_scheduled_minute_and_hour() -> None:
+    line = render_cron_line(_spec())
+    # Standard 5-field cron: minute hour day-of-month month day-of-week.
+    assert line.startswith("30 22 * * *")
+
+
+def test_cron_line_runs_the_command_in_the_working_directory_with_logs() -> None:
+    line = render_cron_line(_spec())
+    assert "cd /srv/factor-scope && factor-scope nightly --fixtures" in line
+    assert ">> /var/log/fs.out 2>> /var/log/fs.err" in line
+
+
+def test_launchd_plist_is_valid_xml_that_schedules_the_one_shot_job() -> None:
+    xml = render_launchd_plist(_spec(hour=22, minute=0))
+    parsed = plistlib.loads(xml.encode("utf-8"))  # round-trips → it is a valid plist
+
+    assert parsed["Label"] == "com.factor-scope.nightly"
+    assert parsed["ProgramArguments"] == ["factor-scope", "nightly", "--fixtures"]
+    assert parsed["StartCalendarInterval"] == {"Hour": 22, "Minute": 0}
+    assert parsed["WorkingDirectory"] == "/srv/factor-scope"
+    # A nightly batch, not a service: it must not fire merely on load.
+    assert parsed["RunAtLoad"] is False
+
+
+def test_launchd_plist_includes_environment_only_when_given() -> None:
+    assert "EnvironmentVariables" not in plistlib.loads(render_launchd_plist(_spec()).encode())
+    with_env = render_launchd_plist(_spec(environment={"FRED_API_KEY": "x"}))
+    assert plistlib.loads(with_env.encode())["EnvironmentVariables"] == {"FRED_API_KEY": "x"}
+
+
+def test_renders_are_deterministic() -> None:
+    assert render_launchd_plist(_spec()) == render_launchd_plist(_spec())
+    assert render_cron_line(_spec()) == render_cron_line(_spec())
+
+
+def test_schedule_command_emits_a_launchd_plist_by_default() -> None:
+    result = runner.invoke(app, ["schedule", "--hour", "22", "--minute", "0"])
+    assert result.exit_code == 0, result.output
+    parsed = plistlib.loads(result.stdout.encode("utf-8"))
+    assert parsed["StartCalendarInterval"] == {"Hour": 22, "Minute": 0}
+    assert parsed["ProgramArguments"][0] == "factor-scope"
+    assert parsed["ProgramArguments"][1] == "nightly"
+
+
+def test_schedule_command_can_emit_a_cron_line() -> None:
+    result = runner.invoke(app, ["schedule", "--kind", "cron", "--hour", "3", "--minute", "15"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip().startswith("15 3 * * *")
+    assert "factor-scope nightly" in result.stdout
+
+
+def test_schedule_command_writes_to_a_file_when_asked(tmp_path) -> None:
+    out = tmp_path / "com.factor-scope.nightly.plist"
+    result = runner.invoke(app, ["schedule", "--output", str(out)])
+    assert result.exit_code == 0, result.output
+    assert plistlib.loads(out.read_bytes())["Label"] == "com.factor-scope.nightly"

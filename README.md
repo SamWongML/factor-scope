@@ -20,6 +20,21 @@ make check      # lint + typecheck + test (what CI runs)
 `make run` writes `out/dashboard.json` and prints a terminal summary. Everything runs **offline on
 bundled sample data** by default; live data sources and real LLM providers are opt-in.
 
+## Nightly setup
+
+`factor-scope nightly` is the production one-shot job: ingest → compute → digest → write
+`dashboard.json`, append an ops run log, and persist each lean as a falsifiable call (into a
+**durable** store) so the next night's self-scoring loop can score it. Schedule it with a generated
+launchd plist (macOS, the Mac-mini path) or cron line (Linux):
+
+```bash
+factor-scope nightly                                   # run the job once now
+factor-scope schedule -o ~/Library/LaunchAgents/com.factor-scope.nightly.plist  # macOS
+factor-scope schedule --kind cron --working-dir "$PWD" # Linux: prints a crontab line
+```
+
+Full ops guide (install/enable, the run log, provider budget, graduate tier): **`docs/ops/RUNBOOK.md`**.
+
 ## What it does (the six layers)
 1. **Ingest** free data — CN (AkShare/Baostock/Mootdx), US lead (EdgarTools/FRED), your `positions.csv`.
 2. **Store** it **point-in-time** (DuckDB + Parquet, append-only) + a durable on-disk connection graph.
@@ -31,10 +46,11 @@ bundled sample data** by default; live data sources and real LLM providers are o
 6. **Review** it each morning. Most mornings the right action is none. *Patience is a position.*
 
 ## Project status
-Built phase by phase; the `factor-scope run` entrypoint stays runnable at every boundary.
-- **Phase 0 — done:** scaffold, the `dashboard.json` contract, the entrypoint, and the cross-session
-  tracking docs.
-- Next: see **`docs/plan/PROGRESS.md`** (live state) and **`docs/plan/ROADMAP.md`** (the phases).
+Built phase by phase; the `factor-scope run` entrypoint stays runnable at every boundary. **Phases
+0–7 are done** — the engine ingests point-in-time, computes factor states + the trend gate, the
+exact look-through, the emerging funnel and the self-scoring mirror, digests a bull/bear lean, and
+ships a scheduled nightly job (launchd/cron). See **`docs/plan/PROGRESS.md`** (live state) and
+**`docs/plan/ROADMAP.md`** (the phases).
 
 ## For contributors / agents
 Read **`CLAUDE.md`**, then `docs/plan/PROGRESS.md`, then the current `docs/plan/phases/phase-N.md`.

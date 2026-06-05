@@ -1,0 +1,108 @@
+"""System gate for Phase 7 — the one-shot nightly job (spec §11, decision D4).
+
+End-to-end over the bundled fixtures: ``factor-scope nightly`` runs the whole pipeline
+(ingest → compute → digest → write ``dashboard.json``), appends one ops :class:`RunRecord` to the
+run log, and — crucially — persists tonight's leans as calls in the *durable* store so tomorrow's
+self-scoring loop has something to score. This stays green at every later boundary; it is the
+production entrypoint.
+"""
+
+import json
+
+import pytest
+from typer.testing import CliRunner
+
+from factor_scope.cli import app
+from factor_scope.config import Config
+from factor_scope.contract import Dashboard
+from factor_scope.pipeline import nightly
+from factor_scope.scoring import read_calls
+from factor_scope.store import DuckDBStore
+
+pytestmark = pytest.mark.system
+
+runner = CliRunner()
+
+
+def _paths(tmp_path):
+    return dict(
+        output=tmp_path / "dashboard.json",
+        store=tmp_path / "store.duckdb",
+        graph=tmp_path / "graph.duckdb",
+        log=tmp_path / "nightly.jsonl",
+    )
+
+
+def test_nightly_entrypoint_writes_artifact_and_run_log(tmp_path) -> None:
+    p = _paths(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "nightly",
+            "--output", str(p["output"]),
+            "--store-path", str(p["store"]),
+            "--graph-path", str(p["graph"]),
+            "--log-path", str(p["log"]),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    # The artifact is schema-valid and carries the full book (2 holdings + 1 watch + 3 emerging).
+    dash = Dashboard.model_validate(json.loads(p["output"].read_text(encoding="utf-8")))
+    assert dash.as_of == "2026-06-05"
+    assert len(dash.items) == 6
+
+    # One ops record was appended, summarising the run.
+    lines = p["log"].read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["provider"] == "fake"
+    assert record["n_items"] == 6
+    assert record["n_holdings"] == 2 and record["n_emerging"] == 3
+    assert record["output_path"] == str(p["output"])
+
+
+def test_nightly_persists_tonights_leans_as_calls_for_next_day_scoring(tmp_path) -> None:
+    p = _paths(tmp_path)
+    cfg = Config(
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+    )
+    clock = iter(["2026-06-05T22:00:00Z", "2026-06-05T22:00:11Z"]).__next__
+    dash, record = nightly(cfg, clock=clock)
+
+    # Every emitted lean became a falsifiable call stamped tonight — tomorrow's scoring fuel.
+    store = DuckDBStore(p["store"])
+    try:
+        tonight = [c for c in read_calls(store, dash.as_of) if c.as_of == dash.as_of]
+    finally:
+        store.close()
+    assert len(tonight) == 6  # one per item on the three lists
+    assert record.n_calls_logged == 6
+
+    # The record's timestamps came from the injected clock (deterministic in the test).
+    assert record.started_at == "2026-06-05T22:00:00Z"
+    assert record.ended_at == "2026-06-05T22:00:11Z"
+
+
+def test_nightly_is_rerunnable_without_double_logging(tmp_path) -> None:
+    # Re-running the same night must not double-count calls (append-only store, idempotent night).
+    p = _paths(tmp_path)
+    cfg = Config(
+        output_path=p["output"], store_path=p["store"], graph_path=p["graph"], log_path=p["log"]
+    )
+    first, _ = nightly(cfg)
+    second, _ = nightly(cfg)
+    assert first.model_dump_json(indent=2) == second.model_dump_json(indent=2)
+
+    store = DuckDBStore(p["store"])
+    try:
+        tonight = [c for c in read_calls(store, first.as_of) if c.as_of == first.as_of]
+    finally:
+        store.close()
+    assert len(tonight) == 6  # still six, not twelve
+
+    # Two nights of ops history, though (the log is append-only).
+    assert len(p["log"].read_text(encoding="utf-8").splitlines()) == 2

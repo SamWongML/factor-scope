@@ -11,6 +11,8 @@ lean (P5), the emerging list (P6) — without changing this entrypoint's contrac
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from factor_scope.config import Config
 from factor_scope.contract import (
@@ -41,6 +43,7 @@ from factor_scope.graph import (
 )
 from factor_scope.graph.lookthrough import look_through
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
+from factor_scope.schedule import RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 
@@ -406,3 +409,63 @@ def run(config: Config) -> Dashboard:
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     config.output_path.write_text(dash.model_dump_json(indent=2), encoding="utf-8")
     return dash
+
+
+def _utc_now_iso() -> str:
+    """Wall-clock stamp for the ops run log (never the artifact — that stays clock-free)."""
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _count_calls_logged(config: Config, as_of: str) -> int:
+    """How many leans were logged for ``as_of`` in the durable store (tomorrow's scoring fuel)."""
+
+    store = _open_store(config)
+    try:
+        return sum(1 for c in read_calls(store, as_of) if c.as_of == as_of)
+    finally:
+        store.close()
+
+
+def _night_already_ingested(config: Config, as_of: str) -> bool:
+    """True once tonight's positions are in the durable store — so re-runs don't re-ingest.
+
+    Positions are stamped with the run's ``as_of`` (D7), so this is per-night: re-running the same
+    night is a no-op (keeps the artifact byte-for-byte and never double-counts calls in the
+    audit-trail scorer), while a new night still ingests fresh data.
+    """
+
+    store = _open_store(config)
+    try:
+        return any(p.as_of == as_of for p in store.history("positions"))
+    finally:
+        store.close()
+
+
+def nightly(
+    config: Config, *, clock: Callable[[], str] = _utc_now_iso
+) -> tuple[Dashboard, RunRecord]:
+    """The one-shot nightly job (spec §11): ingest → compute → digest → artifact → run log.
+
+    Runs the full pipeline against a *durable* store so the leans it emits persist as falsifiable
+    calls — tomorrow's self-scoring loop scores them. Appends one structured :class:`RunRecord` to
+    the append-only ops log. The artifact stays byte-for-byte deterministic; the run log carries the
+    wall-clock timing (operations telemetry, not the decision artifact).
+    """
+
+    as_of = _resolve_as_of(config)
+    started_at = clock()
+    if not _night_already_ingested(config, as_of):
+        ingest(config)  # append the night's readings into the durable store + materialise the graph
+    dash = run(config)  # build + write dashboard.json; logs each lean as a call into the store
+    ended_at = clock()
+    record = summarize_run(
+        dash,
+        started_at=started_at,
+        ended_at=ended_at,
+        provider=config.provider,
+        n_calls_logged=_count_calls_logged(config, as_of),
+        output_path=str(config.output_path),
+    )
+    append_run_log(config.log_path, record)
+    return dash, record
