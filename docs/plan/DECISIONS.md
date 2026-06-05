@@ -37,9 +37,19 @@ schema migration. `DuckDBStore` is the default backend behind a `PointInTimeStor
 bitemporal engine (ArcticDB, graduate tier) can swap in later. Positions are stamped with the run's
 `as_of` (the file is the source; no marketplace API exists — spec §04); other sources carry their own.
 
+## D8 — Graph engine: embedded on-disk graph persisted in DuckDB, behind a `GraphStore` interface
+The §05 look-through is **exact set arithmetic** over quarterly holdings snapshots (principle #6) —
+a point-in-time join + weighted sum, not variable-hop traversal. So the default `GraphStore` backend
+materialises the `(:Fund)-[:HOLDS{weight,as_of}]->(:Security)` graph as a durable, append-only edge
+table in **DuckDB** (the `store` extra we already ship): on-disk, offline, deterministic on Linux/CI,
+and point-in-time at query time (the same `QUALIFY` latest-as-of pattern as the readings store) — a
+**durable on-disk graph, never an in-memory rebuilt-each-run one** (principle #6). A graph-native
+engine (**Kùzu** embedded / **Neo4j Community** in production) is documented as the swap-in behind the
+`GraphStore` Protocol, to add only when fuzzy second-order / variable-hop traversal (Phase 6+) earns
+the operational weight of a native binary. EDGAR 13F (US lead chain) is *not* loaded into the book
+graph in Phase 3 — it carries shares, not portfolio weights, and a different universe than my funds;
+it feeds the cross-market factor, and a separate lead-chain graph can be added later.
+
 ## Open (decide when reached)
-- **Graph engine (Phase 3):** embedded on-disk default (Kùzu/LadybugDB) behind a `GraphStore`
-  interface, vs defaulting straight to Neo4j Community. The interface keeps it swappable; pick at
-  Phase 3 start after a quick maturity check.
 - **Optional static-HTML view of `dashboard.json`** (matching the source design) — deferred; the
   stable contract is the JSON, so it can be added later without disruption.
