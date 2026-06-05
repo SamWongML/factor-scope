@@ -14,17 +14,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Set up Python
+      - name: Pin Python 3.11
         run: uv python install 3.11
 
-      - name: Install project (+dev)
-        run: uv pip install --system -e ".[dev]"
+      - name: Sync project (+dev) into a uv venv
+        run: uv sync --extra dev --python 3.11
 
       - name: Lint (ruff)
-        run: ruff check factor_scope tests
+        run: uv run ruff check factor_scope tests
 
       - name: Type-check (mypy)
-        run: mypy factor_scope
+        run: uv run mypy factor_scope
 
       - name: Tests (offline — no live sources, no paid LLMs)
-        run: pytest -q
+        run: uv run pytest -q
