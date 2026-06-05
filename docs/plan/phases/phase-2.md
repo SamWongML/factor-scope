@@ -1,4 +1,4 @@
-# Phase 2 — Factor states + trend gate (L3 core)  ·  STATUS: todo
+# Phase 2 — Factor states + trend gate (L3 core)  ·  STATUS: done
 
 Spec: §03. Principle: **states, not a composite.**
 

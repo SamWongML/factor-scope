@@ -13,7 +13,7 @@ factor_scope/
   cli.py             (✓) typer app: `run`, `ingest`, `schema`  (the stable entrypoint)
   ingest/            (✓) P1  L1 adapters: positions, prices, fund_holdings, fred, edgar (fixture|live)
   store/             (✓) P1  L2 point-in-time DuckDB store (append-only); GraphStore iface in P3
-  factors/           ( ) P2  L3 the 8 descriptive states + trend gate (pure functions)
+  factors/           (✓) P2  L3 the 8 descriptive states + trend gate (pure functions; no composite)
   graph/             ( ) P3  build edges + deterministic look-through
   scoring/           ( ) P4  call log, mechanical scorer, Brier/BSS scorecard
   digest/            ( ) P5  LLMProvider (fake|claude_code|deepseek) + bull/bear/synthesis
@@ -45,6 +45,19 @@ tests/ unit|integration|system   (✓)
 - Enums: `ListName`, `Band`, `GateState`, `LeanAction` (all `StrEnum`).
 
 Export the JSON schema with `factor-scope schema` (or `dashboard_json_schema()`).
+
+## The factor battery (`factor_scope/factors`, P2)
+- `bands` — `percentile_rank` (mid-rank, 0..1) + `rank_to_band` on **constant** 5/25/75/95
+  cut-points. Economic meaning, never tuned to P&L: that is "states, not a composite".
+- `window` — point-in-time series helpers over the store (`history` filtered to `as_of <= D`):
+  `price_navs`/`fred_values`, horizon returns, rolling realised vol, drawdown, the 200-day MA.
+- `battery` — the 8 states as pure `(FactorContext) -> FactorState` functions in spec order, plus
+  `compute_gate`. Each ranks one reading against its **own** history → a `Band` + a risk `direction`
+  + dated `evidence` + a `valid` flag; a stale/short/missing input → `valid=False` (never raises,
+  never dropped). Data-backed today: trend gate, reversal, low-vol/drawdown, the macro dial; the
+  other four are present-but-invalid until their sources land. **No weighted composite is formed.**
+- The 200-day trend gate is the one hard cap: below the MA → `capped`, above → `open`, too little
+  history → `unknown`. Phase 5's lean is capped under `capped`; nothing may open it.
 
 ## Data flow (one run)
 `cli.run` → `Config` → `pipeline.run`:
