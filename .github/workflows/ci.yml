@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install project (+dev)
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check factor_scope tests
+
+      - name: Type-check (mypy)
+        run: mypy factor_scope
+
+      - name: Tests (offline — no live sources, no paid LLMs)
+        run: pytest -q
