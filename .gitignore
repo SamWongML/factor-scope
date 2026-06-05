@@ -219,3 +219,6 @@ __marimo__/
 
 # factor-scope: generated run artifacts
 /out/
+
+# Claude Code: local skills (symlinks, not committed)
+.claude/skills/
