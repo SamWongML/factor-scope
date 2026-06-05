@@ -64,6 +64,8 @@ def _item_line(item: DashboardItem) -> str:
     if connections is not None:
         lines.append(connections)
     lines.append(f"        evidence: {evidence}")
+    for extra in item.evidence[1:]:  # further dated lines (e.g. the emerging Stage-B comparison)
+        lines.append(f"                  {extra.one_line}")
     return "\n".join(lines)
 
 

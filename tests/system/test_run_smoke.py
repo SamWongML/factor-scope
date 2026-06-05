@@ -31,7 +31,8 @@ def test_run_entrypoint_emits_valid_dashboard(tmp_path) -> None:
     assert dash.as_of == "2026-06-05"
     assert len(dash.by_list(ListName.HOLDINGS)) == 2
     assert len(dash.by_list(ListName.WATCHLIST)) == 1
-    assert len(dash.by_list(ListName.EMERGING)) == 1
+    # The emerging list is now the funnel's output — a top-3 of the cleared theme's funds (§07).
+    assert len(dash.by_list(ListName.EMERGING)) == 3
 
 
 def test_fixtures_run_is_deterministic() -> None:

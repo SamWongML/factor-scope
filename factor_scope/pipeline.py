@@ -14,6 +14,7 @@ import json
 
 from factor_scope.config import Config
 from factor_scope.contract import (
+    Connection,
     Dashboard,
     DashboardItem,
     Evidence,
@@ -23,6 +24,13 @@ from factor_scope.contract import (
     ListName,
 )
 from factor_scope.digest import DEFAULT_HORIZON_D, DigestInput, digest_item, get_provider
+from factor_scope.emerging import (
+    Candidate,
+    FundScore,
+    Shortlist,
+    Theme,
+    run_funnel,
+)
 from factor_scope.factors import FactorContext, compute_gate, compute_states
 from factor_scope.graph import (
     DuckDBGraphStore,
@@ -31,6 +39,7 @@ from factor_scope.graph import (
     build_connections,
     build_graph_from_store,
 )
+from factor_scope.graph.lookthrough import look_through
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
@@ -244,6 +253,118 @@ def _attach_leans(
         logged_tonight.add(call_id)
 
 
+def _theme_from_reading(reading: Reading) -> Theme:
+    p = reading.payload
+    return Theme(
+        name=reading.key,
+        acceleration=float(p["acceleration"]),
+        base_level=float(p["base_level"]),
+        breadth=int(p["breadth"]),
+        crowding=float(p["crowding"]),
+        broad_adoption=bool(p["broad_adoption"]),
+        path_to_profit=bool(p["path_to_profit"]),
+        fad_resistant=bool(p["fad_resistant"]),
+        lead_chain=bool(p["lead_chain"]),
+        wrapper_exists=bool(p["wrapper_exists"]),
+        as_of=reading.as_of,
+    )
+
+
+def _candidate_from_reading(reading: Reading) -> Candidate:
+    p = reading.payload
+    return Candidate(
+        theme=str(p["theme"]),
+        code=reading.key,
+        name=str(p["name"]),
+        methodology=float(p["methodology"]),
+        fee=float(p["fee"]),
+        aum=float(p["aum"]),
+        tracking_error=float(p["tracking_error"]),
+        top10_weight=float(p["top10_weight"]),
+        as_of=reading.as_of,
+    )
+
+
+def _stage_a_evidence(shortlist: Shortlist) -> Evidence:
+    return Evidence(
+        src="emerging:stage_a",
+        as_of=shortlist.as_of,
+        one_line=f"theme {shortlist.theme} cleared Stage A — "
+        + "; ".join(shortlist.stage_a.reasons),
+    )
+
+
+def _stage_b_evidence(score: FundScore, rank: int, n_candidates: int) -> Evidence:
+    c = score.candidate
+    return Evidence(
+        src="emerging:stage_b",
+        as_of=c.as_of,
+        one_line=(
+            f"rank #{rank}/{n_candidates} · score {score.total:.2f} · {c.theme} · "
+            f"methodology {c.methodology:.2f} · fee {c.fee:.2%} · AUM {c.aum:g}亿 · "
+            f"tracking {c.tracking_error:.1%} · top10 {c.top10_weight:.0%} · "
+            f"overlap-with-core {score.overlap:.1%}"
+        ),
+    )
+
+
+def _emerging_connections(
+    score: FundScore, graph: GraphStore, as_of: str, book: list[Holding]
+) -> list[Connection]:
+    """Surface the candidate's overlap with my core as §05 connections (the leveraged repeat)."""
+
+    names = {h.code: h.name for h in book}
+    connections: list[Connection] = []
+    for security in score.overlap_names:
+        lt = look_through(graph, security, as_of, book)
+        connections.append(
+            Connection(
+                shared=security,
+                also_in=[names[code] for code in lt.funds],
+                lookthrough_wt=round(lt.lookthrough_wt, 6),
+            )
+        )
+    return connections
+
+
+def _build_emerging(
+    store: PointInTimeStore, graph: GraphStore, as_of: str, book: list[Holding]
+) -> list[tuple[str, DashboardItem]]:
+    """Run the two-stage funnel → the ``emerging`` list (top-3 funds per cleared theme, spec §07).
+
+    Stage A qualifies each industry; Stage B screens a cleared theme's candidate funds on the fixed
+    scorecard (overlap-with-core via the §05 look-through) to a ranked top 3. Each surviving fund
+    becomes an emerging item carrying its factor states/gate (where price history exists), the
+    Stage-A/Stage-B one-page comparison as evidence, and its overlap as connections. The digest
+    then leans over the shortlist (in ``_attach_leans``) and promotes at most one.
+    """
+
+    if store.count("themes") == 0:
+        return []
+    themes = [_theme_from_reading(r) for r in store.read_as_of("themes", as_of)]
+    candidates = [_candidate_from_reading(r) for r in store.read_as_of("theme_funds", as_of)]
+    pairs: list[tuple[str, DashboardItem]] = []
+    for shortlist in run_funnel(themes, candidates, graph, as_of, book):
+        for rank, score in enumerate(shortlist.funds, start=1):
+            code = score.candidate.code
+            ctx = FactorContext(code=code, as_of=as_of, store=store)
+            connections = _emerging_connections(score, graph, as_of, book)
+            item = DashboardItem(
+                item=score.candidate.name,
+                list=ListName.EMERGING,
+                states=compute_states(ctx),
+                gate=compute_gate(ctx),
+                connections=connections,
+                connections_flag=bool(connections),
+                evidence=[
+                    _stage_a_evidence(shortlist),
+                    _stage_b_evidence(score, rank, shortlist.n_candidates),
+                ],
+            )
+            pairs.append((code, item))
+    return pairs
+
+
 def build_dashboard(config: Config) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
 
@@ -261,8 +382,13 @@ def build_dashboard(config: Config) -> Dashboard:
         if graph.count() == 0:
             # Empty graph → build it from the (durable or just-ingested) holdings readings.
             build_graph_from_store(graph, store)
-        pairs = _build_items(store, as_of)
-        _attach_connections(pairs, graph, _build_book(store, as_of), as_of)
+        book = _build_book(store, as_of)
+        core_pairs = _build_items(store, as_of)
+        _attach_connections(core_pairs, graph, book, as_of)
+        # The emerging list is the funnel's output (spec §07), not a hand-placed position; it owns
+        # its own overlap-with-core connections, so it is built after the core look-through.
+        emerging_pairs = _build_emerging(store, graph, as_of, book)
+        pairs = core_pairs + emerging_pairs
         _attach_scorecard(pairs, store, as_of)
         _attach_leans(pairs, store, as_of, config.provider)
         items = [item for _, item in pairs]

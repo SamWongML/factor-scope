@@ -4,16 +4,13 @@
 > current `phases/phase-N.md` and resumes. Update status + **NEXT ACTION** whenever a unit or phase
 > closes, then commit. Statuses: `todo` · `wip` · `done`.
 
-**Current phase:** Phase 6 — Emerging radar funnel (L3)
-**NEXT ACTION:** Start Phase 6 RED — write `tests/unit/test_stage_a.py` + `test_stage_b.py` for the
-emerging funnel (spec §07). A two-stage funnel in `factor_scope/emerging/`: **Stage A** qualifies an
-*industry* (signal strength = acceleration + breadth − crowding; durability; lead-chain
-corroboration; an investable wrapper exists) — a theme must clear A before any fund is scored.
-**Stage B** (only on a cleared theme) screens candidate CN funds/ETFs on a fixed scorecard
-(methodology/pure-play, **overlap-with-core reusing the Phase-3 `build_connections` look-through**,
-crowding via §03, cost, liquidity/size, tracking, concentration) → a ranked **top 3** that fills the
-`emerging` list. The digest then argues bull/bear over the shortlist (reuse P5); promote ≤1. Keep it
-deterministic + fixtures-first; no new graph logic. See `phases/phase-6.md`.
+**Current phase:** Phase 7 — Scheduling, packaging & ops
+**NEXT ACTION:** Start Phase 7 (spec §11). Wire the nightly e2e job on fixtures + ship a **launchd**
+plist (the Mac-mini production path, D4; cron noted for Linux) and the ops/runbook docs. The
+pipeline already emits a schema-valid, byte-for-byte-deterministic `dashboard.json` end-to-end
+(ingest→store→graph→states/gate→connections→scorecard→digest→**emerging funnel**), so Phase 7 is the
+scheduling/packaging wrapper around `factor-scope run`, not new artifact content. See
+`phases/phase-7.md`.
 
 | Phase | Status | Closed by (commit) | System test |
 |-------|--------|--------------------|-------------|
@@ -22,9 +19,42 @@ deterministic + fixtures-first; no new graph logic. See `phases/phase-6.md`.
 | 2 — Factor states + trend gate | **done** | _Phase 2 commit_ | `make system` ✓ (8 tests) |
 | 3 — Connection graph + look-through | **done** | _Phase 3 commit_ | `make system` ✓ (10 tests) |
 | 4 — Self-scoring loop | **done** | _Phase 4 commit_ | `make system` ✓ (11 tests) |
-| 5 — Digestion: LLM provider + bull/bear | **done** | _this commit_ | `make system` ✓ (16 tests) |
-| 6 — Emerging radar funnel | todo | — | — |
+| 5 — Digestion: LLM provider + bull/bear | **done** | _Phase 5 commit_ | `make system` ✓ (16 tests) |
+| 6 — Emerging radar funnel | **done** | _this commit_ | `make system` ✓ (20 tests) |
 | 7 — Scheduling, packaging & ops | todo | — | — |
+
+## Phase 6 — done
+RED→GREEN→REFACTOR complete. Delivered:
+- **Emerging funnel** (`factor_scope/emerging/`): the two-stage §07 funnel, deterministic + fixtures-
+  first. **Stage A** (`stage_a.py`) qualifies an *industry* as four hard gates in spec order — signal
+  strength (`acceleration + min(1, breadth/BREADTH_REF) − crowding`, with an acceleration floor),
+  durability (broad-adoption ∧ path-to-profit ∧ fad-resistance), lead-chain corroboration, an
+  investable wrapper — and reports the **first failing gate** so each stop is auditable. **Stage B**
+  (`stage_b.py`, only on a cleared theme) scores each candidate fund on a **fixed scorecard**
+  (methodology, overlap-with-core, cost, liquidity, tracking, concentration) → each criterion a
+  `[0,1]` sub-score vs a constant reference, combined with **fixed economic-priority weights**
+  (methodology + overlap the decisive pair, never tuned to P&L — D10) → a ranked **top 3**.
+  `funnel.py` wires A→B per theme (name-ordered) into a `Shortlist`.
+- **Overlap-with-core reuses §05** (`graph.lookthrough.look_through`) — candidate holdings ride the
+  ordinary `fund_holdings` feed, so overlap is exact set arithmetic with **no new graph logic**; high
+  overlap shrinks the score and can drop a fund from the top 3.
+- **New adapters** `ingest/themes.py` (series `themes`) + `ingest/theme_funds.py` (series
+  `theme_funds`), wired into `gather_fixture_readings` (loaded only if their CSVs exist). Fixtures:
+  `themes.csv` (储能 clears; 元宇宙 fails durability — a fad; 可控核聚变 fails wrapper), `theme_funds.csv`
+  (4 储能 candidates), and candidate holdings appended to `fund_holdings.csv`. The hand-placed 561160
+  `emerging` **position** was removed from `positions.csv` — the `emerging` list is now the funnel's
+  output.
+- **Pipeline:** `_build_emerging` runs the funnel after the core look-through and emits one item per
+  top-3 fund — §03 states/gate where price history exists (else gate `unknown` → the digest abstains),
+  the Stage-A/Stage-B one-page comparison as `evidence`, and overlap as §05 `connections`. The
+  existing `_attach_leans` then leans bull/bear over the shortlist and logs each as a call.
+- Fixture story (spec's own lifecycle): **储能** clears Stage A; its **储能ETF** ranks **#1/4** on the
+  scorecard (best methodology + liquidity, zero overlap) **but its trend gate is capped** (−18% vs the
+  200-day MA) → the funnel says **do-not-chase → Avoid**; the optical-overlapping **光储龙头ETF**
+  (holds 中际旭创, which my core already owns) is **dropped from the top 3** by §05; the two faint funds
+  with no price history **abstain** (unknown gate). The core book's 8.4% look-through is unchanged.
+- Green: `make check` (126 passed, 2 live skipped), `make system` (20 tests), `make run` shows the
+  funnel; fixtures run reproduces `dashboard.json` byte-for-byte.
 
 ## Phase 5 — done
 RED→GREEN→REFACTOR complete. Delivered:
@@ -156,18 +186,24 @@ RED→GREEN→REFACTOR complete. Delivered:
   unless a brand-new source is required.
 - The connection graph is durable on disk (`DuckDBGraphStore`, `--graph-path`) or built in-memory
   from the readings store at run time when no path is given (mirrors the readings-store pattern).
-  Look-through is exact set arithmetic, point-in-time at query time; `build_connections` is the seam
-  Phase 6 reuses for emerging overlap-with-core. EDGAR (US lead chain) is deliberately *not* in the
-  book graph (no weights, different universe) — see D8.
+  Look-through is exact set arithmetic, point-in-time at query time; Phase 6's emerging
+  overlap-with-core reuses `graph.lookthrough.look_through` directly (candidate holdings ride the
+  ordinary `fund_holdings` feed) — no new graph logic. EDGAR (US lead chain) is deliberately *not* in
+  the book graph (no weights, different universe) — see D8.
 - The self-scoring loop (§06) is wired and LLM-free: `scoring.score_calls(store, as_of)` scores every
   call knowable tonight by point-in-time forward return; `build_scorecard` rolls them into the mirror
   the pipeline attaches to each item. **Phase 5 now closes the loop**: `_attach_leans` logs every
   emitted lean via `scoring.log_call` (`Call` keyed `code:as_of`, `state_pattern` tokens, `horizon_d`,
   `invalidation`) so next run scores *real* calls. The mirror reaches a lean only through the two
   confidence-only functions (`confidence_nudge` + `dampen_for_weak_pattern`) — never the action/gate.
-- The digest seam Phase 6 reuses: `digest.digest_item(provider, DigestInput)` runs bull/bear→synthesis
-  with the gate/abstain/scorecard guardrails and returns a `DigestResult`. The emerging shortlist can
-  be argued the same way; overlap-with-core reuses `graph.build_connections` (no new graph logic).
+- The digest seam: `digest.digest_item(provider, DigestInput)` runs bull/bear→synthesis with the
+  gate/abstain/scorecard guardrails and returns a `DigestResult`. Phase 6's emerging items flow
+  through the same `_attach_leans` path, so the trend-gate cap (D9) enforces do-not-chase on a capped
+  shortlisted fund and faint funds (gate `unknown`) abstain — no separate emerging digest needed.
+- The emerging funnel (`factor_scope/emerging/`, spec §07) is the seam for any future weak-signal
+  work: Stage A gates a theme, Stage B's fixed scorecard ranks its funds (D10). New themes/funds are
+  pure fixture edits (`themes.csv`, `theme_funds.csv`, candidate rows in `fund_holdings.csv`); live
+  theme discovery (BERTopic / LLM tagging) is the documented `--live` swap, not wired in CI.
 - Live fetchers stay behind `--live`, lazily imported, never in CI (smokes skip unless
   `FACTOR_SCOPE_LIVE=1`). The `store` extra (duckdb) is installed by CI + `make setup`.
 - Fixtures are regenerated, not hand-edited: `uv run python scripts/gen_fixtures_phase2.py`

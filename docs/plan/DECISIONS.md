@@ -64,6 +64,29 @@ Judgment providers are **fake** (default, offline, the only one CI calls) and **
 sole channels into a lean are two confidence-only functions (`confidence_nudge` +
 `dampen_for_weak_pattern`); neither can touch the action, a state, or the gate.
 
+## D10 — Emerging funnel: a fixed *screening* scorecard, not a fitted composite; overlap reuses §05
+The §07 funnel is two deterministic stages over **descriptive, point-in-time** inputs (fixtures-first,
+live discovery opt-in). **Stage A** (`emerging.stage_a`) qualifies an *industry* as a sequence of hard
+gates in spec order — signal strength (acceleration + breadth − crowding, with an acceleration floor),
+durability (broad-adoption ∧ path-to-profit ∧ fad-resistance), lead-chain corroboration, an investable
+wrapper — reporting the first failing gate so every stop is auditable. A theme must clear **all** gates
+before any fund is scored. **Stage B** (`emerging.stage_b`) screens a cleared theme's candidate funds on
+a fixed scorecard (methodology, overlap-with-core, cost, liquidity, tracking, concentration): each
+criterion maps to a `[0,1]` sub-score against a **constant reference**, combined with **fixed
+economic-priority weights** (methodology + overlap the decisive pair), ranked to a top 3. This is the
+spec's own "score each on the same scorecard every time" discipline — a transparent *selection* tool
+with constants chosen for economic meaning and **never tuned to returns**, so it does **not** violate
+principle #1 (which forbids a fitted composite of the §03 *judgment* factors, read by the digest). The
+weights/cut-points live as named constants beside the §03 band thresholds. **Overlap-with-core reuses
+the Phase-3 §05 look-through** (`graph.lookthrough.look_through`) — a candidate's holdings are ingested
+through the ordinary `fund_holdings` feed, so overlap is exact set arithmetic with **no new graph
+logic** (principle #6); high overlap shrinks a fund's score and can drop it from the top 3. The
+`emerging` list is now the funnel's output (not a hand-placed position); each surviving fund carries its
+§03 states/gate (where price history exists; faint funds stay gate `unknown` → the digest abstains), the
+Stage-A/Stage-B one-page comparison as `evidence`, and its overlap as §05 `connections`. The existing
+digest then leans bull/bear over the shortlist and the trend-gate cap (D9) enforces do-not-chase on a
+capped fund — promote ≤1.
+
 ## Open (decide when reached)
 - **Optional static-HTML view of `dashboard.json`** (matching the source design) — deferred; the
   stable contract is the JSON, so it can be added later without disruption.

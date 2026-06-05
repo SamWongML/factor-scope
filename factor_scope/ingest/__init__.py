@@ -9,7 +9,16 @@ backends lazily import their heavy dependencies and are never exercised in CI.
 from __future__ import annotations
 
 from factor_scope.config import Config
-from factor_scope.ingest import calls, edgar, fred, fund_holdings, positions, prices
+from factor_scope.ingest import (
+    calls,
+    edgar,
+    fred,
+    fund_holdings,
+    positions,
+    prices,
+    theme_funds,
+    themes,
+)
 from factor_scope.ingest.base import IngestError, fetched_at_for
 from factor_scope.store import Reading
 
@@ -30,6 +39,12 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
     calls_fixture = root / calls.FIXTURE
     if calls_fixture.exists():  # prior falsifiable leans for the self-scoring loop (spec §06)
         readings += calls.load_fixture(calls_fixture, fetched_at=fetched_at)
+    themes_fixture = root / themes.FIXTURE
+    if themes_fixture.exists():  # candidate industries for the emerging funnel (spec §07)
+        readings += themes.load_fixture(themes_fixture, fetched_at=fetched_at)
+    theme_funds_fixture = root / theme_funds.FIXTURE
+    if theme_funds_fixture.exists():  # candidate funds the funnel screens to a top 3
+        readings += theme_funds.load_fixture(theme_funds_fixture, fetched_at=fetched_at)
     return readings
 
 
