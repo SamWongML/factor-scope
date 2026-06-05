@@ -9,7 +9,7 @@ backends lazily import their heavy dependencies and are never exercised in CI.
 from __future__ import annotations
 
 from factor_scope.config import Config
-from factor_scope.ingest import edgar, fred, fund_holdings, positions, prices
+from factor_scope.ingest import calls, edgar, fred, fund_holdings, positions, prices
 from factor_scope.ingest.base import IngestError, fetched_at_for
 from factor_scope.store import Reading
 
@@ -27,6 +27,9 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
     readings += fund_holdings.load_fixture(root / fund_holdings.FIXTURE, fetched_at=fetched_at)
     readings += fred.load_fixture(root / fred.FIXTURE, fetched_at=fetched_at)
     readings += edgar.load_fixture(root / edgar.FIXTURE, fetched_at=fetched_at)
+    calls_fixture = root / calls.FIXTURE
+    if calls_fixture.exists():  # prior falsifiable leans for the self-scoring loop (spec §06)
+        readings += calls.load_fixture(calls_fixture, fetched_at=fetched_at)
     return readings
 
 

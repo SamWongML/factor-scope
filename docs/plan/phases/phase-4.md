@@ -1,4 +1,4 @@
-# Phase 4 — Self-scoring loop (L3)  ·  STATUS: todo
+# Phase 4 — Self-scoring loop (L3)  ·  STATUS: done
 
 Spec: §06. Principle: the scorecard is **descriptive only**.
 
