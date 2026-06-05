@@ -1,4 +1,4 @@
-# Phase 5 — Digestion: LLM provider + bull/bear → synthesis (L4)  ·  STATUS: todo
+# Phase 5 — Digestion: LLM provider + bull/bear → synthesis (L4)  ·  STATUS: done
 
 Spec: §08. Decisions: D2 (fake by default).
 

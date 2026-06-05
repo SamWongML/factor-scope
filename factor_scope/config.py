@@ -29,4 +29,6 @@ class Config:
     # Where the durable connection graph lives. None → an ephemeral in-memory graph built from the
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None
-    provider: str = "fake"  # LLM provider: "fake" (default) | "claude_code" | "deepseek"
+    # Digestion judgment provider: "fake" (default, offline) | "claude_code". DeepSeek is a chore
+    # model (off the judgment path, spec §08), not a judgment provider — see digest.get_provider.
+    provider: str = "fake"

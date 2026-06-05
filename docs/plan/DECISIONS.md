@@ -50,6 +50,20 @@ the operational weight of a native binary. EDGAR 13F (US lead chain) is *not* lo
 graph in Phase 3 — it carries shares, not portfolio weights, and a different universe than my funds;
 it feeds the cross-market factor, and a separate lead-chain graph can be added later.
 
+## D9 — Digestion: judgment providers vs the chore model; guardrails live in the orchestrator
+The `LLMProvider` interface (`argue` both sides + `synthesize`) supplies only *judgment*; the hard
+rules — abstain-when-blind, the trend gate cap, the scorecard's confidence channel — are enforced by
+`digest.orchestrator` **on top of** whatever the provider returns, so even an overconfident real
+model can never open the gate or change a state (spec §08, principle #4/#5). The descriptive fields
+the artifact carries (text, evolution, flip-trigger, invalidation) are rendered deterministically by
+the orchestrator from the *final* (post-guardrail) action, so they always match the shipped lean.
+Judgment providers are **fake** (default, offline, the only one CI calls) and **claude_code**
+(headless `claude -p`, bull/bear as `.claude/agents/` subagents). **DeepSeek is a chore model**
+(reformat/summarise evidence, off the judgment path) — `digest.deepseek.DeepSeekChores`, *not* an
+`LLMProvider`; `get_provider("deepseek")` is an error pointing at the real options. The scorecard's
+sole channels into a lean are two confidence-only functions (`confidence_nudge` +
+`dampen_for_weak_pattern`); neither can touch the action, a state, or the gate.
+
 ## Open (decide when reached)
 - **Optional static-HTML view of `dashboard.json`** (matching the source design) — deferred; the
   stable contract is the JSON, so it can be added later without disruption.

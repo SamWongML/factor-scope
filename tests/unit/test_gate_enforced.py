@@ -32,7 +32,9 @@ class _BullishStub:
     name = "stub"
 
     def argue(self, side: Side, brief: DigestInput) -> Case:
-        return Case(side=side, strength=3.0, confidence=0.95, points=("everything is great",))
+        # A one-sided cheerleader: a strong bull case, no bear case (so it never abstains).
+        strength = 3.0 if side is Side.BULL else 0.0
+        return Case(side=side, strength=strength, confidence=0.95, points=("everything is great",))
 
     def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
         return Proposal(action=LeanAction.BUY_EARLY, confidence=0.95, rationale=("buy!",))

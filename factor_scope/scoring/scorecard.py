@@ -21,6 +21,7 @@ DEFAULT_BUCKET_MIN_N = 2  # a reliability bucket needs at least this many calls 
 DEFAULT_PATTERN_MIN_N = 3  # a state-pattern needs at least this many calls to be judged
 DEFAULT_TOL = 0.1  # confidence vs realised gap before we call it over/under-confident
 DEFAULT_NUDGE = 0.5  # how far confidence_nudge moves toward realised reliability
+DEFAULT_DAMPEN = 0.5  # how far a weak-pattern read pulls confidence toward zero
 
 
 def brier(pairs: list[tuple[float, bool]]) -> float:
@@ -154,3 +155,29 @@ def confidence_nudge(
         return base_confidence
     nudged = base_confidence + strength * (match.realised - base_confidence)
     return min(1.0, max(0.0, nudged))
+
+
+def dampen_for_weak_pattern(
+    scorecard: Scorecard | None,
+    confidence: float,
+    pattern: tuple[str, ...],
+    *,
+    factor: float = DEFAULT_DAMPEN,
+) -> float:
+    """Lower confidence on a state-pattern the mirror has been overconfident on (spec §06/§08).
+
+    The second sanctioned confidence channel (alongside :func:`confidence_nudge`): if any token of
+    this item's state pattern appears among the scorecard's flagged ``weak_patterns``, pull the
+    confidence toward zero. Like the nudge it moves a number it does not own — it can only *lower*
+    confidence, never raise it, change an action, a state, or the gate.
+    """
+
+    if scorecard is None or not scorecard.weak_patterns or not pattern:
+        return confidence
+    have = set(pattern)
+    for note in scorecard.weak_patterns:
+        key = note.split(" overconfident", 1)[0].strip()
+        flagged = {token for token in key.split("+") if token}
+        if flagged and flagged <= have:  # this item exhibits the whole flagged pattern
+            return confidence * factor
+    return confidence

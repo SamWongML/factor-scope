@@ -65,6 +65,7 @@ def test_emitted_leans_are_logged_as_calls(tmp_path) -> None:
     graph_path = tmp_path / "graph.duckdb"
     cfg = Config(store_path=store_path, graph_path=graph_path)
     dash = build_dashboard(cfg)
+    build_dashboard(cfg)  # re-run the same night: logging must be idempotent (no double-count)
 
     store = DuckDBStore(store_path)
     try:
@@ -72,7 +73,7 @@ def test_emitted_leans_are_logged_as_calls(tmp_path) -> None:
     finally:
         store.close()
     logged = {c.code for c in tonight}
-    assert len(tonight) == len(dash.items)  # one call per item, made tonight
+    assert len(tonight) == len(dash.items)  # one call per item, made tonight (not duplicated)
     assert "561010" in logged  # the stretched winner's Trim call is recorded
 
 

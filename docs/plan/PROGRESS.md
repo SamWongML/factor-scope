@@ -4,15 +4,16 @@
 > current `phases/phase-N.md` and resumes. Update status + **NEXT ACTION** whenever a unit or phase
 > closes, then commit. Statuses: `todo` · `wip` · `done`.
 
-**Current phase:** Phase 5 — Digestion: LLM provider + bull/bear
-**NEXT ACTION:** Start Phase 5 RED — write `tests/unit/` for the digestion layer (spec §08): an
-`LLMProvider` interface with a deterministic **fake** default (no keys, never called in CI; real
-`claude_code`/`deepseek` opt-in behind `--provider`, D2). A small **bull/bear** debate (isolated
-contexts, consider-the-opposite) then a synthesis seat that anchors a base rate, reads the
-`scorecard` (via `confidence_nudge`) + `connections`, **enforces the gate** (a capped gate hard-caps
-the lean at Hold/Avoid — nothing may open it), and emits `lean` + `evolution` + `flip_trigger` +
-`invalidation`; **abstain when blind** (unknown gate / too few valid states). Each emitted lean is
-logged via `scoring.log_call` so P4's loop scores *real* calls next run. See `phases/phase-5.md`.
+**Current phase:** Phase 6 — Emerging radar funnel (L3)
+**NEXT ACTION:** Start Phase 6 RED — write `tests/unit/test_stage_a.py` + `test_stage_b.py` for the
+emerging funnel (spec §07). A two-stage funnel in `factor_scope/emerging/`: **Stage A** qualifies an
+*industry* (signal strength = acceleration + breadth − crowding; durability; lead-chain
+corroboration; an investable wrapper exists) — a theme must clear A before any fund is scored.
+**Stage B** (only on a cleared theme) screens candidate CN funds/ETFs on a fixed scorecard
+(methodology/pure-play, **overlap-with-core reusing the Phase-3 `build_connections` look-through**,
+crowding via §03, cost, liquidity/size, tracking, concentration) → a ranked **top 3** that fills the
+`emerging` list. The digest then argues bull/bear over the shortlist (reuse P5); promote ≤1. Keep it
+deterministic + fixtures-first; no new graph logic. See `phases/phase-6.md`.
 
 | Phase | Status | Closed by (commit) | System test |
 |-------|--------|--------------------|-------------|
@@ -20,10 +21,40 @@ logged via `scoring.log_call` so P4's loop scores *real* calls next run. See `ph
 | 1 — Ingestion + point-in-time store | **done** | _Phase 1 commit_ | `make system` ✓ (5 tests) |
 | 2 — Factor states + trend gate | **done** | _Phase 2 commit_ | `make system` ✓ (8 tests) |
 | 3 — Connection graph + look-through | **done** | _Phase 3 commit_ | `make system` ✓ (10 tests) |
-| 4 — Self-scoring loop | **done** | _this commit_ | `make system` ✓ (11 tests) |
-| 5 — Digestion: LLM provider + bull/bear | todo | — | — |
+| 4 — Self-scoring loop | **done** | _Phase 4 commit_ | `make system` ✓ (11 tests) |
+| 5 — Digestion: LLM provider + bull/bear | **done** | _this commit_ | `make system` ✓ (16 tests) |
 | 6 — Emerging radar funnel | todo | — | — |
 | 7 — Scheduling, packaging & ops | todo | — | — |
+
+## Phase 5 — done
+RED→GREEN→REFACTOR complete. Delivered:
+- **Digest** (`factor_scope/digest`): an `LLMProvider` interface (`argue` both sides + `synthesize`)
+  with structured `DigestInput`/`Case`/`Proposal`. Default **`FakeProvider`** is deterministic rules
+  over the valid, non-neutral states — each casts a fixed-sign *risk* vote (reversal extreme-high =
+  reversal-DOWN = bearish; downtrend bearish; tight macro bearish; calm bullish) — **not a fitted
+  composite**. Bull marshals the positive votes, bear the negative (consider-the-opposite, isolated);
+  synthesis nets them to a lean + a base-rate-anchored confidence. No network/keys/RNG → byte-for-byte.
+- **Orchestrator** (`digest/orchestrator.py`) owns every hard guardrail *on top of* the provider, so
+  even a misbehaving real model can't break them (D9): **abstain-when-blind** (unknown gate / <2 valid
+  states / opposing extremes that cancel), the **trend-gate cap** (capped → no bullish lean: Hold for
+  holdings, Avoid for watch), and the **scorecard** as a confidence-only channel (`confidence_nudge` +
+  new `dampen_for_weak_pattern` — both can only lower a number, never touch action/state/gate). The
+  descriptive fields (`text`, `evolution` from the prior call, `flip_trigger`, `invalidation`) are
+  rendered deterministically from the *final* action so they always match the shipped lean.
+- **Real providers, opt-in, never in CI:** `claude_code.py` (headless `claude -p ... --output-format
+  json`; bull/bear system prompts shipped in `.claude/agents/bull.md`/`bear.md`; subprocess/json lazy)
+  and `deepseek.py` — a **chore** client (`DeepSeekChores.summarise`, off the judgment path), *not* an
+  `LLMProvider`; `get_provider("deepseek")` errors with a pointer to the real options.
+- Pipeline `_attach_leans` digests each item (after states/connections/scorecard) and **logs every
+  emitted lean via `scoring.log_call`** (a `Call` keyed `code:as_of`, horizon 30d, with the item's
+  `state_pattern` tokens + `invalidation`) so next run's §06 loop scores *this* real call. Render now
+  shows lean / evolution / flip-if / wrong-if per item.
+- Fixture story (unchanged fixtures): **光通信** reads reversal `extreme_high` → **Trim**, and the
+  mirror's overconfident `reversal:extreme_high` weak pattern dampens its confidence to **0.35**
+  (the loop correctly distrusts the trim-the-winner persona); **储能** sits below its 200-day MA →
+  gate `capped` → **Avoid**, never bullish; the rest **Hold**. Deterministic.
+- Green: `make check` (110 passed, 2 live skipped), `make system` (16 tests), `make run` shows the
+  leans; fixtures run reproduces `dashboard.json` byte-for-byte.
 
 ## Phase 4 — done
 RED→GREEN→REFACTOR complete. Delivered:
@@ -130,10 +161,13 @@ RED→GREEN→REFACTOR complete. Delivered:
   book graph (no weights, different universe) — see D8.
 - The self-scoring loop (§06) is wired and LLM-free: `scoring.score_calls(store, as_of)` scores every
   call knowable tonight by point-in-time forward return; `build_scorecard` rolls them into the mirror
-  the pipeline attaches to each item. **Phase 5 must log each emitted lean** via `scoring.log_call`
-  (a `Call` with `state_pattern` like `reversal:extreme_high`, a `horizon_d`, and `invalidation`) so
-  the loop scores *real* calls next run; and it must read the mirror only through `confidence_nudge`
-  (the sole sanctioned channel — descriptive only, never opens the gate or changes a state).
+  the pipeline attaches to each item. **Phase 5 now closes the loop**: `_attach_leans` logs every
+  emitted lean via `scoring.log_call` (`Call` keyed `code:as_of`, `state_pattern` tokens, `horizon_d`,
+  `invalidation`) so next run scores *real* calls. The mirror reaches a lean only through the two
+  confidence-only functions (`confidence_nudge` + `dampen_for_weak_pattern`) — never the action/gate.
+- The digest seam Phase 6 reuses: `digest.digest_item(provider, DigestInput)` runs bull/bear→synthesis
+  with the gate/abstain/scorecard guardrails and returns a `DigestResult`. The emerging shortlist can
+  be argued the same way; overlap-with-core reuses `graph.build_connections` (no new graph logic).
 - Live fetchers stay behind `--live`, lazily imported, never in CI (smokes skip unless
   `FACTOR_SCOPE_LIVE=1`). The `store` extra (duckdb) is installed by CI + `make setup`.
 - Fixtures are regenerated, not hand-edited: `uv run python scripts/gen_fixtures_phase2.py`
