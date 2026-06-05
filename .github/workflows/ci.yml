@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Pin Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync project (+dev) into a uv venv
+        run: uv sync --extra dev --python 3.11
+
+      - name: Lint (ruff)
+        run: uv run ruff check factor_scope tests
+
+      - name: Type-check (mypy)
+        run: uv run mypy factor_scope
+
+      - name: Tests (offline — no live sources, no paid LLMs)
+        run: uv run pytest -q
