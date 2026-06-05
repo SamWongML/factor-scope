@@ -26,4 +26,7 @@ class Config:
     # auto-populates from the source, so the entrypoint works standalone. A path → a durable
     # append-only store that `ingest` fills and `run` reads (point-in-time).
     store_path: Path | None = None
+    # Where the durable connection graph lives. None → an ephemeral in-memory graph built from the
+    # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
+    graph_path: Path | None = None
     provider: str = "fake"  # LLM provider: "fake" (default) | "claude_code" | "deepseek"

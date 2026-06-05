@@ -1,6 +1,7 @@
-# Phase 3 — Connection graph + deterministic look-through (L2)  ·  STATUS: todo
+# Phase 3 — Connection graph + deterministic look-through (L2)  ·  STATUS: done
 
-Spec: §05. Open decision: graph engine (record in DECISIONS.md).
+Spec: §05. Graph engine decided — see DECISIONS.md **D8** (embedded on-disk graph in DuckDB behind a
+`GraphStore` interface; Kùzu / Neo4j Community the documented production swap).
 
 ## Goal
 Build a durable, on-disk, **temporal** graph from holdings feeds and answer the motivating question

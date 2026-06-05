@@ -4,23 +4,45 @@
 > current `phases/phase-N.md` and resumes. Update status + **NEXT ACTION** whenever a unit or phase
 > closes, then commit. Statuses: `todo` · `wip` · `done`.
 
-**Current phase:** Phase 3 — Connection graph + look-through
-**NEXT ACTION:** Start Phase 3 RED — pick the graph engine (open item in `DECISIONS.md`: embedded
-on-disk default behind a `GraphStore` interface vs Neo4j Community) and record it, then write
-`tests/unit/` for the deterministic, exact set-arithmetic look-through over the `fund_holdings` /
-`edgar` readings already in the store: a falling name → who else of mine holds it + my total
-look-through weight. Attach `connections[]` + `connections_flag` to each item. See `phases/phase-3.md`.
+**Current phase:** Phase 4 — Self-scoring loop
+**NEXT ACTION:** Start Phase 4 RED — write `tests/unit/` for the mechanical self-scoring (spec §06):
+each resolved lean is a falsifiable claim (lean + confidence + horizon + invalidation), scored next
+day by forward return vs stated direction → hit/miss/abstain (no LLM, no memory). Then the rolling
+`scorecard`: Brier, Brier **skill** vs base rate, reliability-by-confidence, per-state-pattern
+hit-rate — descriptive only, gated on a minimum sample. A resolved call is immutable (point-in-time).
+Attach `scorecard` to the artifact. See `phases/phase-4.md`. Note: leans land in Phase 5, so Phase 4
+scores against a fixture of prior calls (append-only) — wire the loop now, feed it real leans at P5.
 
 | Phase | Status | Closed by (commit) | System test |
 |-------|--------|--------------------|-------------|
 | 0 — Scaffold, contract, entrypoint, tracking | **done** | _initial Phase 0 commit_ | `make system` ✓ (7 tests) |
 | 1 — Ingestion + point-in-time store | **done** | _Phase 1 commit_ | `make system` ✓ (5 tests) |
-| 2 — Factor states + trend gate | **done** | _this commit_ | `make system` ✓ (8 tests) |
-| 3 — Connection graph + look-through | todo | — | — |
+| 2 — Factor states + trend gate | **done** | _Phase 2 commit_ | `make system` ✓ (8 tests) |
+| 3 — Connection graph + look-through | **done** | _this commit_ | `make system` ✓ (10 tests) |
 | 4 — Self-scoring loop | todo | — | — |
 | 5 — Digestion: LLM provider + bull/bear | todo | — | — |
 | 6 — Emerging radar funnel | todo | — | — |
 | 7 — Scheduling, packaging & ops | todo | — | — |
+
+## Phase 3 — done
+RED→GREEN→REFACTOR complete. Delivered:
+- **Graph** (`factor_scope/graph`): a `GraphStore` `Protocol` + default append-only `DuckDBGraphStore`
+  (`(:Fund)-[:HOLDS{weight,as_of}]->(:Security)`, file or `:memory:`), point-in-time at query time
+  (same `QUALIFY` latest-as-of as the readings store). `build_graph_from_store` materialises HOLDS
+  edges straight from the `fund_holdings` readings (no LLM). Engine choice = **D8** (Kùzu/Neo4j the
+  documented swap). **No NetworkX / in-memory rebuilt-each-run graph.**
+- **Look-through** (`graph/lookthrough.py`): exact set arithmetic — `look_through` returns the funds
+  of mine holding a security (point-in-time) + my total weight `Σ(weight in fund × my portfolio
+  weight in fund)`; `build_connections` surfaces a name only when ≥2 of my funds share it (the
+  illusion-of-diversification catch), with a `↓` when any holder fund is at downside risk.
+- Pipeline builds the graph (durable when `--graph-path` given, else in-memory from the store) and
+  attaches `connections[]` + `connections_flag` per item; portfolio weights from `shares × NAV`. A
+  falling name inherits the `↓` across the book. Render shows the overlaps. New `--graph-path` flag
+  on `run`/`ingest`; `Config.graph_path`.
+- Fixture story (unchanged fixtures): **中际旭创** is held by both the optical-module (561010) and
+  comms (515880) ETFs → surfaces on both with look-through ≈ **8.4%**, flagged `↓` (561010 reads
+  reversal-DOWN risk). 新易盛 / 中芯国际 are single-fund → not surfaced.
+- Green: `make check` (57 passed, 2 live skipped), `make run` shows the look-through connections.
 
 ## Phase 2 — done
 RED→GREEN→REFACTOR complete. Delivered:
@@ -68,8 +90,15 @@ RED→GREEN→REFACTOR complete. Delivered:
   to `as_of <=` the run date (see `factor_scope/factors/window.py`). Adding a new data-backed factor
   = enrich the fixtures + flip its `_unavailable(...)` stub to a real band; no new ingestion needed
   unless a brand-new source is required.
-- Phase 3 reads the `fund_holdings` / `edgar` readings already in the store (no new ingestion) to
-  build the deterministic look-through. Record the graph-engine choice in `DECISIONS.md` (open item).
+- The connection graph is durable on disk (`DuckDBGraphStore`, `--graph-path`) or built in-memory
+  from the readings store at run time when no path is given (mirrors the readings-store pattern).
+  Look-through is exact set arithmetic, point-in-time at query time; `build_connections` is the seam
+  Phase 6 reuses for emerging overlap-with-core. EDGAR (US lead chain) is deliberately *not* in the
+  book graph (no weights, different universe) — see D8.
+- Phase 4 (self-scoring, §06) is mechanical and LLM-free: it scores resolved leans by forward return
+  vs stated direction. Leans land in Phase 5, so wire the scorer + `scorecard` now against a small
+  append-only fixture of prior calls; feed it real leans at P5. A resolved call must be immutable
+  (point-in-time) and the scorecard is **descriptive only** (never changes a state or opens the gate).
 - Live fetchers stay behind `--live`, lazily imported, never in CI (smokes skip unless
   `FACTOR_SCOPE_LIVE=1`). The `store` extra (duckdb) is installed by CI + `make setup`.
 - Fixtures are regenerated, not hand-edited: `uv run python scripts/gen_fixtures_phase2.py`

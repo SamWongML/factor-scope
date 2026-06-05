@@ -20,8 +20,8 @@ def test_graph_persists_across_connections(tmp_path) -> None:
     with DuckDBGraphStore(path) as graph:
         graph.add_edges(
             [
-                Edge(fund="561010", security="中际旭创", weight=0.094, as_of=Q1, source="fund_holdings"),
-                Edge(fund="515880", security="中际旭创", weight=0.052, as_of=Q1, source="fund_holdings"),
+                Edge(fund="561010", security="中际旭创", weight=0.094, as_of=Q1, source="fh"),
+                Edge(fund="515880", security="中际旭创", weight=0.052, as_of=Q1, source="fh"),
             ]
         )
     # Reopen: the durable, append-only graph survives the connection.
