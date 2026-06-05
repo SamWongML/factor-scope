@@ -130,6 +130,7 @@ class DashboardItem(BaseModel):
 
     item: str
     list_name: ListName = Field(alias="list")
+    gain: float | None = None  # per-item return vs cost basis (cost vs current NAV; spec §04)
     states: list[FactorState] = Field(default_factory=list)
     lean: Lean | None = None
     evolution: str | None = None  # e.g. "Hold→Trim (2 nights)"

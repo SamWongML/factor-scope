@@ -1,4 +1,4 @@
-# Phase 1 — Ingestion + point-in-time store (L1 + L2)  ·  STATUS: todo
+# Phase 1 — Ingestion + point-in-time store (L1 + L2)  ·  STATUS: done
 
 Spec: §04 (data sources), §09 (storage). Decisions: D1 (fixtures-first), D6.
 

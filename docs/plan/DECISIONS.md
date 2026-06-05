@@ -29,6 +29,14 @@ Makefile and CI use uv. (Confirmed by the user.)
 `pyproject.toml` uses hatchling with an explicit `packages = ["factor_scope"]` so the editable
 install works without guessing the layout.
 
+## D7 — Store: one append-only `Reading` log, generic `(series, key, as_of, fetched_at, payload)`
+Every source writes the same row shape into one DuckDB table rather than a table-per-source. The
+point-in-time read (`read_as_of`: latest per key with `as_of ≤ D`) and the append-only invariant are
+then defined once and shared by all adapters; payloads stay free-form JSON so a new source needs no
+schema migration. `DuckDBStore` is the default backend behind a `PointInTimeStore` protocol, so a
+bitemporal engine (ArcticDB, graduate tier) can swap in later. Positions are stamped with the run's
+`as_of` (the file is the source; no marketplace API exists — spec §04); other sources carry their own.
+
 ## Open (decide when reached)
 - **Graph engine (Phase 3):** embedded on-disk default (Kùzu/LadybugDB) behind a `GraphStore`
   interface, vs defaulting straight to Neo4j Community. The interface keeps it swappable; pick at
