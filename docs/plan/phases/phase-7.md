@@ -1,4 +1,4 @@
-# Phase 7 — Scheduling, packaging & ops  ·  STATUS: todo
+# Phase 7 — Scheduling, packaging & ops  ·  STATUS: done
 
 Spec: §11. Decision: D4 (cross-platform core + launchd documented).
 

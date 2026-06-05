@@ -87,6 +87,23 @@ Stage-A/Stage-B one-page comparison as `evidence`, and its overlap as §05 `conn
 digest then leans bull/bear over the shortlist and the trend-gate cap (D9) enforces do-not-chase on a
 capped fund — promote ≤1.
 
+## D11 — Nightly ops: one-shot `nightly` on a durable store; scheduler is a thin pure renderer
+The production entrypoint is **`factor-scope nightly`** (spec §11) — ingest → compute → digest →
+write `dashboard.json` → append one ops record → persist each lean as a call. It differs from `run`
+only in defaults that make it operable: a **durable** store/graph (so leans accumulate as falsifiable
+calls for the §06 loop — `run` is fine ephemeral) and an append-only **JSONL run log** beside the
+artifact (`RunRecord`: start/end, per-list counts, abstains, provider, `n_calls_logged`, `cost_note`).
+Re-running the **same night is idempotent** (positions are stamped with the run `as_of`, so
+`nightly` skips re-ingest when tonight's positions are already present — the artifact stays
+byte-for-byte and the audit-trail scorer never double-counts); a **new** night ingests fresh.
+Scheduling sits behind `factor_scope/schedule/` as **pure deterministic renderers** (no platform
+code on the critical path, D4): a macOS **launchd** plist (built via `plistlib`, `RunAtLoad=false` —
+a batch, not a daemon; the Mac-mini production path) and a **cron** line (Linux), emitted by
+`factor-scope schedule` for review before install. The run log is *operations telemetry*, not the
+artifact, so it may carry wall-clock timestamps; only `dashboard.json` stays clock-free. The §11
+**graduate tier** (ArcticDB bitemporal backtesting under DSR/PBO/CPCV; optional local vector store)
+is **documented in `docs/ops/RUNBOOK.md`, not built** — add when backtesting begins.
+
 ## Open (decide when reached)
 - **Optional static-HTML view of `dashboard.json`** (matching the source design) — deferred; the
   stable contract is the JSON, so it can be added later without disruption.
