@@ -52,8 +52,14 @@ def _item_line(item: DashboardItem) -> str:
     lines = [
         f"    • {item.item}  (gain {gain})",
         f"        lean: {lean}  (conf {conf})  gate: {gate}{flag}",
-        _states_line(item),
     ]
+    if item.evolution:
+        lines.append(f"        evolution: {item.evolution}")
+    if item.flip_trigger:
+        lines.append(f"        flip if: {item.flip_trigger}")
+    if item.invalidation:
+        lines.append(f"        wrong if: {item.invalidation}")
+    lines.append(_states_line(item))
     connections = _connections_line(item)
     if connections is not None:
         lines.append(connections)

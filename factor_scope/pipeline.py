@@ -18,8 +18,11 @@ from factor_scope.contract import (
     DashboardItem,
     Evidence,
     GateState,
+    Lean,
+    LeanAction,
     ListName,
 )
+from factor_scope.digest import DEFAULT_HORIZON_D, DigestInput, digest_item, get_provider
 from factor_scope.factors import FactorContext, compute_gate, compute_states
 from factor_scope.graph import (
     DuckDBGraphStore,
@@ -29,7 +32,7 @@ from factor_scope.graph import (
     build_graph_from_store,
 )
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
-from factor_scope.scoring import build_scorecard, score_calls
+from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 
 
@@ -179,6 +182,68 @@ def _attach_scorecard(
         item.scorecard = scorecard
 
 
+def _prior_action(store: PointInTimeStore, code: str, as_of: str) -> LeanAction | None:
+    """The most recent prior lean on this code (latest as_of, then call_id) — for evolution."""
+
+    prior = [c for c in read_calls(store, as_of) if c.code == code and c.as_of < as_of]
+    if not prior:
+        return None
+    return max(prior, key=lambda c: (c.as_of, c.call_id)).action
+
+
+def _attach_leans(
+    pairs: list[tuple[str, DashboardItem]], store: PointInTimeStore, as_of: str, provider_name: str
+) -> None:
+    """Digest each item into a calibrated lean, then log it as a falsifiable call (spec §08/§06).
+
+    The bull/bear→synthesis runs on the selected provider (the deterministic ``fake`` by default);
+    the orchestrator enforces the gate, abstain, and scorecard guardrails. Each emitted lean is
+    appended to the point-in-time store as a :class:`~factor_scope.scoring.Call` — stamped with
+    tonight's date and immutable — so next run's self-scoring loop scores *this* real call.
+    """
+
+    provider = get_provider(provider_name)
+    # Idempotent on a durable store: never log a second call for a code already called tonight, so
+    # re-running the same night can't double-count in next run's score (the store is append-only).
+    logged_tonight = {c.call_id for c in read_calls(store, as_of) if c.as_of == as_of}
+    for code, item in pairs:
+        brief = DigestInput(
+            code=code,
+            name=item.item,
+            list_name=item.list_name,
+            states=tuple(item.states),
+            gate=item.gate,
+            connections=tuple(item.connections),
+            connections_flag=item.connections_flag,
+            gain=item.gain,
+            scorecard=item.scorecard,
+            prior_action=_prior_action(store, code, as_of),
+        )
+        result = digest_item(provider, brief)
+        item.lean = Lean(action=result.action, confidence=result.confidence, text=result.text)
+        item.evolution = result.evolution
+        item.flip_trigger = result.flip_trigger
+        item.invalidation = result.invalidation
+        call_id = f"{code}:{as_of}"
+        if call_id in logged_tonight:
+            continue
+        log_call(
+            store,
+            Call(
+                call_id=call_id,
+                code=code,
+                as_of=as_of,
+                action=result.action,
+                confidence=result.confidence,
+                horizon_d=DEFAULT_HORIZON_D,
+                state_pattern=result.state_pattern,
+                invalidation=result.invalidation,
+            ),
+            fetched_at=as_of,
+        )
+        logged_tonight.add(call_id)
+
+
 def build_dashboard(config: Config) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
 
@@ -199,6 +264,7 @@ def build_dashboard(config: Config) -> Dashboard:
         pairs = _build_items(store, as_of)
         _attach_connections(pairs, graph, _build_book(store, as_of), as_of)
         _attach_scorecard(pairs, store, as_of)
+        _attach_leans(pairs, store, as_of, config.provider)
         items = [item for _, item in pairs]
     finally:
         store.close()

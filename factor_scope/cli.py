@@ -50,7 +50,9 @@ def run(
         help="Read from a durable connection graph (else one built in-memory from the store).",
     ),
     provider: str = typer.Option(
-        "fake", help="LLM provider for digestion: fake (default) | claude_code | deepseek."
+        "fake",
+        help="Digestion judgment provider: fake (default, offline) | claude_code. "
+        "(DeepSeek is a chore model, off the judgment path.)",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Write the artifact without printing."),
 ) -> None:

@@ -13,6 +13,7 @@ from factor_scope.scoring.calls import Call, log_call, read_calls
 from factor_scope.scoring.scorecard import (
     build_scorecard,
     confidence_nudge,
+    dampen_for_weak_pattern,
 )
 from factor_scope.scoring.scorer import (
     Outcome,
@@ -30,6 +31,7 @@ __all__ = [
     "build_scorecard",
     "classify_outcome",
     "confidence_nudge",
+    "dampen_for_weak_pattern",
     "lean_direction",
     "log_call",
     "read_calls",
