@@ -52,7 +52,3 @@ Later phases only *enrich* what fills the artifact; never leave the pipeline non
 - Default LLM provider is a deterministic **fake**; real providers (`claude_code`, `deepseek`) are
   opt-in and never called in CI.
 - Determinism: fixtures runs reproduce `dashboard.json` byte-for-byte (no wall-clock in the artifact).
-
-## Git
-Work on branch `claude/backend-project-planning-28siA`. Commit per closed unit/phase; keep the
-entrypoint green at every commit.
