@@ -182,14 +182,15 @@ def _attach_scorecard(
 ) -> None:
     """Score the prior calls knowable tonight and attach the rolling mirror to each item (spec §06).
 
-    One descriptive scorecard is built from *all* resolved calls — the book-wide calibration mirror
-    tomorrow's digest reads — and shared onto every item. It is read-only: it never touches an
-    item's states or gate (see ``test_guardrails``). With no calls logged, nothing is attached.
+    One descriptive scorecard is built from the resolved calls inside the rolling window — the
+    book-wide calibration mirror tomorrow's digest reads — and shared onto every item. It is
+    read-only: it never touches an item's states or gate (see ``test_guardrails``). With no calls
+    logged, nothing is attached.
     """
 
     if store.count("calls") == 0:
         return
-    scorecard = build_scorecard(score_calls(store, as_of))
+    scorecard = build_scorecard(score_calls(store, as_of), as_of)
     for _, item in pairs:
         item.scorecard = scorecard
 
