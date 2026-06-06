@@ -1,5 +1,8 @@
 """Unit tests for the fixture parsers of the remaining L1 adapters."""
 
+import sys
+import types
+
 import pytest
 
 from factor_scope.ingest import edgar, fred, fund_holdings, prices, theme_funds, themes
@@ -40,6 +43,88 @@ def test_edgar_keys_each_position() -> None:
     readings = edgar.parse(text, fetched_at="x")
     assert readings[0].key == "0001067983/COHR"
     assert readings[0].payload["shares"] == 1250000.0
+
+
+class _FakeTable:
+    """A minimal pandas-free stand-in for an EdgarTools holdings table."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def iterrows(self):
+        return enumerate(self._rows)
+
+
+class _Fake13FObj:
+    def __init__(self, rows: list[dict]) -> None:
+        self.infotable = _FakeTable(rows)
+
+
+class _FakeNportObj:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def investment_data(self) -> _FakeTable:
+        return _FakeTable(self._rows)
+
+
+class _FakeFiling:
+    def __init__(self, obj: object) -> None:
+        self._obj = obj
+        self.filing_date = "2026-03-31"
+
+    def obj(self) -> object:
+        return self._obj
+
+
+class _FakeFilings:
+    def __init__(self, filing: _FakeFiling) -> None:
+        self._filing = filing
+
+    def latest(self, n: int) -> _FakeFiling:
+        return self._filing
+
+
+def _install_fake_edgar(monkeypatch, *, requested: list[str]) -> None:
+    """Inject a network-free ``edgar`` module that records the requested form."""
+
+    def get_filings(form: str) -> _FakeFilings:
+        requested.append(form)
+        if form == "13F-HR":
+            obj: object = _Fake13FObj([{"Ticker": "COHR", "SharesPrnAmount": 1_250_000}])
+        else:  # NPORT-P
+            obj = _FakeNportObj([{"name": "APPLE INC", "pct_value": 7.5}])
+        return _FakeFilings(_FakeFiling(obj))
+
+    class _FakeCompany:
+        def __init__(self, cik: str) -> None:
+            self.cik = cik
+
+        def get_filings(self, form: str) -> _FakeFilings:
+            return get_filings(form)
+
+    module = types.ModuleType("edgar")
+    module.Company = _FakeCompany  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edgar", module)
+
+
+def test_edgar_fetch_live_defaults_to_13f(monkeypatch) -> None:
+    requested: list[str] = []
+    _install_fake_edgar(monkeypatch, requested=requested)
+    readings = edgar.fetch_live("0001067983", fetched_at="t")
+    assert requested == ["13F-HR"]
+    assert readings[0].key == "0001067983/COHR"
+    assert readings[0].payload == {"filer": "0001067983", "holding": "COHR", "shares": 1_250_000.0}
+
+
+def test_edgar_fetch_live_supports_nport(monkeypatch) -> None:
+    requested: list[str] = []
+    _install_fake_edgar(monkeypatch, requested=requested)
+    readings = edgar.fetch_live("0000102909", form="NPORT-P", fetched_at="t")
+    assert requested == ["NPORT-P"]
+    assert readings[0].key == "0000102909/APPLE INC"
+    # pct_value (% of net assets) → fraction weight, so N-PORT holdings can be graph HOLDS edges
+    assert readings[0].payload == {"filer": "0000102909", "holding": "APPLE INC", "weight": 0.075}
 
 
 def test_themes_keys_by_name_and_coerces_flags() -> None:
