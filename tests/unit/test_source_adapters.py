@@ -59,8 +59,8 @@ def test_themes_keys_by_name_and_coerces_flags() -> None:
 
 def test_theme_funds_keys_by_code() -> None:
     text = (
-        "theme,code,name,as_of,methodology,fee,aum,tracking_error,top10_weight\n"
-        "储能,561160,储能ETF,2026-05-31,0.90,0.005,82,0.010,0.55\n"
+        "theme,code,name,as_of,methodology,fee,aum,tracking_error,top10_weight,crowding\n"
+        "储能,561160,储能ETF,2026-05-31,0.90,0.005,82,0.010,0.55,0.30\n"
     )
     readings = theme_funds.parse(text, fetched_at="x")
     assert readings[0].series == "theme_funds"
@@ -68,3 +68,4 @@ def test_theme_funds_keys_by_code() -> None:
     assert readings[0].payload["theme"] == "储能"
     assert readings[0].payload["name"] == "储能ETF"
     assert readings[0].payload["fee"] == 0.005
+    assert readings[0].payload["crowding"] == 0.30

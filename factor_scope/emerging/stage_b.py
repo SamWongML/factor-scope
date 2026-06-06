@@ -9,6 +9,8 @@ The criteria (spec §07):
 * **methodology / pure-play** — a clear revenue-from-theme rule beats a loose label.
 * **overlap with core** — via the Phase-3 §05 look-through: if my book already holds the theme's
   winners, a thematic fund is a *leveraged repeat*, not diversification. High overlap → shrink/skip.
+* **crowding** — how crowded the fund's theme already is; a crowded theme is a crash-risk gauge —
+  size down, don't chase — so a more-crowded fund scores lower.
 * **cost** — total fee; small edges compound, so cheaper wins unless methodology justifies more.
 * **liquidity & size** — AUM (thin funds carry closure/tracking risk).
 * **tracking quality** — tracking error vs the index (are you getting the exposure you paid for?).
@@ -51,10 +53,11 @@ OVERLAP_CAP = 0.20  # look-through overlap at/above this scores 0 (a full levera
 WEIGHTS: dict[str, float] = {
     "methodology": 0.25,
     "overlap": 0.25,
+    "crowding": 0.10,
     "cost": 0.15,
     "liquidity": 0.15,
-    "tracking": 0.10,
-    "concentration": 0.10,
+    "tracking": 0.05,
+    "concentration": 0.05,
 }
 
 
@@ -70,6 +73,7 @@ class Candidate:
     aum: float  # fund size in 亿元 (liquidity/size proxy)
     tracking_error: float  # tracking error vs the index (fraction)
     top10_weight: float  # top-10 holdings weight (concentration, 0..1)
+    crowding: float  # how crowded the fund's theme is (0..1; a crash-risk gauge — higher is worse)
     as_of: str  # the research date this read was true as of
 
 
@@ -117,6 +121,7 @@ def score_fund(
     subscores = {
         "methodology": _clamp(candidate.methodology),
         "overlap": 1.0 - min(1.0, overlap / OVERLAP_CAP),
+        "crowding": 1.0 - _clamp(candidate.crowding),
         "cost": 1.0 - min(1.0, candidate.fee / FEE_CAP),
         "liquidity": min(1.0, candidate.aum / AUM_REF),
         "tracking": 1.0 - min(1.0, candidate.tracking_error / TE_CAP),

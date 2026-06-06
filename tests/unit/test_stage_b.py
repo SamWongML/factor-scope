@@ -52,6 +52,7 @@ def _candidate(code: str, **overrides: object) -> Candidate:
         aum=60.0,
         tracking_error=0.010,
         top10_weight=0.55,
+        crowding=0.20,
         as_of="2026-05-31",
     )
     base.update(overrides)
@@ -79,6 +80,7 @@ def test_score_is_deterministic_and_in_unit_range() -> None:
     assert set(first.subscores) == {
         "methodology",
         "overlap",
+        "crowding",
         "cost",
         "liquidity",
         "tracking",
@@ -113,6 +115,20 @@ def test_high_overlap_drops_a_fund_out_of_the_top_three() -> None:
     # Ranked by total, descending, with a deterministic code tie-break.
     totals = [s.total for s in top3]
     assert totals == sorted(totals, reverse=True)
+
+
+def test_crowded_fund_ranks_below_an_otherwise_equal_uncrowded_fund() -> None:
+    graph, book = _graph(), _book()
+    # Funds A and C neither overlap my core, so the only difference is crowding. A crowded theme is
+    # a crash-risk gauge — size down, don't chase — so it scores lower and ranks below.
+    uncrowded = score_fund(_candidate("A", crowding=0.10), graph, AS_OF, book)
+    crowded = score_fund(_candidate("C", crowding=0.90), graph, AS_OF, book)
+    assert crowded.subscores["crowding"] < uncrowded.subscores["crowding"]
+    assert crowded.total < uncrowded.total
+    ranked = screen_funds(
+        [_candidate("C", crowding=0.90), _candidate("A", crowding=0.10)], graph, AS_OF, book
+    )
+    assert [s.candidate.code for s in ranked] == ["A", "C"]
 
 
 def test_screen_orders_by_total_then_code() -> None:
