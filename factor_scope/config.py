@@ -29,6 +29,9 @@ class Config:
     # Where the durable connection graph lives. None → an ephemeral in-memory graph built from the
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None
+    # US filer CIKs whose holdings the ``--live`` path pulls from EDGAR (13F + N-PORT) to feed the
+    # look-through graph (spec §04/§05). Empty by default — the fixtures path never reads it.
+    edgar_ciks: tuple[str, ...] = ()
     # Digestion judgment provider: "fake" (default, offline) | "claude_code". DeepSeek is a chore
     # model (off the judgment path, spec §08), not a judgment provider — see digest.get_provider.
     provider: str = "fake"

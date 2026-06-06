@@ -39,27 +39,37 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def fetch_live(cik: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
-    """Pull a filer's latest 13F holdings via EdgarTools. Requires the `live` extra + network."""
+def fetch_live(
+    cik: str, *, form: str = "13F-HR", fetched_at: str
+) -> list[Reading]:  # pragma: no cover - opt-in
+    """Pull a filer's latest holdings via EdgarTools. Requires the `live` extra + network.
+
+    ``form="13F-HR"`` reads a 13F manager's quarterly positions (the ``infotable``); ``"NPORT-P"``
+    reads a fund/ETF's monthly portfolio (``investment_data``), keyed by security name. Both land in
+    the same ``{filer, holding, shares}`` shape that feeds the look-through graph (spec §04/§05).
+    """
 
     from edgar import Company
 
-    filing = Company(cik).get_filings(form="13F-HR").latest(1)
-    table = filing.obj().infotable
+    filing = Company(cik).get_filings(form=form).latest(1)
+    obj = filing.obj()
     as_of = str(filing.filing_date)
-    readings: list[Reading] = []
-    for _, row in table.iterrows():
-        readings.append(
-            Reading(
-                series=SERIES,
-                key=f"{cik}/{row['Ticker']}",
-                as_of=as_of,
-                fetched_at=fetched_at,
-                payload={
-                    "filer": cik,
-                    "holding": str(row["Ticker"]),
-                    "shares": float(row["Shares"]),
-                },
-            )
+    if form == "13F-HR":
+        holdings = (
+            (str(row["Ticker"]), float(row["Shares"])) for _, row in obj.infotable.iterrows()
         )
-    return readings
+    else:  # NPORT-P — monthly fund/ETF portfolio
+        holdings = (
+            (str(row["name"]), float(row["balance"]))
+            for _, row in obj.investment_data().iterrows()
+        )
+    return [
+        Reading(
+            series=SERIES,
+            key=f"{cik}/{holding}",
+            as_of=as_of,
+            fetched_at=fetched_at,
+            payload={"filer": cik, "holding": holding, "shares": shares},
+        )
+        for holding, shares in holdings
+    ]

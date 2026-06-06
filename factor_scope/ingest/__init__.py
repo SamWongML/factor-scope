@@ -2,8 +2,9 @@
 
 ``gather_fixture_readings`` runs every adapter's offline fixture backend (the default, deterministic
 path used by tests and ``--fixtures``). ``gather_live_readings`` is the opt-in ``--live`` path: it
-takes the universe from the local ``positions.csv`` and pulls live prices + the macro dial. Live
-backends lazily import their heavy dependencies and are never exercised in CI.
+takes the universe from the local ``positions.csv`` and pulls live prices, fund + EDGAR holdings
+(so the look-through graph rebuilds from live disclosures), and the macro dial. Live backends lazily
+import their heavy dependencies and are never exercised in CI.
 """
 
 from __future__ import annotations
@@ -51,7 +52,12 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
 def gather_live_readings(  # pragma: no cover - opt-in
     config: Config, *, as_of: str
 ) -> list[Reading]:
-    """The opt-in ``--live`` path: local positions + live NAV per holding + the FRED macro dial."""
+    """The opt-in ``--live`` path: local positions + live NAV, holdings, and the FRED macro dial.
+
+    Each held fund's NAV *and* its latest disclosed holdings are refreshed, plus every configured
+    EDGAR filer's holdings — so the connection graph rebuilds from live disclosures (spec §04/§05),
+    not stale fixtures. Heavy deps stay lazily imported inside each adapter's ``fetch_live``.
+    """
 
     fetched_at = fetched_at_for(as_of)
     book = positions.load_fixture(
@@ -60,6 +66,9 @@ def gather_live_readings(  # pragma: no cover - opt-in
     readings: list[Reading] = list(book)
     for pos in book:
         readings += prices.fetch_live(pos.key, fetched_at=fetched_at)
+        readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
+    for cik in config.edgar_ciks:
+        readings += edgar.fetch_live(cik, fetched_at=fetched_at)
     for series_id in fred.DEFAULT_SERIES:
         readings += fred.fetch_live(series_id, fetched_at=fetched_at)
     return readings
