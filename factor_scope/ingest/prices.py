@@ -50,20 +50,23 @@ def select_corroborated(
 
     - **Fall back** — when ``primary`` is empty (AkShare blocked or offline), substitute the
       ``secondary`` Baostock read so the run still has a price.
-    - **Corroborate** — when both sources read the same NAV (within ``tolerance``), trust the
-      AkShare read.
-    - **Surface conflicts** — when both are present but disagree beyond ``tolerance``, raise rather
-      than silently pick one: two independent sources that materially diverge is a data-quality
-      signal a human should see.
+    - **Corroborate** — when both sources read the *same trading day's* NAV (within ``tolerance``),
+      trust the AkShare read.
+    - **Surface conflicts** — when both are present for the same day but disagree beyond
+      ``tolerance``, raise rather than silently pick one: two independent sources that materially
+      diverge is a data-quality signal a human should see.
 
-    When only the ``primary`` is present there is nothing to corroborate against, so it is returned
-    as-is.
+    The cross-check is gated on a matching ``as_of``: a stale-but-working Baostock read (an earlier
+    session) is never compared against a fresh AkShare read, so a normal day-over-day move can't
+    spuriously raise. When only the ``primary`` is present there is nothing to corroborate against,
+    so it is returned as-is.
     """
 
     if not primary:
         return secondary
-    if secondary:
-        a, b = primary[-1].payload["nav"], secondary[-1].payload["nav"]
+    p, s = primary[-1], secondary[-1] if secondary else None
+    if s is not None and p.as_of == s.as_of:
+        a, b = p.payload["nav"], s.payload["nav"]
         if a and abs(a - b) / abs(a) > tolerance:
             raise IngestError(
                 f"{SERIES}: AkShare ({a}) and Baostock ({b}) disagree beyond {tolerance:.0%}"

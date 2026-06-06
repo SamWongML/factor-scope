@@ -195,8 +195,15 @@ def test_baostock_code_prefixes_shenzhen_for_1x(monkeypatch) -> None:
     assert queried == ["sz.159915"]  # 1x ETF codes are Shenzhen-listed
 
 
-def _price(nav: float) -> list[Reading]:
-    return [Reading(series="prices", key="561010", as_of="2026-06-05", fetched_at="t",
+def test_baostock_fetch_live_returns_empty_when_no_rows(monkeypatch) -> None:
+    # A delisted/unknown code yields no bars → no data, not an IndexError, so the caller can
+    # fall back to the other source rather than crash the run.
+    _install_fake_baostock(monkeypatch, rows=[], queried=[])
+    assert baostock.fetch_live("561010", fetched_at="t") == []
+
+
+def _price(nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:
+    return [Reading(series="prices", key="561010", as_of=as_of, fetched_at="t",
                     payload={"nav": nav})]
 
 
@@ -218,6 +225,15 @@ def test_select_corroborated_keeps_akshare_without_a_cross_check() -> None:
 def test_select_corroborated_raises_on_material_disagreement() -> None:
     with pytest.raises(IngestError, match="disagree"):
         prices.select_corroborated(_price(1.92), _price(2.50))
+
+
+def test_select_corroborated_skips_cross_check_across_different_days() -> None:
+    # A stale-but-working Baostock read (an earlier session) must not be cross-checked against a
+    # fresh AkShare read — a normal day-over-day move would otherwise spuriously kill the run.
+    chosen = prices.select_corroborated(
+        _price(1.92, as_of="2026-06-05"), _price(2.50, as_of="2026-06-04")
+    )
+    assert chosen[0].payload["nav"] == 1.92  # trust the fresh AkShare read, no false conflict
 
 
 def test_theme_funds_keys_by_code() -> None:

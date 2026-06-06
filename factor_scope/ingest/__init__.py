@@ -9,6 +9,8 @@ import their heavy dependencies and are never exercised in CI.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from factor_scope.config import Config
 from factor_scope.ingest import (
     baostock,
@@ -50,6 +52,22 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
     return readings
 
 
+def _live_or_empty(  # pragma: no cover - opt-in
+    fetch: Callable[..., list[Reading]], code: str, *, fetched_at: str
+) -> list[Reading]:
+    """A live price read that yields no rows instead of raising on failure.
+
+    The CN price path is dual-sourced for anti-fragility (L1 / §04): turning one source going
+    offline into an empty read lets :func:`prices.select_corroborated` fall back to the other,
+    rather than letting an IP-block or timeout crash the whole nightly run.
+    """
+
+    try:
+        return fetch(code, fetched_at=fetched_at)
+    except Exception:
+        return []
+
+
 def gather_live_readings(  # pragma: no cover - opt-in
     config: Config, *, as_of: str
 ) -> list[Reading]:
@@ -67,10 +85,11 @@ def gather_live_readings(  # pragma: no cover - opt-in
     )
     readings: list[Reading] = list(book)
     for pos in book:
-        # CN prices are dual-sourced: corroborate AkShare against Baostock, or fall back to it.
+        # CN prices are dual-sourced: corroborate AkShare against Baostock, or — if either source
+        # is offline (its read yields nothing) — fall back to the other rather than kill the run.
         readings += prices.select_corroborated(
-            prices.fetch_live(pos.key, fetched_at=fetched_at),
-            baostock.fetch_live(pos.key, fetched_at=fetched_at),
+            _live_or_empty(prices.fetch_live, pos.key, fetched_at=fetched_at),
+            _live_or_empty(baostock.fetch_live, pos.key, fetched_at=fetched_at),
         )
         readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
     for cik in config.edgar_ciks:

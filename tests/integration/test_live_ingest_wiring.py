@@ -91,6 +91,29 @@ def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
     assert len(priced) == len(held)
 
 
+def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch) -> None:
+    _stub_adapters(monkeypatch)
+
+    def _akshare_down(key, *, fetched_at):
+        raise RuntimeError("AkShare IP-blocked")
+
+    monkeypatch.setattr(prices, "fetch_live", _akshare_down)
+    monkeypatch.setattr(
+        baostock,
+        "fetch_live",
+        lambda key, *, fetched_at: [
+            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"nav": 2.0})
+        ],
+    )
+    # AkShare offline must not kill the run — Baostock substitutes (the whole point of §04).
+    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    held = {r.key for r in readings if r.series == "positions"}
+    priced = [r for r in readings if r.series == "prices"]
+    assert {r.key for r in priced} == held
+    assert all(r.payload["nav"] == 2.0 for r in priced)  # the substituted Baostock NAV
+
+
 def test_gather_live_surfaces_a_source_disagreement(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     # Baostock materially disagrees with AkShare → the cross-validation surfaces it, doesn't hide it

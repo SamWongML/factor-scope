@@ -7,7 +7,7 @@ IP-blocked or offline never kills a nightly run (L1 / §04). This module is the 
 the AkShare read (cross-validation) or substitutes for it when AkShare is down — the selection
 policy lives in :func:`factor_scope.ingest.prices.select_corroborated`.
 
-Mootdx/pytdx is the planned third source and is tracked as a follow-up (see issue #15).
+Mootdx/pytdx is the planned third source and is tracked as a follow-up (see issue #21).
 
 Like every live backend, the heavy dependency is imported lazily inside the call so the core
 installs and CI run offline; ``fetch_live`` is opt-in (behind ``--live``) and never called in CI.
@@ -41,6 +41,8 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
     finally:
         bs.logout()
 
+    if not rows:  # delisted/unknown code or a query-level error → no data, so the caller falls back
+        return []
     as_of, close = rows[-1][0], rows[-1][1]
     return [
         Reading(
