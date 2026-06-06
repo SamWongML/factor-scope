@@ -287,6 +287,7 @@ def _candidate_from_reading(reading: Reading) -> Candidate:
         aum=float(p["aum"]),
         tracking_error=float(p["tracking_error"]),
         top10_weight=float(p["top10_weight"]),
+        crowding=float(p["crowding"]),
         as_of=reading.as_of,
     )
 
@@ -309,7 +310,7 @@ def _stage_b_evidence(score: FundScore, rank: int, n_candidates: int) -> Evidenc
             f"rank #{rank}/{n_candidates} · score {score.total:.2f} · {c.theme} · "
             f"methodology {c.methodology:.2f} · fee {c.fee:.2%} · AUM {c.aum:g}亿 · "
             f"tracking {c.tracking_error:.1%} · top10 {c.top10_weight:.0%} · "
-            f"overlap-with-core {score.overlap:.1%}"
+            f"crowding {c.crowding:.0%} · overlap-with-core {score.overlap:.1%}"
         ),
     )
 
