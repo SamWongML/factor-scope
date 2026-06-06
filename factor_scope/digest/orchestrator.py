@@ -7,7 +7,9 @@ true *regardless of what any model says*:
    opposing extremes → no claim.
 2. **The trend gate is a hard rule** — a capped gate caps the lean at Hold/Avoid; nothing here may
    open it (principle #4).
-3. **The scorecard is descriptive only** — it may pull the confidence *number* toward realised
+3. **Evidence-quality auto-downgrade** — weak evidence (stale / single-source / conflict /
+   forum-only) trims the confidence *number* down before the scorecard reads it; descriptive only.
+4. **The scorecard is descriptive only** — it may pull the confidence *number* toward realised
    reliability (the sole sanctioned channel), never change the action, a state, or the gate.
 
 The descriptive fields the artifact carries (text, evolution, flip-trigger, invalidation) are then
@@ -17,6 +19,7 @@ rendered deterministically from the *final* action, so they always match the lea
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from factor_scope.contract import Band, GateState, LeanAction, ListName
 from factor_scope.digest.fake import FLAT_EPS
@@ -26,6 +29,18 @@ from factor_scope.scoring.scorecard import confidence_nudge, dampen_for_weak_pat
 MIN_VALID_STATES = 2  # below this we are too blind to call (spec §08)
 OPPOSE_MIN = 1.5  # a "strong case" floor — both sides this strong, and cancelling, → abstain
 DEFAULT_HORIZON_D = 30  # the horizon a fresh lean is scored over (calendar days)
+
+# Evidence-quality auto-downgrade (spec §08) — a deterministic confidence penalty on weak evidence.
+STALE_MAX_AGE_D = 7  # newest evidence older than this (vs the brief's as_of) reads as stale
+MIN_SOURCES = 2  # fewer than this many distinct evidence sources reads as single-source
+LOW_TRUST_SRC = frozenset({"xueqiu", "guba", "tieba"})  # retail forums → forum-only when all match
+
+# How much confidence *survives* each condition (a fraction in (0, 1]); they multiply, so several
+# weak signals compound. These are fixed, never tuned to returns.
+_STALE_KEEP = 0.85
+_SINGLE_SOURCE_KEEP = 0.9
+_CONFLICT_KEEP = 0.85
+_FORUM_ONLY_KEEP = 0.8
 
 # Short, stable factor tokens for the state-pattern key the scorecard reasons over. The trend factor
 # is represented by the gate token, so it is skipped here to avoid a double read.
@@ -107,6 +122,56 @@ def _enforce_gate(action: LeanAction, brief: DigestInput) -> LeanAction:
     if brief.gate is GateState.CAPPED and action in _BULLISH:
         return LeanAction.HOLD if brief.list_name is ListName.HOLDINGS else LeanAction.AVOID
     return action
+
+
+def _is_stale(brief: DigestInput) -> bool:
+    """Newest evidence older than the freshness window, measured against the brief's own as_of."""
+
+    if brief.as_of is None or not brief.evidence:
+        return False
+    newest = max(date.fromisoformat(e.as_of) for e in brief.evidence)
+    return (date.fromisoformat(brief.as_of) - newest).days > STALE_MAX_AGE_D
+
+
+def _is_single_source(brief: DigestInput) -> bool:
+    """Fewer than ``MIN_SOURCES`` distinct sources (no evidence counts as single-source)."""
+
+    return len({e.src for e in brief.evidence}) < MIN_SOURCES
+
+
+def _is_conflict(brief: DigestInput) -> bool:
+    """Valid factor states at opposing extremes — a softer read of the abstain conflict (§08)."""
+
+    levels = {s.level for s in brief.states if s.valid}
+    return Band.EXTREME_HIGH in levels and Band.EXTREME_LOW in levels
+
+
+def _is_forum_only(brief: DigestInput) -> bool:
+    """Every evidence source is in the configured low-trust (retail-forum) set."""
+
+    return bool(brief.evidence) and all(e.src in LOW_TRUST_SRC for e in brief.evidence)
+
+
+def auto_downgrade(brief: DigestInput) -> float:
+    """The fraction of confidence that survives the evidence-quality downgrade (spec §08).
+
+    A deterministic, pure function of the brief — no wall clock (staleness is judged against the
+    brief's own ``as_of``). Each weak-evidence condition (stale / single-source / conflict /
+    forum-only) multiplies the survivor toward zero, so several signals compound. The result is in
+    ``(0, 1]``: it can only *lower* confidence, never raise it, and it never touches the action, a
+    state, or the gate — the caller multiplies the stated confidence by it.
+    """
+
+    keep = 1.0
+    if _is_stale(brief):
+        keep *= _STALE_KEEP
+    if _is_single_source(brief):
+        keep *= _SINGLE_SOURCE_KEEP
+    if _is_conflict(brief):
+        keep *= _CONFLICT_KEEP
+    if _is_forum_only(brief):
+        keep *= _FORUM_ONLY_KEEP
+    return keep
 
 
 def _apply_scorecard(confidence: float, brief: DigestInput, tokens: tuple[str, ...]) -> float:
@@ -199,13 +264,21 @@ def digest_item(provider: LLMProvider, brief: DigestInput) -> DigestResult:
 
     proposal = provider.synthesize(brief, bull, bear)
     action = _enforce_gate(proposal.action, brief)
-    confidence = _apply_scorecard(proposal.confidence, brief, tokens)
+    # Confidence channels, in order: the evidence-quality downgrade (§08) trims the *stated*
+    # confidence for weak evidence first, then the scorecard mirror (§06) pulls that toward
+    # realised reliability. Both are descriptive — neither can change the action or the gate.
+    downgraded = proposal.confidence * auto_downgrade(brief)
+    confidence = _apply_scorecard(downgraded, brief, tokens)
     return _render(brief, action, confidence, tokens)
 
 
 __all__ = [
     "DEFAULT_HORIZON_D",
+    "LOW_TRUST_SRC",
+    "MIN_SOURCES",
+    "STALE_MAX_AGE_D",
     "DigestResult",
+    "auto_downgrade",
     "digest_item",
     "state_tokens",
 ]
