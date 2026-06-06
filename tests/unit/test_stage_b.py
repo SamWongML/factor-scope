@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from factor_scope.emerging.stage_b import Candidate, overlap_with_core, score_fund, screen_funds
+from factor_scope.emerging.stage_b import (
+    WEIGHTS,
+    Candidate,
+    overlap_with_core,
+    score_fund,
+    screen_funds,
+)
 from factor_scope.graph import DuckDBGraphStore, Edge
 from factor_scope.graph.lookthrough import Holding
 
@@ -57,6 +63,12 @@ def _candidate(code: str, **overrides: object) -> Candidate:
     )
     base.update(overrides)
     return Candidate(**base)  # type: ignore[arg-type]
+
+
+def test_weights_sum_to_one() -> None:
+    # The fixed-weight combination is only a convex average if the weights sum to 1.0; a future
+    # re-balance that breaks this would silently distort every total, so pin the invariant here.
+    assert sum(WEIGHTS.values()) == pytest.approx(1.0)
 
 
 def test_overlap_with_core_counts_only_names_my_book_already_holds() -> None:
