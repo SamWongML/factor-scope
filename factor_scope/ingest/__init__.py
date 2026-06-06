@@ -21,6 +21,7 @@ from factor_scope.ingest import (
     edgar,
     fred,
     fund_holdings,
+    mootdx,
     positions,
     prices,
     theme_funds,
@@ -154,13 +155,20 @@ def gather_live_readings(  # pragma: no cover - opt-in
     readings: list[Reading] = list(book)
     degraded: list[str] = []  # funds with no reconciled price — unpriced or flagged as divergent
     for pos in book:
-        # CN prices are dual-sourced: corroborate AkShare against Baostock, or — if either source
-        # is offline (its read yields nothing) — fall back to the other rather than kill the run.
-        priced = prices.select_corroborated(
-            _live_or_empty(prices.fetch_live, pos.key, source=prices.SOURCE, fetched_at=fetched_at),
-            _live_or_empty(
-                baostock.fetch_live, pos.key, source=baostock.SOURCE, fetched_at=fetched_at
-            ),
+        # CN prices are triple-sourced: reconcile AkShare/Baostock/Mootdx to a median consensus, or
+        # — if a source is offline (its read yields nothing) — fall back rather than kill the run.
+        priced = prices.select_reconciled(
+            [
+                _live_or_empty(
+                    prices.fetch_live, pos.key, source=prices.SOURCE, fetched_at=fetched_at
+                ),
+                _live_or_empty(
+                    baostock.fetch_live, pos.key, source=baostock.SOURCE, fetched_at=fetched_at
+                ),
+                _live_or_empty(
+                    mootdx.fetch_live, pos.key, source=mootdx.SOURCE, fetched_at=fetched_at
+                ),
+            ],
             tolerance=config.corroboration_tolerance,
         )
         readings += priced

@@ -5,7 +5,16 @@ import types
 
 import pytest
 
-from factor_scope.ingest import baostock, edgar, fred, fund_holdings, prices, theme_funds, themes
+from factor_scope.ingest import (
+    baostock,
+    edgar,
+    fred,
+    fund_holdings,
+    mootdx,
+    prices,
+    theme_funds,
+    themes,
+)
 from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
 
@@ -213,51 +222,89 @@ def test_baostock_fetch_live_returns_empty_when_no_rows(monkeypatch) -> None:
     assert baostock.fetch_live("561010", fetched_at="t") == []
 
 
-def _price(nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:
+def test_mootdx_tags_its_source() -> None:
+    assert mootdx.SOURCE == "mootdx"  # the third price source carries its own provenance tag
+
+
+def _src(source: str, nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:
     return [Reading(series="prices", key="561010", as_of=as_of, fetched_at="t",
-                    payload={"nav": nav, "source": "akshare"})]
+                    payload={"nav": nav, "source": source})]
 
 
-def test_select_corroborated_trusts_akshare_when_sources_agree() -> None:
-    chosen = prices.select_corroborated(_price(1.920), _price(1.921))
-    assert chosen[0].payload["nav"] == 1.920  # within tolerance → keep the AkShare read
+def _price(nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:
+    return _src("akshare", nav, as_of=as_of)  # AkShare is the priority/canonical source
+
+
+def test_select_reconciled_trusts_primary_when_sources_agree() -> None:
+    chosen = prices.select_reconciled([_price(1.920), _src("baostock", 1.921)])
+    assert chosen[0].payload["nav"] == 1.920  # within tolerance → keep the priority AkShare read
     assert "divergence" not in chosen[0].payload  # agreement leaves no quality flag
 
 
-def test_select_corroborated_falls_back_when_akshare_blocked() -> None:
-    chosen = prices.select_corroborated([], _price(1.92))
+def test_select_reconciled_falls_back_when_primary_blocked() -> None:
+    chosen = prices.select_reconciled([[], _src("baostock", 1.92)])
     assert chosen[0].payload["nav"] == 1.92  # AkShare unavailable → substitute Baostock
 
 
-def test_select_corroborated_keeps_akshare_without_a_cross_check() -> None:
-    chosen = prices.select_corroborated(_price(1.92), [])
-    assert chosen[0].payload["nav"] == 1.92  # Baostock unavailable → nothing to corroborate against
+def test_select_reconciled_keeps_a_lone_source_without_cross_check() -> None:
+    chosen = prices.select_reconciled([_price(1.92), []])
+    assert chosen[0].payload["nav"] == 1.92  # only one source → nothing to corroborate against
 
 
-def test_select_corroborated_flags_divergence_but_continues() -> None:
-    # A material same-day disagreement must NOT kill the run (anti-fragility). Keep the primary
-    # AkShare value, but flag the reading with the disagreeing peer NAV for review.
-    chosen = prices.select_corroborated(_price(1.92), _price(2.50))
+def test_select_reconciled_flags_divergence_but_continues() -> None:
+    # Two sources, a material same-day disagreement must NOT kill the run (anti-fragility). Keep the
+    # priority value, but flag the reading with the disagreeing peer NAV for review.
+    chosen = prices.select_reconciled([_price(1.92), _src("baostock", 2.50)])
     assert len(chosen) == 1
-    assert chosen[0].payload["nav"] == 1.92  # primary value retained
+    assert chosen[0].payload["nav"] == 1.92  # priority value retained
     assert chosen[0].payload["divergence"] == 2.50  # the unreconciled peer NAV, recorded not fatal
 
 
-def test_select_corroborated_default_tolerance_is_half_a_percent() -> None:
+def test_select_reconciled_default_tolerance_is_half_a_percent() -> None:
     # The default band is the SEC/CSSF NAV-error baseline (0.5%), not the looser 1%: a 0.4% gap
     # corroborates, a 0.8% gap is flagged.
-    assert "divergence" not in prices.select_corroborated(_price(1.0), _price(1.004))[0].payload
-    assert prices.select_corroborated(_price(1.0), _price(1.008))[0].payload["divergence"] == 1.008
+    within = prices.select_reconciled([_price(1.0), _src("baostock", 1.004)])
+    flagged = prices.select_reconciled([_price(1.0), _src("baostock", 1.008)])
+    assert "divergence" not in within[0].payload  # 0.4% corroborates
+    assert flagged[0].payload["divergence"] == 1.008  # 0.8% is flagged
 
 
-def test_select_corroborated_skips_cross_check_across_different_days() -> None:
+def test_select_reconciled_skips_cross_check_across_different_days() -> None:
     # A stale-but-working Baostock read (an earlier session) must not be cross-checked against a
-    # fresh AkShare read — a normal day-over-day move would otherwise spuriously kill the run.
-    chosen = prices.select_corroborated(
-        _price(1.92, as_of="2026-06-05"), _price(2.50, as_of="2026-06-04")
+    # fresh AkShare read — a normal day-over-day move would otherwise spuriously flag.
+    chosen = prices.select_reconciled(
+        [_price(1.92, as_of="2026-06-05"), _src("baostock", 2.50, as_of="2026-06-04")]
     )
-    assert chosen[0].payload["nav"] == 1.92  # trust the fresh AkShare read, no false conflict
-    assert "divergence" not in chosen[0].payload  # different days → no cross-check, no flag
+    assert chosen[0].payload["nav"] == 1.92  # only the fresh read is in the cohort, no false flag
+    assert "divergence" not in chosen[0].payload
+
+
+def test_select_reconciled_takes_the_median_of_three() -> None:
+    # Three sources → the median is the consensus, robust to a single bad source: a wild Mootdx
+    # read can't poison the value, and it is flagged as the divergent peer.
+    chosen = prices.select_reconciled(
+        [_price(1.000), _src("baostock", 1.001), _src("mootdx", 1.50)]
+    )
+    assert chosen[0].payload["nav"] == 1.001  # the median, not dragged toward the 1.50 outlier
+    assert chosen[0].payload["divergence"] == 1.50  # the most-divergent peer, flagged
+
+
+def test_select_reconciled_median_rejects_a_bad_primary() -> None:
+    # The whole point of three sources: even when the PRIORITY source (AkShare) is the bad one, the
+    # two agreeing sources win the median — AkShare's number does not survive.
+    chosen = prices.select_reconciled(
+        [_price(99.0), _src("baostock", 1.0), _src("mootdx", 1.0)]
+    )
+    assert chosen[0].payload["nav"] == 1.0  # consensus, not the bad AkShare 99.0
+    assert chosen[0].payload["source"] != "akshare"  # carried by an agreeing source
+    assert chosen[0].payload["divergence"] == 99.0
+
+
+def test_select_reconciled_three_agree_no_flag() -> None:
+    chosen = prices.select_reconciled(
+        [_price(1.000), _src("baostock", 1.001), _src("mootdx", 1.002)]
+    )
+    assert "divergence" not in chosen[0].payload  # all within tolerance → clean
 
 
 def test_theme_funds_keys_by_code() -> None:

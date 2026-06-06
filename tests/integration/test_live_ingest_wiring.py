@@ -12,7 +12,15 @@ import pytest
 
 from factor_scope import ingest
 from factor_scope.config import Config
-from factor_scope.ingest import baostock, edgar, fred, fund_holdings, gather_live_readings, prices
+from factor_scope.ingest import (
+    baostock,
+    edgar,
+    fred,
+    fund_holdings,
+    gather_live_readings,
+    mootdx,
+    prices,
+)
 from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
 
@@ -34,6 +42,14 @@ def _stub_adapters(monkeypatch) -> None:
         lambda key, *, fetched_at: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.0})  # corroborates the AkShare read
+        ],
+    )
+    monkeypatch.setattr(
+        mootdx,
+        "fetch_live",
+        lambda key, *, fetched_at: [
+            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"nav": 1.0})  # the third source also corroborates
         ],
     )
     monkeypatch.setattr(
@@ -102,15 +118,16 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
         raise RuntimeError("AkShare IP-blocked")
 
     monkeypatch.setattr(prices, "fetch_live", _akshare_down)
-    monkeypatch.setattr(
-        baostock,
-        "fetch_live",
-        lambda key, *, fetched_at: [
-            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
-                    payload={"nav": 2.0})
-        ],
-    )
-    # AkShare offline must not kill the run — Baostock substitutes (the whole point of §04).
+    for source in (baostock, mootdx):  # the two surviving sources agree on the substitute NAV
+        monkeypatch.setattr(
+            source,
+            "fetch_live",
+            lambda key, *, fetched_at: [
+                Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                        payload={"nav": 2.0})
+            ],
+        )
+    # AkShare offline must not kill the run — the other sources substitute (the whole point of §04).
     with caplog.at_level(logging.WARNING):
         readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
     held = {r.key for r in readings if r.series == "positions"}

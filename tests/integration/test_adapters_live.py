@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from factor_scope.ingest import baostock, edgar, fred, fund_holdings, prices
+from factor_scope.ingest import baostock, edgar, fred, fund_holdings, mootdx, prices
 
 pytestmark = pytest.mark.integration
 
@@ -25,6 +25,12 @@ def test_prices_live_smoke() -> None:
 @skip_unless_live
 def test_baostock_live_smoke() -> None:
     readings = baostock.fetch_live("561010", fetched_at="t")  # the Baostock cross-validation leg
+    assert readings and readings[0].payload["nav"] > 0
+
+
+@skip_unless_live
+def test_mootdx_live_smoke() -> None:
+    readings = mootdx.fetch_live("561010", fetched_at="t")  # the third (TDX) cross-validation leg
     assert readings and readings[0].payload["nav"] > 0
 
 

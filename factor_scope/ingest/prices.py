@@ -7,6 +7,7 @@ Per-item gain comes from cost basis vs the current NAV pulled here. Live is AkSh
 from __future__ import annotations
 
 from pathlib import Path
+from statistics import median
 
 from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
@@ -44,41 +45,57 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def select_corroborated(
-    primary: list[Reading],
-    secondary: list[Reading],
-    *,
-    tolerance: float = _CORROBORATION_TOLERANCE,
+def _flag(reading: Reading, peer_nav: float) -> Reading:
+    """Annotate a reading with the unreconciled peer NAV — a quality flag, not a failure."""
+
+    return reading.model_copy(update={"payload": {**reading.payload, "divergence": peer_nav}})
+
+
+def select_reconciled(
+    reads: list[list[Reading]], *, tolerance: float = _CORROBORATION_TOLERANCE
 ) -> list[Reading]:
-    """Cross-validate the AkShare (``primary``) NAV against the Baostock (``secondary``) NAV.
+    """Reconcile one fund's NAV across the CN price sources, in priority order (AkShare first).
 
-    The CN price path is dual-sourced for anti-fragility (L1 / §04). This is the selection policy:
+    ``reads`` is each source's read (possibly empty), AkShare → Baostock → Mootdx. The CN path is
+    multi-sourced for anti-fragility (L1 / §04); this is the selection policy, robust to one bad
+    source and never fatal:
 
-    - **Fall back** — when ``primary`` is empty (AkShare blocked or offline), substitute the
-      ``secondary`` Baostock read so the run still has a price.
-    - **Corroborate** — when both sources read the *same trading day's* NAV (within ``tolerance``),
-      trust the AkShare read.
-    - **Flag conflicts, don't fail** — when both are present for the same day but disagree beyond
-      ``tolerance``, keep the primary value but annotate the reading with the unreconciled peer NAV
-      (``payload["divergence"]``) for review. One divergent ETF must never abort the nightly run.
+    - **Fall back** — a source that is offline contributes an empty read; only the sources that
+      returned a same-day bar are reconciled, so a blocked scraper can't kill the run.
+    - **One source** — nothing to cross-check, so it is returned as-is.
+    - **Two sources** — corroborate within ``tolerance``; on a material gap keep the priority
+      (AkShare) value but annotate it with the peer NAV (``payload["divergence"]``).
+    - **Three+ sources** — the **median** is the consensus (robust to a single outlier, *including*
+      a bad AkShare); the returned reading is the real source carrying the median value, flagged
+      with the most-divergent peer when any source falls outside ``tolerance``.
 
-    The cross-check is gated on a matching ``as_of``: a stale-but-working Baostock read (an earlier
-    session) is never compared against a fresh AkShare read, so a normal day-over-day move can't
-    spuriously flag. When only the ``primary`` is present there is nothing to corroborate against,
-    so it is returned as-is. Both sources must read the same (unadjusted, raw-close) basis — AkShare
-    ``adjust=""`` and Baostock ``adjustflag="3"`` — so split/dividend adjustments can't manufacture
-    a divergence.
+    Reconciliation is gated on a matching ``as_of`` (only the freshest day's reads are compared), so
+    a stale source is ignored rather than spuriously flagged. All sources read the same unadjusted,
+    raw-close basis (AkShare ``adjust=""``, Baostock ``adjustflag="3"``, Mootdx default), so a
+    split/dividend adjustment can't manufacture a divergence.
     """
 
-    if not primary:
-        return secondary
-    p, s = primary[-1], secondary[-1] if secondary else None
-    if s is not None and p.as_of == s.as_of:
-        a, b = p.payload["nav"], s.payload["nav"]
+    present = [r[-1] for r in reads if r]
+    if not present:
+        return []
+    latest = max(p.as_of for p in present)
+    cohort = [p for p in present if p.as_of == latest]
+    if len(cohort) == 1:
+        return [cohort[0]]
+
+    navs = [p.payload["nav"] for p in cohort]
+    if len(cohort) == 2:
+        a, b = navs
         if a and abs(a - b) / abs(a) > tolerance:
-            flagged = p.model_copy(update={"payload": {**p.payload, "divergence": b}})
-            return [*primary[:-1], flagged]
-    return primary
+            return [_flag(cohort[0], b)]  # keep the priority source, flag the disagreement
+        return [cohort[0]]
+
+    consensus = median(navs)  # odd-N median is a real source's value → honest provenance
+    canonical = min(cohort, key=lambda p: abs(p.payload["nav"] - consensus))
+    outliers = [n for n in navs if consensus and abs(n - consensus) / abs(consensus) > tolerance]
+    if outliers:
+        return [_flag(canonical, max(outliers, key=lambda n: abs(n - consensus)))]
+    return [canonical]
 
 
 def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
