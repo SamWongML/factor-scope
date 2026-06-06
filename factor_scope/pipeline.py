@@ -231,6 +231,8 @@ def _attach_leans(
             gain=item.gain,
             scorecard=item.scorecard,
             prior_action=_prior_action(store, code, as_of),
+            evidence=tuple(item.evidence),
+            as_of=as_of,
         )
         result = digest_item(provider, brief)
         item.lean = Lean(action=result.action, confidence=result.confidence, text=result.text)

@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from factor_scope.contract import (
     Connection,
+    Evidence,
     FactorState,
     GateState,
     LeanAction,
@@ -36,7 +37,9 @@ class DigestInput:
     """Everything the digest reads about one item — point-in-time, fetched not recalled.
 
     The scorecard is the book-wide self-scoring mirror; ``prior_action`` is the most recent prior
-    lean on this code (used only to phrase the evolution line). All of it is descriptive input.
+    lean on this code (used only to phrase the evolution line). ``evidence`` is the dated, sourced
+    reads behind the item and ``as_of`` is the point-in-time date they are judged against — the
+    inputs the evidence-quality auto-downgrade reasons over (spec §08). All of it is descriptive.
     """
 
     code: str
@@ -49,6 +52,8 @@ class DigestInput:
     gain: float | None = None
     scorecard: Scorecard | None = None
     prior_action: LeanAction | None = None
+    evidence: tuple[Evidence, ...] = ()
+    as_of: str | None = None
 
 
 @dataclass(frozen=True)
