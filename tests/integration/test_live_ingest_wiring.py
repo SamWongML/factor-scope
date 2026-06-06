@@ -9,7 +9,8 @@ rebuilds from live disclosures) and each configured EDGAR filer is pulled.
 import pytest
 
 from factor_scope.config import Config
-from factor_scope.ingest import edgar, fred, fund_holdings, gather_live_readings, prices
+from factor_scope.ingest import baostock, edgar, fred, fund_holdings, gather_live_readings, prices
+from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
 
 pytestmark = pytest.mark.integration
@@ -22,6 +23,14 @@ def _stub_adapters(monkeypatch) -> None:
         lambda key, *, fetched_at: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.0})
+        ],
+    )
+    monkeypatch.setattr(
+        baostock,
+        "fetch_live",
+        lambda key, *, fetched_at: [
+            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"nav": 1.0})  # corroborates the AkShare read
         ],
     )
     monkeypatch.setattr(
@@ -70,3 +79,28 @@ def test_gather_live_pulls_no_edgar_filers_by_default(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
     assert not [r for r in readings if r.series == "edgar"]
+
+
+def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
+    _stub_adapters(monkeypatch)
+    # AkShare and Baostock agree → one corroborated price per held fund (not one per source)
+    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    held = {r.key for r in readings if r.series == "positions"}
+    priced = [r for r in readings if r.series == "prices"]
+    assert {r.key for r in priced} == held
+    assert len(priced) == len(held)
+
+
+def test_gather_live_surfaces_a_source_disagreement(monkeypatch) -> None:
+    _stub_adapters(monkeypatch)
+    # Baostock materially disagrees with AkShare → the cross-validation surfaces it, doesn't hide it
+    monkeypatch.setattr(
+        baostock,
+        "fetch_live",
+        lambda key, *, fetched_at: [
+            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"nav": 99.0})
+        ],
+    )
+    with pytest.raises(IngestError, match="disagree"):
+        gather_live_readings(Config(source="live"), as_of="2026-06-05")

@@ -5,8 +5,9 @@ import types
 
 import pytest
 
-from factor_scope.ingest import edgar, fred, fund_holdings, prices, theme_funds, themes
+from factor_scope.ingest import baostock, edgar, fred, fund_holdings, prices, theme_funds, themes
 from factor_scope.ingest.base import IngestError
+from factor_scope.store import Reading
 
 pytestmark = pytest.mark.unit
 
@@ -140,6 +141,83 @@ def test_themes_keys_by_name_and_coerces_flags() -> None:
     assert readings[0].payload["breadth"] == 6  # parsed as an int
     assert readings[0].payload["broad_adoption"] is True
     assert readings[0].payload["wrapper_exists"] is False  # 0 → False
+
+
+class _FakeResultSet:
+    """A pandas-free stand-in for a baostock ``query_history_k_data_plus`` result."""
+
+    def __init__(self, rows: list[list[str]]) -> None:
+        self._rows = rows
+        self._i = -1
+
+    def next(self) -> bool:
+        self._i += 1
+        return self._i < len(self._rows)
+
+    def get_row_data(self) -> list[str]:
+        return self._rows[self._i]
+
+
+def _install_fake_baostock(monkeypatch, *, rows: list[list[str]], queried: list[str]) -> None:
+    """Inject a network-free ``baostock`` module that records the queried code."""
+
+    module = types.ModuleType("baostock")
+    module.login = lambda: None  # type: ignore[attr-defined]
+    module.logout = lambda: None  # type: ignore[attr-defined]
+
+    def query(code: str, fields: str, **kwargs: object) -> _FakeResultSet:
+        queried.append(code)
+        return _FakeResultSet(rows)
+
+    module.query_history_k_data_plus = query  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "baostock", module)
+
+
+def test_baostock_fetch_live_returns_latest_nav(monkeypatch) -> None:
+    queried: list[str] = []
+    _install_fake_baostock(
+        monkeypatch,
+        rows=[["2026-06-04", "1.90"], ["2026-06-05", "1.92"]],
+        queried=queried,
+    )
+    readings = baostock.fetch_live("561010", fetched_at="t")
+    assert queried == ["sh.561010"]  # 5x ETF codes are Shanghai-listed
+    assert readings[0].series == "prices"  # a second source for the same prices series
+    assert readings[0].key == "561010"
+    assert readings[0].as_of == "2026-06-05"  # the latest disclosed bar, not the run date
+    assert readings[0].payload == {"nav": 1.92}
+
+
+def test_baostock_code_prefixes_shenzhen_for_1x(monkeypatch) -> None:
+    queried: list[str] = []
+    _install_fake_baostock(monkeypatch, rows=[["2026-06-05", "0.98"]], queried=queried)
+    baostock.fetch_live("159915", fetched_at="t")
+    assert queried == ["sz.159915"]  # 1x ETF codes are Shenzhen-listed
+
+
+def _price(nav: float) -> list[Reading]:
+    return [Reading(series="prices", key="561010", as_of="2026-06-05", fetched_at="t",
+                    payload={"nav": nav})]
+
+
+def test_select_corroborated_trusts_akshare_when_sources_agree() -> None:
+    chosen = prices.select_corroborated(_price(1.920), _price(1.921))
+    assert chosen[0].payload["nav"] == 1.920  # within tolerance → keep the AkShare read
+
+
+def test_select_corroborated_falls_back_when_akshare_blocked() -> None:
+    chosen = prices.select_corroborated([], _price(1.92))
+    assert chosen[0].payload["nav"] == 1.92  # AkShare unavailable → substitute Baostock
+
+
+def test_select_corroborated_keeps_akshare_without_a_cross_check() -> None:
+    chosen = prices.select_corroborated(_price(1.92), [])
+    assert chosen[0].payload["nav"] == 1.92  # Baostock unavailable → nothing to corroborate against
+
+
+def test_select_corroborated_raises_on_material_disagreement() -> None:
+    with pytest.raises(IngestError, match="disagree"):
+        prices.select_corroborated(_price(1.92), _price(2.50))
 
 
 def test_theme_funds_keys_by_code() -> None:

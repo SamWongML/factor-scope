@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from factor_scope.ingest import edgar, fred, fund_holdings, prices
+from factor_scope.ingest import baostock, edgar, fred, fund_holdings, prices
 
 pytestmark = pytest.mark.integration
 
@@ -19,6 +19,12 @@ skip_unless_live = pytest.mark.skipif(not _LIVE, reason="set FACTOR_SCOPE_LIVE=1
 @skip_unless_live
 def test_prices_live_smoke() -> None:
     readings = prices.fetch_live("561010", fetched_at="t")
+    assert readings and readings[0].payload["nav"] > 0
+
+
+@skip_unless_live
+def test_baostock_live_smoke() -> None:
+    readings = baostock.fetch_live("561010", fetched_at="t")  # the Baostock cross-validation leg
     assert readings and readings[0].payload["nav"] > 0
 
 

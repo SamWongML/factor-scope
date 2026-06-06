@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from factor_scope.config import Config
 from factor_scope.ingest import (
+    baostock,
     calls,
     edgar,
     fred,
@@ -56,7 +57,8 @@ def gather_live_readings(  # pragma: no cover - opt-in
 
     Each held fund's NAV *and* its latest disclosed holdings are refreshed, plus every configured
     EDGAR filer's holdings — so the connection graph rebuilds from live disclosures (spec §04/§05),
-    not stale fixtures. Heavy deps stay lazily imported inside each adapter's ``fetch_live``.
+    not stale fixtures. CN prices are dual-sourced (AkShare cross-validated against Baostock) so one
+    scraper going offline can't kill the run. Heavy deps stay lazily imported inside ``fetch_live``.
     """
 
     fetched_at = fetched_at_for(as_of)
@@ -65,7 +67,11 @@ def gather_live_readings(  # pragma: no cover - opt-in
     )
     readings: list[Reading] = list(book)
     for pos in book:
-        readings += prices.fetch_live(pos.key, fetched_at=fetched_at)
+        # CN prices are dual-sourced: corroborate AkShare against Baostock, or fall back to it.
+        readings += prices.select_corroborated(
+            prices.fetch_live(pos.key, fetched_at=fetched_at),
+            baostock.fetch_live(pos.key, fetched_at=fetched_at),
+        )
         readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
     for cik in config.edgar_ciks:
         readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
