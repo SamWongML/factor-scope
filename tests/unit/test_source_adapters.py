@@ -91,7 +91,7 @@ def _install_fake_edgar(monkeypatch, *, requested: list[str]) -> None:
     def get_filings(form: str) -> _FakeFilings:
         requested.append(form)
         if form == "13F-HR":
-            obj: object = _Fake13FObj([{"Ticker": "COHR", "Shares": 1_250_000}])
+            obj: object = _Fake13FObj([{"Ticker": "COHR", "SharesPrnAmount": 1_250_000}])
         else:  # NPORT-P
             obj = _FakeNportObj([{"name": "APPLE INC", "balance": 500.0}])
         return _FakeFilings(_FakeFiling(obj))

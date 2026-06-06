@@ -56,7 +56,8 @@ def fetch_live(
     as_of = str(filing.filing_date)
     if form == "13F-HR":
         holdings = (
-            (str(row["Ticker"]), float(row["Shares"])) for _, row in obj.infotable.iterrows()
+            (str(row["Ticker"]), float(row["SharesPrnAmount"]))
+            for _, row in obj.infotable.iterrows()
         )
     else:  # NPORT-P — monthly fund/ETF portfolio
         holdings = (
