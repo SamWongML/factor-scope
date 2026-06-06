@@ -68,7 +68,7 @@ def gather_live_readings(  # pragma: no cover - opt-in
         readings += prices.fetch_live(pos.key, fetched_at=fetched_at)
         readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
     for cik in config.edgar_ciks:
-        readings += edgar.fetch_live(cik, fetched_at=fetched_at)
+        readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
     for series_id in fred.DEFAULT_SERIES:
         readings += fred.fetch_live(series_id, fetched_at=fetched_at)
     return readings

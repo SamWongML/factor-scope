@@ -93,7 +93,7 @@ def _install_fake_edgar(monkeypatch, *, requested: list[str]) -> None:
         if form == "13F-HR":
             obj: object = _Fake13FObj([{"Ticker": "COHR", "SharesPrnAmount": 1_250_000}])
         else:  # NPORT-P
-            obj = _FakeNportObj([{"name": "APPLE INC", "balance": 500.0}])
+            obj = _FakeNportObj([{"name": "APPLE INC", "pct_value": 7.5}])
         return _FakeFilings(_FakeFiling(obj))
 
     class _FakeCompany:
@@ -123,7 +123,8 @@ def test_edgar_fetch_live_supports_nport(monkeypatch) -> None:
     readings = edgar.fetch_live("0000102909", form="NPORT-P", fetched_at="t")
     assert requested == ["NPORT-P"]
     assert readings[0].key == "0000102909/APPLE INC"
-    assert readings[0].payload == {"filer": "0000102909", "holding": "APPLE INC", "shares": 500.0}
+    # pct_value (% of net assets) → fraction weight, so N-PORT holdings can be graph HOLDS edges
+    assert readings[0].payload == {"filer": "0000102909", "holding": "APPLE INC", "weight": 0.075}
 
 
 def test_themes_keys_by_name_and_coerces_flags() -> None:

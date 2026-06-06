@@ -35,9 +35,9 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         edgar,
         "fetch_live",
-        lambda cik, *, fetched_at: [
+        lambda cik, *, form="13F-HR", fetched_at: [
             Reading(series="edgar", key=f"{cik}/COHR", as_of="2026-03-31", fetched_at=fetched_at,
-                    payload={"filer": cik, "holding": "COHR", "shares": 1.0})
+                    payload={"filer": cik, "holding": "COHR", "weight": 0.05, "form": form})
         ],
     )
     monkeypatch.setattr(fred, "fetch_live", lambda series_id, *, fetched_at: [])
@@ -59,8 +59,11 @@ def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:
     config = Config(source="live", edgar_ciks=("0001067983", "0000102909"))
     readings = gather_live_readings(config, as_of="2026-06-05")
 
-    filers = {r.payload["filer"] for r in readings if r.series == "edgar"}
-    assert filers == {"0001067983", "0000102909"}
+    edgar_rows = [r for r in readings if r.series == "edgar"]
+    assert {r.payload["filer"] for r in edgar_rows} == {"0001067983", "0000102909"}
+    # pulled as monthly N-PORT and weighted, so the holdings feed the look-through graph
+    assert all(r.payload["form"] == "NPORT-P" for r in edgar_rows)
+    assert all("weight" in r.payload for r in edgar_rows)
 
 
 def test_gather_live_pulls_no_edgar_filers_by_default(monkeypatch) -> None:

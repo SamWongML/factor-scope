@@ -43,4 +43,4 @@ def test_edgar_13f_live_smoke() -> None:
 @skip_unless_live
 def test_edgar_nport_live_smoke() -> None:
     readings = edgar.fetch_live("0000036405", form="NPORT-P", fetched_at="t")  # Vanguard 500 N-PORT
-    assert readings and "shares" in readings[0].payload
+    assert readings and 0.0 <= readings[0].payload["weight"] <= 1.0
