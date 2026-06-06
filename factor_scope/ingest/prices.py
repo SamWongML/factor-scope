@@ -17,8 +17,9 @@ FIXTURE = "prices.csv"
 _REQUIRED = ("code", "as_of", "nav")
 
 # CN prices are dual-sourced (AkShare + Baostock) so one scraper going offline can't kill a run.
-# Two independent reads of the same NAV within this fraction corroborate each other (L1 / §04).
-_CORROBORATION_TOLERANCE = 0.01
+# Two same-day reads within this fraction corroborate each other (L1 / §04); the default is the
+# SEC/CSSF NAV-error materiality baseline (0.5%). Callers pass a per-run override (Config).
+_CORROBORATION_TOLERANCE = 0.005
 
 
 def parse(text: str, *, fetched_at: str) -> list[Reading]:

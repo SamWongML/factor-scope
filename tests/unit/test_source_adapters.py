@@ -243,6 +243,13 @@ def test_select_corroborated_flags_divergence_but_continues() -> None:
     assert chosen[0].payload["divergence"] == 2.50  # the unreconciled peer NAV, recorded not fatal
 
 
+def test_select_corroborated_default_tolerance_is_half_a_percent() -> None:
+    # The default band is the SEC/CSSF NAV-error baseline (0.5%), not the looser 1%: a 0.4% gap
+    # corroborates, a 0.8% gap is flagged.
+    assert "divergence" not in prices.select_corroborated(_price(1.0), _price(1.004))[0].payload
+    assert prices.select_corroborated(_price(1.0), _price(1.008))[0].payload["divergence"] == 1.008
+
+
 def test_select_corroborated_skips_cross_check_across_different_days() -> None:
     # A stale-but-working Baostock read (an earlier session) must not be cross-checked against a
     # fresh AkShare read — a normal day-over-day move would otherwise spuriously kill the run.

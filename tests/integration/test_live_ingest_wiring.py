@@ -10,8 +10,10 @@ import logging
 
 import pytest
 
+from factor_scope import ingest
 from factor_scope.config import Config
 from factor_scope.ingest import baostock, edgar, fred, fund_holdings, gather_live_readings, prices
+from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
 
 pytestmark = pytest.mark.integration
@@ -94,6 +96,7 @@ def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
 
 def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, caplog) -> None:
     _stub_adapters(monkeypatch)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)  # don't really back off in the test
 
     def _akshare_down(key, *, fetched_at):
         raise RuntimeError("AkShare IP-blocked")
@@ -118,9 +121,31 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
     assert any("akshare" in rec.message.lower() for rec in caplog.records)
 
 
-def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch) -> None:
+def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch, caplog) -> None:
     _stub_adapters(monkeypatch)
-    # Baostock materially disagrees with AkShare → flag the reading and CONTINUE; don't kill the run
+    # ONE fund disagrees (an isolated tick), the rest corroborate → flag it and CONTINUE the run.
+    monkeypatch.setattr(
+        baostock,
+        "fetch_live",
+        lambda key, *, fetched_at: [
+            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"nav": 99.0 if key == "561010" else 1.0})
+        ],
+    )
+    with caplog.at_level(logging.WARNING):
+        readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    priced = {r.key: r for r in readings if r.series == "prices"}
+    assert priced  # the run completed despite the disagreement
+    assert priced["561010"].payload["nav"] == 1.0  # primary AkShare value retained
+    assert priced["561010"].payload["divergence"] == 99.0  # the peer NAV, flagged for review
+    assert "divergence" not in priced["515880"].payload  # the corroborating funds are untouched
+    assert any("degraded" in rec.message.lower() for rec in caplog.records)  # surfaced, not silent
+
+
+def test_gather_live_trips_circuit_breaker_on_systemic_divergence(monkeypatch) -> None:
+    _stub_adapters(monkeypatch)
+    # EVERY fund disagrees → not an isolated tick but a systemic break (e.g. a source switched to
+    # adjusted prices). Fail the whole run loudly rather than ship a wall of unreconciled NAVs.
     monkeypatch.setattr(
         baostock,
         "fetch_live",
@@ -129,8 +154,52 @@ def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch) -> N
                     payload={"nav": 99.0})
         ],
     )
-    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    with pytest.raises(IngestError, match="unreconciled"):
+        gather_live_readings(Config(source="live"), as_of="2026-06-05")
+
+
+def test_gather_live_respects_configured_tolerance(monkeypatch) -> None:
+    _stub_adapters(monkeypatch)
+    # A 2% gap on every fund would flag (and trip the breaker) at the 0.5% default; a loosened
+    # config tolerance must be honoured instead — proving the band is config-driven, not hard-coded.
+    monkeypatch.setattr(
+        baostock,
+        "fetch_live",
+        lambda key, *, fetched_at: [
+            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"nav": 1.02})
+        ],
+    )
+    config = Config(source="live", corroboration_tolerance=0.05)
+    readings = gather_live_readings(config, as_of="2026-06-05")
     priced = [r for r in readings if r.series == "prices"]
-    assert priced  # the run completed despite the disagreement
-    assert all(r.payload["nav"] == 1.0 for r in priced)  # primary AkShare value retained
-    assert all(r.payload["divergence"] == 99.0 for r in priced)  # peer flagged for review
+    assert priced and not any("divergence" in r.payload for r in priced)  # 2% within the 5% band
+
+
+def test_with_retries_backs_off_with_full_jitter_then_succeeds(monkeypatch) -> None:
+    # A transient blip (IP throttle) should be retried, not surfaced — with exponential backoff and
+    # full jitter (sleep in [0, base·2^n]); pin the upper bound to make the schedule deterministic.
+    sleeps: list[float] = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    monkeypatch.setattr("random.uniform", lambda _lo, hi: hi)  # full-jitter ceiling
+    attempts = {"n": 0}
+
+    def flaky() -> list[str]:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("throttled")
+        return ["ok"]
+
+    assert ingest._with_retries(flaky) == ["ok"]
+    assert attempts["n"] == 3
+    assert sleeps == [1.0, 2.0]  # base·2^0, base·2^1 — exponential, then it succeeded
+
+
+def test_with_retries_gives_up_after_max_attempts(monkeypatch) -> None:
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    def always_down() -> list[str]:
+        raise RuntimeError("IP-blocked")
+
+    with pytest.raises(RuntimeError, match="IP-blocked"):
+        ingest._with_retries(always_down)

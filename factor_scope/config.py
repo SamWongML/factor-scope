@@ -32,6 +32,10 @@ class Config:
     # US fund/ETF CIKs whose monthly N-PORT holdings the ``--live`` path pulls from EDGAR to feed
     # the look-through graph (spec §04/§05). Empty by default — the fixtures path never reads it.
     edgar_ciks: tuple[str, ...] = ()
+    # Relative band within which the two CN price sources (AkShare/Baostock) corroborate. Defaults
+    # to the SEC/CSSF NAV-error materiality baseline (0.5%); raise it per equity ETFs, lower it for
+    # money-market funds. A same-day gap beyond it flags the reading (never kills the run).
+    corroboration_tolerance: float = 0.005
     # Digestion judgment provider: "fake" (default, offline) | "claude_code". DeepSeek is a chore
     # model (off the judgment path, spec §08), not a judgment provider — see digest.get_provider.
     provider: str = "fake"

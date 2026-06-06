@@ -10,6 +10,8 @@ import their heavy dependencies and are never exercised in CI.
 from __future__ import annotations
 
 import logging
+import random
+import time
 from collections.abc import Callable
 
 from factor_scope.config import Config
@@ -30,6 +32,17 @@ from factor_scope.store import Reading
 __all__ = ["IngestError", "gather_fixture_readings", "gather_live_readings"]
 
 logger = logging.getLogger(__name__)
+
+# Retry transient live-source failures (IP throttles, dropped sockets) with exponential backoff and
+# full jitter — the AWS-recommended schedule that avoids a synchronised retry stampede.
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_SECONDS = 1.0
+_RETRY_CAP_SECONDS = 30.0
+
+# Data circuit breaker: an isolated divergence flags-and-continues, but if more than this fraction
+# of funds are unreconciled the failure is systemic (e.g. a source switched to adjusted prices) —
+# fail the whole run loudly rather than ship a wall of suspect NAVs.
+_DEGRADED_RUN_THRESHOLD = 0.5
 
 
 def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
@@ -55,6 +68,24 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
     return readings
 
 
+def _with_retries(thunk: Callable[[], list[Reading]]) -> list[Reading]:
+    """Call ``thunk``, retrying on any exception with exponential backoff + full jitter.
+
+    Sleep before attempt *n* is ``random.uniform(0, min(cap, base·2^n))`` (full jitter), so a fleet
+    of scrapers doesn't retry in lockstep. The last attempt's exception propagates to the caller.
+    """
+
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return thunk()
+        except Exception:
+            if attempt + 1 >= _RETRY_ATTEMPTS:
+                raise
+            ceiling = min(_RETRY_CAP_SECONDS, _RETRY_BASE_SECONDS * 2**attempt)
+            time.sleep(random.uniform(0.0, ceiling))
+    raise AssertionError("unreachable: _RETRY_ATTEMPTS >= 1")  # pragma: no cover
+
+
 def _live_or_empty(
     fetch: Callable[..., list[Reading]], code: str, *, source: str, fetched_at: str
 ) -> list[Reading]:
@@ -62,7 +93,8 @@ def _live_or_empty(
 
     The CN price path is dual-sourced for anti-fragility (L1 / §04): turning one source going
     offline into an empty read lets :func:`prices.select_corroborated` fall back to the other,
-    rather than letting an IP-block or timeout crash the whole nightly run.
+    rather than letting an IP-block or timeout crash the whole nightly run. The read is retried with
+    backoff first, so a transient blip is ridden out rather than counted as an outage.
 
     A genuine empty read (no bars today) returns ``[]`` silently; a *failure* returns ``[]`` only
     after logging the exception with its source and code, so a silently-degraded source can't go
@@ -70,7 +102,7 @@ def _live_or_empty(
     """
 
     try:
-        return fetch(code, fetched_at=fetched_at)
+        return _with_retries(lambda: fetch(code, fetched_at=fetched_at))
     except Exception:
         logger.warning(
             "live price source %r failed for %s; falling back to the cross-source",
@@ -79,6 +111,29 @@ def _live_or_empty(
             exc_info=True,
         )
         return []
+
+
+def _check_price_health(  # pragma: no cover - opt-in
+    n_funds: int, degraded: list[str]
+) -> None:
+    """Log the per-run price-source summary and trip the data circuit breaker on systemic failure.
+
+    ``degraded`` are the funds with no reconciled price tonight — either unpriced (both sources
+    down) or flagged as a same-day divergence. An isolated case is logged for review; a systemic
+    one (more than :data:`_DEGRADED_RUN_THRESHOLD` of the book) raises so the run fails loudly.
+    """
+
+    if not degraded:
+        logger.info("price ingest: %d/%d funds corroborated", n_funds, n_funds)
+        return
+    logger.warning(
+        "price ingest degraded: %d/%d funds unreconciled %s", len(degraded), n_funds, degraded
+    )
+    if n_funds and len(degraded) / n_funds > _DEGRADED_RUN_THRESHOLD:
+        raise IngestError(
+            f"prices: {len(degraded)}/{n_funds} funds unreconciled "
+            f"(> {_DEGRADED_RUN_THRESHOLD:.0%}) — a price source likely broke systemically"
+        )
 
 
 def gather_live_readings(  # pragma: no cover - opt-in
@@ -97,16 +152,22 @@ def gather_live_readings(  # pragma: no cover - opt-in
         config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
     )
     readings: list[Reading] = list(book)
+    degraded: list[str] = []  # funds with no reconciled price — unpriced or flagged as divergent
     for pos in book:
         # CN prices are dual-sourced: corroborate AkShare against Baostock, or — if either source
         # is offline (its read yields nothing) — fall back to the other rather than kill the run.
-        readings += prices.select_corroborated(
+        priced = prices.select_corroborated(
             _live_or_empty(prices.fetch_live, pos.key, source=prices.SOURCE, fetched_at=fetched_at),
             _live_or_empty(
                 baostock.fetch_live, pos.key, source=baostock.SOURCE, fetched_at=fetched_at
             ),
+            tolerance=config.corroboration_tolerance,
         )
+        readings += priced
+        if not priced or any("divergence" in r.payload for r in priced):
+            degraded.append(pos.key)
         readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
+    _check_price_health(len(book), degraded)
     for cik in config.edgar_ciks:
         readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
     for series_id in fred.DEFAULT_SERIES:
