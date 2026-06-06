@@ -6,11 +6,12 @@ of ``gather_live_readings``: every held fund's holdings are refreshed (so the co
 rebuilds from live disclosures) and each configured EDGAR filer is pulled.
 """
 
+import logging
+
 import pytest
 
 from factor_scope.config import Config
 from factor_scope.ingest import baostock, edgar, fred, fund_holdings, gather_live_readings, prices
-from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
 
 pytestmark = pytest.mark.integration
@@ -91,7 +92,7 @@ def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
     assert len(priced) == len(held)
 
 
-def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch) -> None:
+def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, caplog) -> None:
     _stub_adapters(monkeypatch)
 
     def _akshare_down(key, *, fetched_at):
@@ -107,16 +108,19 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch) ->
         ],
     )
     # AkShare offline must not kill the run — Baostock substitutes (the whole point of §04).
-    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    with caplog.at_level(logging.WARNING):
+        readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
     held = {r.key for r in readings if r.series == "positions"}
     priced = [r for r in readings if r.series == "prices"]
     assert {r.key for r in priced} == held
     assert all(r.payload["nav"] == 2.0 for r in priced)  # the substituted Baostock NAV
+    # the failover is logged, not silent — silent degradation is the failure mode we guard against
+    assert any("akshare" in rec.message.lower() for rec in caplog.records)
 
 
-def test_gather_live_surfaces_a_source_disagreement(monkeypatch) -> None:
+def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
-    # Baostock materially disagrees with AkShare → the cross-validation surfaces it, doesn't hide it
+    # Baostock materially disagrees with AkShare → flag the reading and CONTINUE; don't kill the run
     monkeypatch.setattr(
         baostock,
         "fetch_live",
@@ -125,5 +129,8 @@ def test_gather_live_surfaces_a_source_disagreement(monkeypatch) -> None:
                     payload={"nav": 99.0})
         ],
     )
-    with pytest.raises(IngestError, match="disagree"):
-        gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    priced = [r for r in readings if r.series == "prices"]
+    assert priced  # the run completed despite the disagreement
+    assert all(r.payload["nav"] == 1.0 for r in priced)  # primary AkShare value retained
+    assert all(r.payload["divergence"] == 99.0 for r in priced)  # peer flagged for review

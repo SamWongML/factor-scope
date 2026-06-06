@@ -18,6 +18,9 @@ from __future__ import annotations
 from factor_scope.ingest.prices import SERIES
 from factor_scope.store import Reading
 
+SOURCE = "baostock"  # this adapter's provenance tag
+_ADJUST_NONE = "3"  # Baostock adjustflag: 1=后复权 2=前复权 3=不复权 — raw close, matching AkShare
+
 
 def _market_code(code: str) -> str:
     """Prefix a bare ETF code with its Baostock market — ``5x`` is Shanghai, ``1x`` is Shenzhen."""
@@ -33,7 +36,7 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
     bs.login()
     try:
         result = bs.query_history_k_data_plus(
-            _market_code(code), "date,close", frequency="d", adjustflag="3"
+            _market_code(code), "date,close", frequency="d", adjustflag=_ADJUST_NONE
         )
         rows: list[list[str]] = []
         while result.next():
@@ -50,6 +53,6 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
             key=code,
             as_of=str(as_of),
             fetched_at=fetched_at,
-            payload={"nav": float(close)},
+            payload={"nav": float(close), "source": SOURCE},
         )
     ]

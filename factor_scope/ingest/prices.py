@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from factor_scope.ingest.base import IngestError, as_float, read_rows, required_str
+from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
 
 SERIES = "prices"
+SOURCE = "akshare"  # this adapter's provenance tag; its live backend + fixture are AkShare-shaped
 FIXTURE = "prices.csv"
 _REQUIRED = ("code", "as_of", "nav")
 
@@ -28,7 +29,11 @@ def parse(text: str, *, fetched_at: str) -> list[Reading]:
         nav = as_float(row, "nav", line_no, SERIES)
         readings.append(
             Reading(
-                series=SERIES, key=code, as_of=as_of, fetched_at=fetched_at, payload={"nav": nav}
+                series=SERIES,
+                key=code,
+                as_of=as_of,
+                fetched_at=fetched_at,
+                payload={"nav": nav, "source": SOURCE},
             )
         )
     return readings
@@ -52,14 +57,16 @@ def select_corroborated(
       ``secondary`` Baostock read so the run still has a price.
     - **Corroborate** — when both sources read the *same trading day's* NAV (within ``tolerance``),
       trust the AkShare read.
-    - **Surface conflicts** — when both are present for the same day but disagree beyond
-      ``tolerance``, raise rather than silently pick one: two independent sources that materially
-      diverge is a data-quality signal a human should see.
+    - **Flag conflicts, don't fail** — when both are present for the same day but disagree beyond
+      ``tolerance``, keep the primary value but annotate the reading with the unreconciled peer NAV
+      (``payload["divergence"]``) for review. One divergent ETF must never abort the nightly run.
 
     The cross-check is gated on a matching ``as_of``: a stale-but-working Baostock read (an earlier
     session) is never compared against a fresh AkShare read, so a normal day-over-day move can't
-    spuriously raise. When only the ``primary`` is present there is nothing to corroborate against,
-    so it is returned as-is.
+    spuriously flag. When only the ``primary`` is present there is nothing to corroborate against,
+    so it is returned as-is. Both sources must read the same (unadjusted, raw-close) basis — AkShare
+    ``adjust=""`` and Baostock ``adjustflag="3"`` — so split/dividend adjustments can't manufacture
+    a divergence.
     """
 
     if not primary:
@@ -68,9 +75,8 @@ def select_corroborated(
     if s is not None and p.as_of == s.as_of:
         a, b = p.payload["nav"], s.payload["nav"]
         if a and abs(a - b) / abs(a) > tolerance:
-            raise IngestError(
-                f"{SERIES}: AkShare ({a}) and Baostock ({b}) disagree beyond {tolerance:.0%}"
-            )
+            flagged = p.model_copy(update={"payload": {**p.payload, "divergence": b}})
+            return [*primary[:-1], flagged]
     return primary
 
 
@@ -79,7 +85,7 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
 
     import akshare as ak
 
-    frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")
+    frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")  # adjust="" → raw close
     last = frame.iloc[-1]
     return [
         Reading(
@@ -87,6 +93,6 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
             key=code,
             as_of=str(last["日期"]),
             fetched_at=fetched_at,
-            payload={"nav": float(last["收盘"])},
+            payload={"nav": float(last["收盘"]), "source": SOURCE},
         )
     ]

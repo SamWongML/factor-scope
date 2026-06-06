@@ -9,6 +9,7 @@ import their heavy dependencies and are never exercised in CI.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from factor_scope.config import Config
@@ -27,6 +28,8 @@ from factor_scope.ingest.base import IngestError, fetched_at_for
 from factor_scope.store import Reading
 
 __all__ = ["IngestError", "gather_fixture_readings", "gather_live_readings"]
+
+logger = logging.getLogger(__name__)
 
 
 def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
@@ -52,19 +55,29 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
     return readings
 
 
-def _live_or_empty(  # pragma: no cover - opt-in
-    fetch: Callable[..., list[Reading]], code: str, *, fetched_at: str
+def _live_or_empty(
+    fetch: Callable[..., list[Reading]], code: str, *, source: str, fetched_at: str
 ) -> list[Reading]:
-    """A live price read that yields no rows instead of raising on failure.
+    """A live price read that yields no rows instead of raising on failure — *loudly*.
 
     The CN price path is dual-sourced for anti-fragility (L1 / §04): turning one source going
     offline into an empty read lets :func:`prices.select_corroborated` fall back to the other,
     rather than letting an IP-block or timeout crash the whole nightly run.
+
+    A genuine empty read (no bars today) returns ``[]`` silently; a *failure* returns ``[]`` only
+    after logging the exception with its source and code, so a silently-degraded source can't go
+    unnoticed for weeks — the broad ``except`` is a logged boundary, not a swallow.
     """
 
     try:
         return fetch(code, fetched_at=fetched_at)
     except Exception:
+        logger.warning(
+            "live price source %r failed for %s; falling back to the cross-source",
+            source,
+            code,
+            exc_info=True,
+        )
         return []
 
 
@@ -88,8 +101,10 @@ def gather_live_readings(  # pragma: no cover - opt-in
         # CN prices are dual-sourced: corroborate AkShare against Baostock, or — if either source
         # is offline (its read yields nothing) — fall back to the other rather than kill the run.
         readings += prices.select_corroborated(
-            _live_or_empty(prices.fetch_live, pos.key, fetched_at=fetched_at),
-            _live_or_empty(baostock.fetch_live, pos.key, fetched_at=fetched_at),
+            _live_or_empty(prices.fetch_live, pos.key, source=prices.SOURCE, fetched_at=fetched_at),
+            _live_or_empty(
+                baostock.fetch_live, pos.key, source=baostock.SOURCE, fetched_at=fetched_at
+            ),
         )
         readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
     for cik in config.edgar_ciks:

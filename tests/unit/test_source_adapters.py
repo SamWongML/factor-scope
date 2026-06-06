@@ -18,7 +18,7 @@ def test_prices_reads_as_of_per_row() -> None:
     assert readings[0].series == "prices"
     assert readings[0].as_of == "2026-06-05"  # the price's own date, not the run date
     assert readings[1].as_of == "2026-06-04"
-    assert readings[0].payload == {"nav": 1.92}
+    assert readings[0].payload == {"nav": 1.92, "source": "akshare"}  # provenance on every row
 
 
 def test_prices_rejects_bad_nav() -> None:
@@ -158,15 +158,15 @@ class _FakeResultSet:
         return self._rows[self._i]
 
 
-def _install_fake_baostock(monkeypatch, *, rows: list[list[str]], queried: list[str]) -> None:
-    """Inject a network-free ``baostock`` module that records the queried code."""
+def _install_fake_baostock(monkeypatch, *, rows: list[list[str]], calls: list[dict]) -> None:
+    """Inject a network-free ``baostock`` module that records each query (code + kwargs)."""
 
     module = types.ModuleType("baostock")
     module.login = lambda: None  # type: ignore[attr-defined]
     module.logout = lambda: None  # type: ignore[attr-defined]
 
     def query(code: str, fields: str, **kwargs: object) -> _FakeResultSet:
-        queried.append(code)
+        calls.append({"code": code, **kwargs})
         return _FakeResultSet(rows)
 
     module.query_history_k_data_plus = query  # type: ignore[attr-defined]
@@ -174,42 +174,54 @@ def _install_fake_baostock(monkeypatch, *, rows: list[list[str]], queried: list[
 
 
 def test_baostock_fetch_live_returns_latest_nav(monkeypatch) -> None:
-    queried: list[str] = []
+    calls: list[dict] = []
     _install_fake_baostock(
         monkeypatch,
         rows=[["2026-06-04", "1.90"], ["2026-06-05", "1.92"]],
-        queried=queried,
+        calls=calls,
     )
     readings = baostock.fetch_live("561010", fetched_at="t")
-    assert queried == ["sh.561010"]  # 5x ETF codes are Shanghai-listed
+    assert calls[0]["code"] == "sh.561010"  # 5x ETF codes are Shanghai-listed
     assert readings[0].series == "prices"  # a second source for the same prices series
     assert readings[0].key == "561010"
     assert readings[0].as_of == "2026-06-05"  # the latest disclosed bar, not the run date
-    assert readings[0].payload == {"nav": 1.92}
+    # provenance: every price reading records which source it came from (§ lineage)
+    assert readings[0].payload == {"nav": 1.92, "source": "baostock"}
 
 
 def test_baostock_code_prefixes_shenzhen_for_1x(monkeypatch) -> None:
-    queried: list[str] = []
-    _install_fake_baostock(monkeypatch, rows=[["2026-06-05", "0.98"]], queried=queried)
+    calls: list[dict] = []
+    _install_fake_baostock(monkeypatch, rows=[["2026-06-05", "0.98"]], calls=calls)
     baostock.fetch_live("159915", fetched_at="t")
-    assert queried == ["sz.159915"]  # 1x ETF codes are Shenzhen-listed
+    assert calls[0]["code"] == "sz.159915"  # 1x ETF codes are Shenzhen-listed
+
+
+def test_baostock_requests_unadjusted_prices(monkeypatch) -> None:
+    # Both legs must compare on the SAME basis: AkShare reads raw close (adjust=""), so Baostock
+    # must request no-adjustment (adjustflag="3"). Otherwise split/dividend adjustments would make
+    # the two sources diverge spuriously and trip the corroboration check.
+    calls: list[dict] = []
+    _install_fake_baostock(monkeypatch, rows=[["2026-06-05", "1.92"]], calls=calls)
+    baostock.fetch_live("561010", fetched_at="t")
+    assert calls[0]["adjustflag"] == "3"  # 不复权 — raw close, matching AkShare
 
 
 def test_baostock_fetch_live_returns_empty_when_no_rows(monkeypatch) -> None:
     # A delisted/unknown code yields no bars → no data, not an IndexError, so the caller can
     # fall back to the other source rather than crash the run.
-    _install_fake_baostock(monkeypatch, rows=[], queried=[])
+    _install_fake_baostock(monkeypatch, rows=[], calls=[])
     assert baostock.fetch_live("561010", fetched_at="t") == []
 
 
 def _price(nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:
     return [Reading(series="prices", key="561010", as_of=as_of, fetched_at="t",
-                    payload={"nav": nav})]
+                    payload={"nav": nav, "source": "akshare"})]
 
 
 def test_select_corroborated_trusts_akshare_when_sources_agree() -> None:
     chosen = prices.select_corroborated(_price(1.920), _price(1.921))
     assert chosen[0].payload["nav"] == 1.920  # within tolerance → keep the AkShare read
+    assert "divergence" not in chosen[0].payload  # agreement leaves no quality flag
 
 
 def test_select_corroborated_falls_back_when_akshare_blocked() -> None:
@@ -222,9 +234,13 @@ def test_select_corroborated_keeps_akshare_without_a_cross_check() -> None:
     assert chosen[0].payload["nav"] == 1.92  # Baostock unavailable → nothing to corroborate against
 
 
-def test_select_corroborated_raises_on_material_disagreement() -> None:
-    with pytest.raises(IngestError, match="disagree"):
-        prices.select_corroborated(_price(1.92), _price(2.50))
+def test_select_corroborated_flags_divergence_but_continues() -> None:
+    # A material same-day disagreement must NOT kill the run (anti-fragility). Keep the primary
+    # AkShare value, but flag the reading with the disagreeing peer NAV for review.
+    chosen = prices.select_corroborated(_price(1.92), _price(2.50))
+    assert len(chosen) == 1
+    assert chosen[0].payload["nav"] == 1.92  # primary value retained
+    assert chosen[0].payload["divergence"] == 2.50  # the unreconciled peer NAV, recorded not fatal
 
 
 def test_select_corroborated_skips_cross_check_across_different_days() -> None:
@@ -234,6 +250,7 @@ def test_select_corroborated_skips_cross_check_across_different_days() -> None:
         _price(1.92, as_of="2026-06-05"), _price(2.50, as_of="2026-06-04")
     )
     assert chosen[0].payload["nav"] == 1.92  # trust the fresh AkShare read, no false conflict
+    assert "divergence" not in chosen[0].payload  # different days → no cross-check, no flag
 
 
 def test_theme_funds_keys_by_code() -> None:
