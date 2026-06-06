@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from collections.abc import Callable
 
@@ -39,6 +40,11 @@ logger = logging.getLogger(__name__)
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_SECONDS = 1.0
 _RETRY_CAP_SECONDS = 30.0
+
+# Per-attempt wall-clock deadline. The CN scraper libraries wrap sockets and expose no timeout, so a
+# hung server could otherwise stall the whole nightly run. Each retry gets a fresh deadline, so the
+# worst-case time per source is bounded by _RETRY_ATTEMPTS × this + backoff.
+_TIMEOUT_SECONDS = 20.0
 
 # Data circuit breaker: an isolated divergence flags-and-continues, but if more than this fraction
 # of funds are unreconciled the failure is systemic (e.g. a source switched to adjusted prices) —
@@ -87,15 +93,45 @@ def _with_retries(thunk: Callable[[], list[Reading]]) -> list[Reading]:
     raise AssertionError("unreachable: _RETRY_ATTEMPTS >= 1")  # pragma: no cover
 
 
+def _with_timeout(thunk: Callable[[], list[Reading]], seconds: float) -> list[Reading]:
+    """Bound a blocking source read with a wall-clock deadline.
+
+    The CN scraper libraries wrap sockets and expose no timeout, so a hung server could otherwise
+    stall the whole nightly run. The read runs on a daemon thread and we wait at most ``seconds``.
+    Python cannot kill a thread, so on a timeout the worker is *abandoned* — but it is a daemon, so
+    it never blocks process exit — and a :class:`TimeoutError` propagates to the retry/fallback
+    boundary. Ingestion is sequential, so at most one such thread can leak at a time.
+    """
+
+    result: list[list[Reading]] = []
+    error: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(thunk())
+        except BaseException as exc:  # carry the worker's failure back to the calling thread
+            error.append(exc)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise TimeoutError(f"live read exceeded {seconds}s")
+    if error:
+        raise error[0]
+    return result[0]
+
+
 def _live_or_empty(
     fetch: Callable[..., list[Reading]], code: str, *, source: str, fetched_at: str
 ) -> list[Reading]:
     """A live price read that yields no rows instead of raising on failure — *loudly*.
 
-    The CN price path is dual-sourced for anti-fragility (L1 / §04): turning one source going
-    offline into an empty read lets :func:`prices.select_corroborated` fall back to the other,
-    rather than letting an IP-block or timeout crash the whole nightly run. The read is retried with
-    backoff first, so a transient blip is ridden out rather than counted as an outage.
+    The CN price path is multi-sourced for anti-fragility (L1 / §04): turning one source going
+    offline into an empty read lets :func:`prices.select_reconciled` fall back to the others, rather
+    than letting an IP-block, hang, or timeout crash the whole nightly run. Each attempt is bounded
+    by a wall-clock deadline and the read is retried with backoff, so a transient blip is ridden out
+    and a hung server is abandoned rather than counted as an outage.
 
     A genuine empty read (no bars today) returns ``[]`` silently; a *failure* returns ``[]`` only
     after logging the exception with its source and code, so a silently-degraded source can't go
@@ -103,7 +139,9 @@ def _live_or_empty(
     """
 
     try:
-        return _with_retries(lambda: fetch(code, fetched_at=fetched_at))
+        return _with_retries(
+            lambda: _with_timeout(lambda: fetch(code, fetched_at=fetched_at), _TIMEOUT_SECONDS)
+        )
     except Exception:
         logger.warning(
             "live price source %r failed for %s; falling back to the cross-source",

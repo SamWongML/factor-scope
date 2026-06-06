@@ -7,6 +7,7 @@ rebuilds from live disclosures) and each configured EDGAR filer is pulled.
 """
 
 import logging
+import time
 
 import pytest
 
@@ -220,3 +221,38 @@ def test_with_retries_gives_up_after_max_attempts(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="IP-blocked"):
         ingest._with_retries(always_down)
+
+
+def test_with_timeout_returns_a_fast_result() -> None:
+    assert ingest._with_timeout(lambda: ["ok"], 1.0) == ["ok"]
+
+
+def test_with_timeout_abandons_a_hung_call() -> None:
+    # A blocking source read that exposes no timeout must be bounded by an outer deadline; the
+    # worker is abandoned (daemon) and a TimeoutError is raised rather than stalling the run.
+    with pytest.raises(TimeoutError):
+        ingest._with_timeout(lambda: time.sleep(0.5) or ["never"], 0.02)
+
+
+def test_with_timeout_propagates_the_workers_error() -> None:
+    def boom() -> list[str]:
+        raise RuntimeError("source blew up")
+
+    with pytest.raises(RuntimeError, match="blew up"):
+        ingest._with_timeout(boom, 1.0)
+
+
+def test_live_or_empty_abandons_a_hung_read_and_falls_back(monkeypatch, caplog) -> None:
+    # A source that hangs past the deadline on every attempt is logged and yields no rows, so the
+    # cross-source can substitute — a hung scraper must not stall the nightly run.
+    monkeypatch.setattr(ingest, "_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)  # no real backoff delay
+
+    def hung(code, *, fetched_at):
+        time.sleep(0.5)  # exceeds the deadline on every attempt
+        raise AssertionError("should have been abandoned")
+
+    with caplog.at_level(logging.WARNING):
+        out = ingest._live_or_empty(hung, "561010", source="akshare", fetched_at="t")
+    assert out == []
+    assert any("akshare" in rec.message.lower() for rec in caplog.records)
