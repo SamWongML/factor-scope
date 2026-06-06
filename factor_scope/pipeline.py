@@ -189,7 +189,7 @@ def _attach_scorecard(
 
     if store.count("calls") == 0:
         return
-    scorecard = build_scorecard(score_calls(store, as_of))
+    scorecard = build_scorecard(score_calls(store, as_of), as_of)
     for _, item in pairs:
         item.scorecard = scorecard
 
