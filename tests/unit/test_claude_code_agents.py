@@ -1,6 +1,6 @@
-"""The claude_code seats are driven by the committed ``.claude/agents/*.md`` files (issue #12, §08).
+"""The claude_code seats are driven by the committed ``.claude/agents/*.md`` files.
 
-Option A (spec §08): the bull, bear, and synthesis system prompts have exactly one authoritative
+By design, the bull, bear, and synthesis system prompts have exactly one authoritative
 location — the agent files — and the provider loads them at call time. These tests assert the
 provider's system-prompt text comes from those files (so the committed agents can't drift silently
 from the prompts actually used). The subprocess turn is stubbed, so nothing shells out.

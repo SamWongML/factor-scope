@@ -1,13 +1,13 @@
 """Prices adapter (CN, Baostock) — a second, independent source for the ``prices`` series.
 
-The spec's CN ingestion is dual/triple-sourced (AkShare + Baostock + Mootdx) so one scraper being
-IP-blocked or offline never kills a nightly run (L1 / §04). This module is the Baostock leg: a thin
+CN ingestion is dual/triple-sourced (AkShare + Baostock + Mootdx) so one scraper being
+IP-blocked or offline never kills a nightly run. This module is the Baostock leg: a thin
 ``fetch_live`` that reads the latest daily close for one ETF, stamped into the same ``prices``
 :class:`~factor_scope.store.Reading` shape as the AkShare adapter. It therefore either corroborates
 the AkShare read (cross-validation) or substitutes for it when AkShare is down — the selection
 policy lives in :func:`factor_scope.ingest.prices.select_corroborated`.
 
-Mootdx/pytdx is the planned third source and is tracked as a follow-up (see issue #21).
+Mootdx/pytdx is the planned third source, added as a separate adapter leg.
 
 Like every live backend, the heavy dependency is imported lazily inside the call so the core
 installs and CI run offline; ``fetch_live`` is opt-in (behind ``--live``) and never called in CI.

@@ -50,7 +50,7 @@ def fetch_live(
     ``{filer, holding, shares}`` — the US lead-chain, not a graph edge. ``"NPORT-P"`` reads a
     fund/ETF's monthly portfolio (``investment_data``) keyed by security name into ``{filer,
     holding, weight}`` (``pct_value`` → fraction of net assets), so US fund/ETF holdings become
-    look-through ``HOLDS`` edges alongside the CN funds (spec §04/§05).
+    look-through ``HOLDS`` edges alongside the CN funds.
     """
 
     from edgar import Company

@@ -1,7 +1,7 @@
-"""Prices adapter (CN, Mootdx) — the third, independent source for the ``prices`` series (#21).
+"""Prices adapter (CN, Mootdx) — the third, independent source for the ``prices`` series.
 
-The spec's CN ingestion is dual/triple-sourced (AkShare + Baostock + Mootdx) so one scraper being
-IP-blocked or offline never kills a nightly run (L1 / §04). This module is the Mootdx leg: a thin
+CN ingestion is dual/triple-sourced (AkShare + Baostock + Mootdx) so one scraper being
+IP-blocked or offline never kills a nightly run. This module is the Mootdx leg: a thin
 ``fetch_live`` that reads the latest daily close for one ETF over the TDX (通达信) market protocol,
 stamped into the same ``prices`` :class:`~factor_scope.store.Reading` shape as the other two legs.
 With three sources, :func:`factor_scope.ingest.prices.select_reconciled` takes the **median** — so a

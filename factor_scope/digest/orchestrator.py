@@ -6,7 +6,7 @@ true *regardless of what any model says*:
 1. **Abstain when blind** — an unknown trend gate, too few valid states, or valid factors at
    opposing extremes → no claim.
 2. **The trend gate is a hard rule** — a capped gate caps the lean at Hold/Avoid; nothing here may
-   open it (principle #4).
+   open it.
 3. **Evidence-quality auto-downgrade** — weak evidence (stale / single-source / conflict /
    forum-only) trims the confidence *number* down before the scorecard reads it; descriptive only.
 4. **The scorecard is descriptive only** — it may pull the confidence *number* toward realised
@@ -30,7 +30,7 @@ MIN_VALID_STATES = 2  # below this we are too blind to call
 OPPOSE_MIN = 1.5  # a "strong case" floor — both sides this strong, and cancelling, → abstain
 DEFAULT_HORIZON_D = 30  # the horizon a fresh lean is scored over (calendar days)
 
-# Evidence-quality auto-downgrade (spec §08) — a deterministic confidence penalty on weak evidence.
+# Evidence-quality auto-downgrade — a deterministic confidence penalty on weak evidence.
 STALE_MAX_AGE_D = 7  # newest evidence older than this (vs the brief's as_of) reads as stale
 MIN_SOURCES = 2  # fewer than this many distinct evidence sources reads as single-source
 LOW_TRUST_SRC = frozenset({"xueqiu", "guba", "tieba"})  # retail forums → forum-only when all match
@@ -117,7 +117,7 @@ def _opposing_extremes(bull: Case, bear: Case) -> bool:
 
 
 def _enforce_gate(action: LeanAction, brief: DigestInput) -> LeanAction:
-    """The hard cap: below the 200-day MA, no bullish lean survives (principle #4)."""
+    """The hard cap: below the 200-day MA, no bullish lean survives."""
 
     if brief.gate is GateState.CAPPED and action in _BULLISH:
         return LeanAction.HOLD if brief.list_name is ListName.HOLDINGS else LeanAction.AVOID
@@ -140,7 +140,7 @@ def _is_single_source(brief: DigestInput) -> bool:
 
 
 def _is_conflict(brief: DigestInput) -> bool:
-    """Valid factor states at opposing extremes — a softer read of the abstain conflict (§08)."""
+    """Valid factor states at opposing extremes — a softer read of the abstain conflict."""
 
     levels = {s.level for s in brief.states if s.valid}
     return Band.EXTREME_HIGH in levels and Band.EXTREME_LOW in levels
@@ -153,7 +153,7 @@ def _is_forum_only(brief: DigestInput) -> bool:
 
 
 def auto_downgrade(brief: DigestInput) -> float:
-    """The fraction of confidence that survives the evidence-quality downgrade (spec §08).
+    """The fraction of confidence that survives the evidence-quality downgrade.
 
     A deterministic, pure function of the brief — no wall clock (staleness is judged against the
     brief's own ``as_of``). Each weak-evidence condition (stale / single-source / conflict /
@@ -264,8 +264,8 @@ def digest_item(provider: LLMProvider, brief: DigestInput) -> DigestResult:
 
     proposal = provider.synthesize(brief, bull, bear)
     action = _enforce_gate(proposal.action, brief)
-    # Confidence channels, in order: the evidence-quality downgrade (§08) trims the *stated*
-    # confidence for weak evidence first, then the scorecard mirror (§06) pulls that toward
+    # Confidence channels, in order: the evidence-quality downgrade trims the *stated*
+    # confidence for weak evidence first, then the scorecard mirror pulls that toward
     # realised reliability. Both are descriptive — neither can change the action or the gate.
     downgraded = proposal.confidence * auto_downgrade(brief)
     confidence = _apply_scorecard(downgraded, brief, tokens)

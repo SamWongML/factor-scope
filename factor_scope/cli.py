@@ -19,7 +19,7 @@ from factor_scope.render import render
 
 app = typer.Typer(
     add_completion=False,
-    help="Wealth-Assistant Engine — nightly decision-support artifact for an A-share/funds book.",
+    help="factor-scope — nightly decision-support artifact for an A-share/funds book.",
     no_args_is_help=True,
 )
 

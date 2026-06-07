@@ -22,7 +22,7 @@ from factor_scope.contract import LeanAction
 from factor_scope.digest.provider import Case, DigestInput, Proposal, Side
 
 # The seat system prompts live in the committed agent definitions, never inline here — one source of
-# truth (spec §08), so the prompts actually used and the committed agents can't drift apart.
+# truth, so the prompts actually used and the committed agents can't drift apart.
 _AGENTS_DIR = Path(__file__).resolve().parents[2] / ".claude" / "agents"
 
 

@@ -1,4 +1,4 @@
-"""Unit tests for the hard trend gate in the digest (principle #4).
+"""Unit tests for the hard trend gate in the digest — the one rule nothing may override.
 
 A capped gate (price below the 200-day MA) hard-caps the lean at Hold/Avoid. Nothing — not a
 bullish state battery, not a misbehaving provider, not the scorecard — may open it. These tests

@@ -127,7 +127,7 @@ def _live_or_empty(
 ) -> list[Reading]:
     """A live price read that yields no rows instead of raising on failure — *loudly*.
 
-    The CN price path is multi-sourced for anti-fragility (L1 / §04): turning one source going
+    The CN price path is multi-sourced for anti-fragility: turning one source going
     offline into an empty read lets :func:`prices.select_reconciled` fall back to the others, rather
     than letting an IP-block, hang, or timeout crash the whole nightly run. Each attempt is bounded
     by a wall-clock deadline and the read is retried with backoff, so a transient blip is ridden out
@@ -181,7 +181,7 @@ def gather_live_readings(  # pragma: no cover - opt-in
     """The opt-in ``--live`` path: local positions + live NAV, holdings, and the FRED macro dial.
 
     Each held fund's NAV *and* its latest disclosed holdings are refreshed, plus every configured
-    EDGAR filer's holdings — so the connection graph rebuilds from live disclosures (spec §04/§05),
+    EDGAR filer's holdings — so the connection graph rebuilds from live disclosures,
     not stale fixtures. CN prices are dual-sourced (AkShare cross-validated against Baostock) so one
     scraper going offline can't kill the run. Heavy deps stay lazily imported inside ``fetch_live``.
     """

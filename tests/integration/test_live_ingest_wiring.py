@@ -128,7 +128,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
                         payload={"nav": 2.0})
             ],
         )
-    # AkShare offline must not kill the run — the other sources substitute (the whole point of §04).
+    # AkShare offline must not kill the run — the other sources substitute for it (failover).
     with caplog.at_level(logging.WARNING):
         readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
     held = {r.key for r in readings if r.series == "positions"}

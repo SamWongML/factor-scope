@@ -1,4 +1,4 @@
-"""Unit tests for the rolling-window trim in the scorecard (spec §06).
+"""Unit tests for the rolling-window trim in the scorecard.
 
 The scorecard advertises a rolling 60-day window; it must *apply* it — trimming calls older than
 the window before computing any statistic — so "an old regime can't rule a new one". The day count

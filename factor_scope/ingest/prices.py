@@ -18,7 +18,7 @@ FIXTURE = "prices.csv"
 _REQUIRED = ("code", "as_of", "nav")
 
 # CN prices are dual-sourced (AkShare + Baostock) so one scraper going offline can't kill a run.
-# Two same-day reads within this fraction corroborate each other (L1 / §04); the default is the
+# Two same-day reads within this fraction corroborate each other; the default is the
 # SEC/CSSF NAV-error materiality baseline (0.5%). Callers pass a per-run override (Config).
 _CORROBORATION_TOLERANCE = 0.005
 
@@ -57,7 +57,7 @@ def select_reconciled(
     """Reconcile one fund's NAV across the CN price sources, in priority order (AkShare first).
 
     ``reads`` is each source's read (possibly empty), AkShare → Baostock → Mootdx. The CN path is
-    multi-sourced for anti-fragility (L1 / §04); this is the selection policy, robust to one bad
+    multi-sourced for anti-fragility; this is the selection policy, robust to one bad
     source and never fatal:
 
     - **Fall back** — a source that is offline contributes an empty read; only the sources that
