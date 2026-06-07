@@ -21,6 +21,14 @@ _AGENT_SDK_DATE = "2026-06-15"
 
 
 @dataclass(frozen=True)
+class DigestFailure:
+    """One item whose digest seat *raised* and was degraded to abstain — recorded for visibility."""
+
+    code: str
+    error: str
+
+
+@dataclass(frozen=True)
 class RunRecord:
     """One night's run summary — what ran, what it produced, and what it cost."""
 
@@ -36,6 +44,9 @@ class RunRecord:
     n_calls_logged: int  # leans logged tonight for tomorrow's self-scoring
     output_path: str
     cost_note: str
+    # Items whose seat call failed (degraded to abstain). Empty on a clean night; on the fake
+    # provider it is always empty, so the fixtures artifact + log stay byte-for-byte deterministic.
+    digest_failures: tuple[DigestFailure, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -63,6 +74,7 @@ def summarize_run(
     provider: str,
     n_calls_logged: int,
     output_path: str = "",
+    digest_failures: tuple[DigestFailure, ...] = (),
 ) -> RunRecord:
     """Roll one finished :class:`Dashboard` into a :class:`RunRecord` (counts + provider + cost)."""
 
@@ -85,6 +97,7 @@ def summarize_run(
         n_calls_logged=n_calls_logged,
         output_path=output_path,
         cost_note=cost_note(provider),
+        digest_failures=digest_failures,
     )
 
 

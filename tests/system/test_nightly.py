@@ -14,7 +14,8 @@ from typer.testing import CliRunner
 
 from factor_scope.cli import app
 from factor_scope.config import Config
-from factor_scope.contract import Dashboard
+from factor_scope.contract import Dashboard, LeanAction
+from factor_scope.digest import Case, DigestInput, Proposal, Side
 from factor_scope.pipeline import nightly
 from factor_scope.scoring import read_calls
 from factor_scope.store import DuckDBStore
@@ -106,3 +107,49 @@ def test_nightly_is_rerunnable_without_double_logging(tmp_path) -> None:
 
     # Two nights of ops history, though (the log is append-only).
     assert len(p["log"].read_text(encoding="utf-8").splitlines()) == 2
+
+
+class _BoomProvider:
+    """A judgment provider whose seats always fail (stands in for a missing/broken `claude`)."""
+
+    name = "boom"
+
+    def argue(self, side: Side, brief: DigestInput) -> Case:
+        raise RuntimeError("claude binary missing")
+
+    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
+        raise AssertionError("synthesis is unreachable once a seat has failed")
+
+
+def test_nightly_degrades_a_failing_provider_to_abstain_and_logs_it(tmp_path, monkeypatch) -> None:
+    # The P0 invariant: a seat failure must not abort the night. Every item that reaches the broken
+    # provider degrades to abstain, the artifact is still written, and the run log records the
+    # failures (with the error) so a broken night is visible — the log write used to be skipped.
+    monkeypatch.setattr("factor_scope.pipeline.get_provider", lambda name: _BoomProvider())
+
+    p = _paths(tmp_path)
+    cfg = Config(
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+        provider="claude_code",
+    )
+    dash, record = nightly(cfg)
+
+    # The run completed on a valid, sparser (all-abstain) artifact.
+    Dashboard.model_validate(json.loads(p["output"].read_text(encoding="utf-8")))
+    assert dash.items and all(
+        it.lean is not None and it.lean.action is LeanAction.ABSTAIN for it in dash.items
+    )
+
+    # Each degraded item is recorded in the run log with its code and the seat error.
+    assert record.digest_failures, "a failing provider must leave a trace in the run log"
+    assert all(f.code and "claude binary missing" in f.error for f in record.digest_failures)
+
+    # The single run-log line was written (the bug: it never executed on failure) and carries them.
+    lines = p["log"].read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    logged = json.loads(lines[0])
+    assert len(logged["digest_failures"]) == len(record.digest_failures)
+    assert logged["digest_failures"][0]["code"] and logged["digest_failures"][0]["error"]
