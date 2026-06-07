@@ -18,7 +18,7 @@ rendered deterministically from the *final* action, so they always match the lea
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from factor_scope.contract import Band, GateState, LeanAction, ListName
@@ -68,7 +68,12 @@ _BULLISH = {LeanAction.BUY_EARLY}
 
 @dataclass(frozen=True)
 class DigestResult:
-    """The final, guardrail-checked lean for one item plus the call it will be logged as."""
+    """The final, guardrail-checked lean for one item plus the call it will be logged as.
+
+    ``error`` is set only when a provider seat *raised* and the item was degraded to abstain
+    (mirroring ``FactorState(valid=False)``); it carries the failure for the ops run log and never
+    reaches the artifact — the descriptive fields render an ordinary abstain.
+    """
 
     action: LeanAction
     confidence: float
@@ -77,6 +82,7 @@ class DigestResult:
     flip_trigger: str | None
     invalidation: str | None
     state_pattern: tuple[str, ...]
+    error: str | None = None
 
 
 def state_tokens(brief: DigestInput) -> tuple[str, ...]:
@@ -246,23 +252,35 @@ def _render(
     )
 
 
-def _abstain(brief: DigestInput, tokens: tuple[str, ...]) -> DigestResult:
-    return _render(brief, LeanAction.ABSTAIN, 0.0, tokens)
+def _abstain(
+    brief: DigestInput, tokens: tuple[str, ...], *, error: str | None = None
+) -> DigestResult:
+    result = _render(brief, LeanAction.ABSTAIN, 0.0, tokens)
+    return result if error is None else replace(result, error=error)
 
 
 def digest_item(provider: LLMProvider, brief: DigestInput) -> DigestResult:
-    """Run the debate and emit one item's guardrail-checked lean (the synthesis seat)."""
+    """Run the debate and emit one item's guardrail-checked lean (the synthesis seat).
+
+    A seat that *raises* (a missing/failed/slow ``claude`` call, malformed model JSON) degrades this
+    item to an abstain carrying the error — the run completes on a sparser artifact rather than the
+    night aborting. This is the same "invalid degrades, never raises" invariant the factor battery
+    holds, enforced here at the provider boundary.
+    """
 
     tokens = state_tokens(brief)
     if _blind_reason(brief) is not None:
         return _abstain(brief, tokens)
 
-    bull = provider.argue(Side.BULL, brief)
-    bear = provider.argue(Side.BEAR, brief)
-    if _opposing_extremes(bull, bear):
-        return _abstain(brief, tokens)
+    try:
+        bull = provider.argue(Side.BULL, brief)
+        bear = provider.argue(Side.BEAR, brief)
+        if _opposing_extremes(bull, bear):
+            return _abstain(brief, tokens)
+        proposal = provider.synthesize(brief, bull, bear)
+    except Exception as exc:  # noqa: BLE001 - any seat failure degrades; it must never abort the run
+        return _abstain(brief, tokens, error=f"{type(exc).__name__}: {exc}")
 
-    proposal = provider.synthesize(brief, bull, bear)
     action = _enforce_gate(proposal.action, brief)
     # Confidence channels, in order: the evidence-quality downgrade trims the *stated*
     # confidence for weak evidence first, then the scorecard mirror pulls that toward

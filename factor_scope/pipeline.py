@@ -43,7 +43,7 @@ from factor_scope.graph import (
 )
 from factor_scope.graph.lookthrough import look_through
 from factor_scope.ingest import gather_fixture_readings, gather_live_readings
-from factor_scope.schedule import RunRecord, append_run_log, summarize_run
+from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 
@@ -218,14 +218,21 @@ def _prior_action(store: PointInTimeStore, code: str, as_of: str) -> LeanAction 
 
 
 def _attach_leans(
-    pairs: list[tuple[str, DashboardItem]], store: PointInTimeStore, as_of: str, provider_name: str
+    pairs: list[tuple[str, DashboardItem]],
+    store: PointInTimeStore,
+    as_of: str,
+    provider_name: str,
+    *,
+    digest_failures: list[DigestFailure] | None = None,
 ) -> None:
     """Digest each item into a calibrated lean, then log it as a falsifiable call.
 
     The bull/bear→synthesis runs on the selected provider (the deterministic ``fake`` by default);
-    the orchestrator enforces the gate, abstain, and scorecard guardrails. Each emitted lean is
-    appended to the point-in-time store as a :class:`~factor_scope.scoring.Call` — stamped with
-    tonight's date and immutable — so next run's self-scoring loop scores *this* real call.
+    the orchestrator enforces the gate, abstain, and scorecard guardrails. A seat that *raises*
+    degrades that item to abstain (``digest_item``); the error is appended to ``digest_failures``
+    (when a sink is given) for the ops run log. Each emitted lean is appended to the point-in-time
+    store as a :class:`~factor_scope.scoring.Call` — stamped with tonight's date and immutable — so
+    next run's self-scoring loop scores *this* real call.
     """
 
     provider = get_provider(provider_name)
@@ -252,6 +259,8 @@ def _attach_leans(
         item.evolution = result.evolution
         item.flip_trigger = result.flip_trigger
         item.invalidation = result.invalidation
+        if result.error is not None and digest_failures is not None:
+            digest_failures.append(DigestFailure(code=code, error=result.error))
         call_id = f"{code}:{as_of}"
         if call_id in logged_tonight:
             continue
@@ -385,11 +394,16 @@ def _build_emerging(
     return pairs
 
 
-def build_dashboard(config: Config) -> Dashboard:
+def build_dashboard(
+    config: Config, *, digest_failures: list[DigestFailure] | None = None
+) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
 
     Determinism: the as-of date is the override or the fixture stamp (never the wall clock), and a
     fixtures ingest is stamped deterministically, so a fixtures run reproduces byte-for-byte.
+
+    ``digest_failures`` is an optional sink the nightly job passes to collect any items whose seat
+    call raised (each degraded to abstain) for the ops run log; it never affects the artifact.
     """
 
     as_of = _resolve_as_of(config)
@@ -410,7 +424,7 @@ def build_dashboard(config: Config) -> Dashboard:
         emerging_pairs = _build_emerging(store, graph, as_of, book)
         pairs = core_pairs + emerging_pairs
         _attach_scorecard(pairs, store, as_of)
-        _attach_leans(pairs, store, as_of, config.provider)
+        _attach_leans(pairs, store, as_of, config.provider, digest_failures=digest_failures)
         items = [item for _, item in pairs]
     finally:
         store.close()
@@ -419,10 +433,10 @@ def build_dashboard(config: Config) -> Dashboard:
     return Dashboard(as_of=as_of, generated_at=f"{as_of}T22:00:00Z", items=items)
 
 
-def run(config: Config) -> Dashboard:
+def run(config: Config, *, digest_failures: list[DigestFailure] | None = None) -> Dashboard:
     """Build the dashboard and persist it to ``config.output_path``."""
 
-    dash = build_dashboard(config)
+    dash = build_dashboard(config, digest_failures=digest_failures)
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     config.output_path.write_text(dash.model_dump_json(indent=2), encoding="utf-8")
     return dash
@@ -474,7 +488,8 @@ def nightly(
     started_at = clock()
     if not _night_already_ingested(config, as_of):
         ingest(config)  # append the night's readings into the durable store + materialise the graph
-    dash = run(config)  # build + write dashboard.json; logs each lean as a call into the store
+    digest_failures: list[DigestFailure] = []
+    dash = run(config, digest_failures=digest_failures)  # build + write; logs each lean as a call
     ended_at = clock()
     record = summarize_run(
         dash,
@@ -483,6 +498,7 @@ def nightly(
         provider=config.provider,
         n_calls_logged=_count_calls_logged(config, as_of),
         output_path=str(config.output_path),
+        digest_failures=tuple(digest_failures),
     )
     append_run_log(config.log_path, record)
     return dash, record

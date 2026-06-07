@@ -21,6 +21,7 @@ from factor_scope.schedule.deploy import (
     render_launchd_plist,
 )
 from factor_scope.schedule.runlog import (
+    DigestFailure,
     RunRecord,
     append_run_log,
     cost_note,
@@ -28,6 +29,7 @@ from factor_scope.schedule.runlog import (
 )
 
 __all__ = [
+    "DigestFailure",
     "RunRecord",
     "ScheduleSpec",
     "append_run_log",

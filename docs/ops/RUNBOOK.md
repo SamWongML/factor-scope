@@ -34,11 +34,16 @@ wall-clock timestamps are fine here; only `dashboard.json` stays clock-free):
 ```json
 {"as_of": "2026-06-05", "started_at": "...Z", "ended_at": "...Z", "provider": "fake",
  "n_items": 6, "n_holdings": 2, "n_watchlist": 1, "n_emerging": 3, "n_abstain": 2,
- "n_calls_logged": 6, "output_path": "out/dashboard.json", "cost_note": "..."}
+ "n_calls_logged": 6, "output_path": "out/dashboard.json", "cost_note": "...",
+ "digest_failures": []}
 ```
 
 `n_calls_logged` is tomorrow's scoring fuel; `n_abstain` is how often the engine was too blind to
-call (the abstain-when-blind guardrail). Tail it to see whether the nightly job is running.
+call (the abstain-when-blind guardrail). `digest_failures` is empty on a clean night; a non-empty
+list means a seat call raised (a missing/slow `claude`, malformed JSON) and that item was degraded
+to abstain rather than crashing the run — each entry carries its `code` and `error`. On the fake
+provider it is always empty. Tail it to see whether the nightly job is running and whether any seat
+is failing.
 
 ## Scheduling
 
