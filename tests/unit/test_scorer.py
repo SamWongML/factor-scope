@@ -1,4 +1,4 @@
-"""Unit tests for the mechanical next-day scorer (spec §06).
+"""Unit tests for the mechanical next-day scorer.
 
 Each lean is a falsifiable claim. Scoring is pure mechanics: forward return over the horizon vs the
 lean's stated direction → hit / miss / abstain. No LLM, no memory, no opinion. A resolved call is

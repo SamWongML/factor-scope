@@ -1,9 +1,9 @@
-"""The point-in-time store (L2) — append-only, DuckDB-backed.
+"""The point-in-time store — append-only, DuckDB-backed.
 
 Every fact the engine ingests becomes a :class:`Reading`: a ``(series, key)`` stamped with both
 ``as_of`` (when the fact was true / its disclosure date) and ``fetched_at`` (when we pulled it),
 plus a JSON ``payload``. Rows are **append-only** — there is no update or delete — so a later
-disclosure never rewrites an earlier as-of read (spec §09).
+disclosure never rewrites an earlier as-of read.
 
 Reads are point-in-time: :meth:`PointInTimeStore.read_as_of` returns, per key, the latest row with
 ``as_of <= D``. Reasoning tonight sees only what was knowable tonight. The interface is small and a

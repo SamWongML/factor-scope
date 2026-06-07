@@ -1,4 +1,4 @@
-"""System gate for Phase 7 — the one-shot nightly job (spec §11, decision D4).
+"""System test for the one-shot nightly job.
 
 End-to-end over the bundled fixtures: ``factor-scope nightly`` runs the whole pipeline
 (ingest → compute → digest → write ``dashboard.json``), appends one ops :class:`RunRecord` to the

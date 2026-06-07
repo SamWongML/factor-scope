@@ -1,4 +1,4 @@
-"""Contract test for the LLMProvider interface (spec §08, D2).
+"""Contract test for the LLMProvider interface.
 
 A provider is anything with ``name``, ``argue``, and ``synthesize``. The deterministic fake is the
 default; the real ``claude_code`` provider must satisfy the same shape so it can be dropped in

@@ -1,4 +1,4 @@
-"""Rank-against-own-history banding (spec §03).
+"""Rank-against-own-history banding.
 
 A reading becomes a *state* by ranking it against its own history into a logic-based band. The
 cut-points are **constants chosen for economic meaning** — the tails (top/bottom 5%) are extremes,

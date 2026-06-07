@@ -1,11 +1,11 @@
-"""System gate for Phase 6 — the run artifact carries the emerging funnel's top-3 (spec §07).
+"""System test — the run artifact carries the emerging funnel's top-3.
 
 End-to-end over the bundled fixtures: a cleared theme (储能) produces a ranked top-3 of its
 candidate funds in the ``emerging`` list, each with the Stage-A clearance + the Stage-B one-page
 comparison (methodology / fee / AUM / tracking / top-10 / overlap-with-core). The candidate that
 heavily overlaps my core (光储龙头ETF holds 中际旭创, a name my book already owns) is dropped from
-the top 3 by the §05 look-through. The digest then leans over the shortlist; the capped fund is
-never bullish. Deterministic, schema-valid. Stays green at every later phase boundary.
+the top 3 by the look-through. The digest then leans over the shortlist; the capped fund is
+never bullish. Deterministic, schema-valid.
 """
 
 import json
@@ -32,7 +32,7 @@ def test_run_emerging_list_is_a_screened_top_three(tmp_path) -> None:
     emerging = dash.by_list(ListName.EMERGING)
     assert len(emerging) == 3  # the cleared theme's ranked top 3
 
-    # The overlapping candidate (光储龙头ETF) is dropped from the top 3 by overlap-with-core (§05).
+    # The overlapping candidate (光储龙头ETF) is dropped from the top 3 by overlap-with-core.
     names = {it.item for it in emerging}
     assert "光储龙头ETF" not in names
 

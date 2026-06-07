@@ -1,8 +1,8 @@
-"""The connection-graph store (L2) — a durable, on-disk, point-in-time holdings graph (spec §05).
+"""The connection-graph store — a durable, on-disk, point-in-time holdings graph.
 
-The §05 look-through is exact set arithmetic over quarterly holdings snapshots, so the default
+The look-through is exact set arithmetic over quarterly holdings snapshots, so the default
 backend materialises the ``(:Fund)-[:HOLDS {weight, as_of}]->(:Security)`` graph as an append-only
-edge table in DuckDB (decision D8): durable on disk, offline, deterministic, and point-in-time at
+edge table in DuckDB: durable on disk, offline, deterministic, and point-in-time at
 query time (the same ``QUALIFY`` latest-as-of pattern as the readings store). The
 :class:`GraphStore` ``Protocol`` keeps the engine swappable (a graph-native Kùzu / Neo4j is the
 production swap); nothing here is an in-memory graph rebuilt each run.
@@ -31,7 +31,7 @@ class Edge(BaseModel):
     weight: float  # the security's weight in the fund (0..1) at ``as_of``
     as_of: str  # ISO disclosure date (point-in-time; quarterly snapshots)
     source: str  # the feed this edge came from, e.g. "fund_holdings"
-    rel: str = "HOLDS"  # the edge kind; EXPOSED_TO (security→driver/theme) lands in a later phase
+    rel: str = "HOLDS"  # the edge kind; EXPOSED_TO (security→driver/theme) may come later
 
 
 @runtime_checkable
@@ -124,7 +124,7 @@ class DuckDBGraphStore:
 
 
 def build_graph_from_store(graph: GraphStore, store: PointInTimeStore) -> int:
-    """Materialise the HOLDS graph from the weighted holdings readings (no LLM, spec §05).
+    """Materialise the HOLDS graph from the weighted holdings readings (no LLM).
 
     Reads the *full* append-only history (every quarter's disclosure) so the graph keeps its own
     point-in-time read at query time — an earlier snapshot never sees a later disclosure. Both feeds

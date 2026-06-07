@@ -1,4 +1,4 @@
-"""Live-backend smoke tests for the L1 adapters.
+"""Live-backend smoke tests for the ingestion adapters.
 
 These hit the network and are **skipped unless ``FACTOR_SCOPE_LIVE=1``**, so CI never calls a live
 source. They are the documented way to verify each adapter's opt-in ``--live`` path by hand.

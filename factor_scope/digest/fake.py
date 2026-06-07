@@ -1,4 +1,4 @@
-"""The deterministic fake digestion provider (default; spec §08, D2).
+"""The deterministic fake digestion provider (default).
 
 Pure rules over the factor states — **no network, no keys, no RNG, no wall clock** — so the whole
 bull/bear→synthesis pipeline runs end-to-end in CI and a fixtures run reproduces ``dashboard.json``

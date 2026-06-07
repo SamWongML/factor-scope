@@ -1,8 +1,8 @@
-"""System gate for Phase 1 — `ingest` (fixtures) → store → `run` yields the priced artifact.
+"""System test — `ingest` (fixtures) → store → `run` yields the priced artifact.
 
 End-to-end over the bundled fixtures: ingest fills the point-in-time store, then run reads it and
 emits a schema-valid dashboard.json with the three lists, non-empty evidence, and per-item gain,
-deterministically. Stays green at every later phase boundary.
+deterministically.
 """
 
 import json
@@ -32,7 +32,7 @@ def test_ingest_then_run_from_durable_store(tmp_path) -> None:
     assert dash.as_of == "2026-06-05"
     assert len(dash.by_list(ListName.HOLDINGS)) == 2
     assert len(dash.by_list(ListName.WATCHLIST)) == 1
-    assert len(dash.by_list(ListName.EMERGING)) == 3  # the funnel's top-3 (§07)
+    assert len(dash.by_list(ListName.EMERGING)) == 3  # the funnel's top-3
 
     # Every held/watched item is priced from the store: real NAV evidence + a per-item gain.
     core = [it for it in dash.items if it.list_name is not ListName.EMERGING]
@@ -52,7 +52,7 @@ def test_standalone_run_auto_ingests_fixtures(tmp_path) -> None:
     result = runner.invoke(app, ["run", "--output", str(out)])
     assert result.exit_code == 0, result.output
     dash = Dashboard.model_validate(json.loads(out.read_text(encoding="utf-8")))
-    # 3 core items (2 holdings + 1 watchlist) + the funnel's emerging top-3 (§07).
+    # 3 core items (2 holdings + 1 watchlist) + the funnel's emerging top-3.
     assert len(dash.items) == 6
     core = [it for it in dash.items if it.list_name is not ListName.EMERGING]
     assert all(it.gain is not None for it in core)

@@ -1,9 +1,9 @@
-"""System gate for Phase 5 — the run artifact carries a calibrated lean per item (spec §08).
+"""System test — the run artifact carries a calibrated lean per item.
 
 End-to-end over the bundled fixtures with the deterministic fake provider: every item gets a
 ``lean`` + ``evolution`` + ``flip_trigger`` + ``invalidation``; the capped item is never leaned
 bullish; the stretched winner leans Trim; each emitted lean is logged as a falsifiable call so the
-self-scoring loop scores it next run. Deterministic, schema-valid. Stays green at later phases.
+self-scoring loop scores it next run. Deterministic, schema-valid.
 """
 
 import json

@@ -1,11 +1,11 @@
-"""Regenerate the price + FRED history fixtures for Phase 2 (factor states).
+"""Regenerate the price + FRED history fixtures the factor states rank against.
 
 The factor battery ranks each reading against its *own* history, so the fixtures need a real
-distribution to rank into (Phase 1 only carried a single latest NAV per code). This generator
+distribution to rank into (a single latest NAV per code is not enough). This generator
 emits deterministic, dependency-free synthetic series — no RNG, no wall clock — so a fixtures run
 stays byte-for-byte reproducible. Run from the repo root:
 
-    uv run python scripts/gen_fixtures_phase2.py
+    uv run python scripts/gen_price_fixtures.py
 
 It rewrites ``data/fixtures/prices.csv`` and ``data/fixtures/fred.csv``. The shapes are chosen so
 the artifact tells a clear story: three holdings/watchlist codes ride above their 200-day MA

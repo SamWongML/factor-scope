@@ -1,4 +1,4 @@
-"""Themes adapter — candidate industries for the emerging funnel's Stage A (spec §07).
+"""Themes adapter — candidate industries for the emerging funnel's Stage A.
 
 `themes.csv → {theme, as_of, acceleration, base_level, breadth, crowding, broad_adoption,
 path_to_profit, fad_resistant, lead_chain, wrapper_exists}`. Each row is one industry's dated

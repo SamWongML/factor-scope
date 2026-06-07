@@ -1,4 +1,4 @@
-"""Unit tests for the deterministic, exact, point-in-time look-through (spec §05).
+"""Unit tests for the deterministic, exact, point-in-time look-through.
 
 The motivating question: "B is falling — who else of mine holds it, and my total look-through
 weight?" These tests pin the *logic* (exact funds + weighted sum + point-in-time + the shared-only

@@ -1,4 +1,4 @@
-"""The 8 descriptive factor states + the 200-day trend gate (spec §03/§08).
+"""The 8 descriptive factor states + the 200-day trend gate.
 
 Each factor is a pure function ``(FactorContext) -> FactorState``: it ranks one reading against its
 *own* history into a constant-cut-point :class:`~factor_scope.contract.Band`, attaches a
@@ -49,7 +49,7 @@ def _unavailable(factor: str, note: str) -> FactorState:
 # --- 1. Cross-market lead (US leader → A-share chain). Needs US prices/revisions (not yet here).
 def cross_market(ctx: FactorContext) -> FactorState:
     return _unavailable(
-        "cross-market lead", "US leader prices/revisions not ingested (future phase)"
+        "cross-market lead", "US leader prices/revisions not ingested"
     )
 
 
@@ -81,18 +81,18 @@ def reversal(ctx: FactorContext) -> FactorState:
 # --- 3. Crowding: turnover + Amihud + ETF flow + theme PE premium. A risk gauge (not yet ingested).
 def crowding(ctx: FactorContext) -> FactorState:
     return _unavailable(
-        "crowding", "turnover / Amihud / flow / PE-premium not ingested (future phase)"
+        "crowding", "turnover / Amihud / flow / PE-premium not ingested"
     )
 
 
 # --- 4. Demand / leading driver: revision direction of end-demand capex/orders (not yet ingested).
 def demand(ctx: FactorContext) -> FactorState:
-    return _unavailable("demand", "end-demand capex/orders revisions not ingested (future phase)")
+    return _unavailable("demand", "end-demand capex/orders revisions not ingested")
 
 
 # --- 5. Valuation: PE/PB/PEG vs the theme's own history (fundamentals not yet ingested).
 def valuation(ctx: FactorContext) -> FactorState:
-    return _unavailable("valuation", "PE/PB/PEG fundamentals not ingested (future phase)")
+    return _unavailable("valuation", "PE/PB/PEG fundamentals not ingested")
 
 
 # --- 6. Trend gate: price vs 200-day MA + ~1y return sign. A downtrend filter — the one hard cap.
@@ -174,7 +174,7 @@ def macro(ctx: FactorContext) -> FactorState:
     )
 
 
-# Spec §03 order — the battery is read in this order everywhere.
+# Canonical factor order — the battery is read in this order everywhere.
 FACTORS: tuple[Callable[[FactorContext], FactorState], ...] = (
     cross_market,
     reversal,
@@ -199,7 +199,7 @@ FACTOR_NAMES: tuple[str, ...] = (
 
 
 def compute_states(ctx: FactorContext) -> list[FactorState]:
-    """The full 8-state bundle for one item, in spec order. Never raises."""
+    """The full 8-state bundle for one item, in canonical order. Never raises."""
 
     return [factor(ctx) for factor in FACTORS]
 
@@ -207,7 +207,7 @@ def compute_states(ctx: FactorContext) -> list[FactorState]:
 def compute_gate(ctx: FactorContext) -> GateState:
     """The 200-day trend gate — a hard rule. Below the MA → ``capped``; above → ``open``.
 
-    Too little history to judge the trend → ``unknown`` (Phase 5 treats an unknown gate as blind).
+    Too little history to judge the trend → ``unknown`` (the digest treats it as blind).
     Nothing downstream may open a capped gate.
     """
 

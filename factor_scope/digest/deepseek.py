@@ -1,6 +1,6 @@
-"""DeepSeek V4 — cheap chores only, **off the judgment path** (spec §08, L3).
+"""DeepSeek V4 — cheap chores only, **off the judgment path**.
 
-The spec keeps judgment on Claude Code and offloads only mechanical chores — reformatting and
+Judgment stays on Claude Code, which offloads only mechanical chores — reformatting and
 summarising evidence — to DeepSeek (Flash for bulk, Pro for heavier summaries). So this is a chore
 client, *not* a :class:`~factor_scope.digest.provider.LLMProvider`: it never produces a lean, a
 confidence, or anything the gate or scorecard would touch. ``get_provider("deepseek")`` is therefore

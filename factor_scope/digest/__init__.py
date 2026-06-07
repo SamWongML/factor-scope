@@ -1,4 +1,4 @@
-"""Digestion (L4, spec §08) — bull/bear debate → a synthesis seat → a calibrated lean.
+"""Digestion — bull/bear debate → a synthesis seat → a calibrated lean.
 
 The public surface is the provider interface (:class:`LLMProvider` + its structured
 :class:`DigestInput` / :class:`Case` / :class:`Proposal`), the deterministic default

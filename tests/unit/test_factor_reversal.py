@@ -1,4 +1,4 @@
-"""Unit tests for the reversal state (spec §03).
+"""Unit tests for the reversal state.
 
 Short-horizon return ranked vs its own history. In A-shares a stretched up-move is a
 reversal-**DOWN** risk; a hard sell-off is reversal-**UP** potential.

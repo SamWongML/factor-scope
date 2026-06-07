@@ -1,4 +1,4 @@
-"""Unit tests for the scorecard guardrails (spec §06 — descriptive only).
+"""Unit tests for the scorecard guardrails (descriptive only).
 
 The scorecard is a mirror. It may nudge a stated confidence (a number it does not own) within
 bounds, but it can never mutate a factor state, change the trend gate, or supply a number to the

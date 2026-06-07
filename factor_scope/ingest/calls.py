@@ -1,6 +1,6 @@
-"""Calls adapter — prior falsifiable leans the self-scoring loop scores against (spec §06).
+"""Calls adapter — prior falsifiable leans the self-scoring loop scores against.
 
-Leans are produced by the digest in Phase 5; until then the loop is fed a fixture of prior calls so
+Real leans come from the digest; the loop is also seeded with a fixture of prior calls so
 the scorecard is real at every boundary. Each row is a :class:`~factor_scope.scoring.calls.Call`
 stamped with the night it was made (its own ``as_of``), so reads stay point-in-time. The
 ``state_pattern`` column is a ``|``-separated list of factor reads, e.g.

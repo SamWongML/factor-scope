@@ -1,4 +1,4 @@
-"""The rolling self-scoring scorecard (spec §06) — a descriptive mirror, nothing more.
+"""The rolling self-scoring scorecard — a descriptive mirror, nothing more.
 
 Pure functions over ``(confidence, hit)`` pairs and scored calls: the **Brier** score, the **Brier
 skill score** vs the base-rate forecaster, reliability-by-confidence buckets, and per-state-pattern
@@ -182,7 +182,7 @@ def dampen_for_weak_pattern(
     *,
     factor: float = DEFAULT_DAMPEN,
 ) -> float:
-    """Lower confidence on a state-pattern the mirror has been overconfident on (spec §06/§08).
+    """Lower confidence on a state-pattern the mirror has been overconfident on.
 
     The second sanctioned confidence channel (alongside :func:`confidence_nudge`): if any token of
     this item's state pattern appears among the scorecard's flagged ``weak_patterns``, pull the

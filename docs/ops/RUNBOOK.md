@@ -1,7 +1,7 @@
-# RUNBOOK — nightly operations (spec §11)
+# RUNBOOK — nightly operations
 
 How to run the engine every night and review the artifact every morning. The engine is a plain CLI
-nightly batch (decision D4): cross-platform core, scheduling behind a thin adapter. **It never
+nightly batch: cross-platform core, scheduling behind a thin adapter. **It never
 places orders** — it emits one dated `dashboard.json` a human reviews.
 
 ## The one-shot job
@@ -11,14 +11,14 @@ factor-scope nightly        # ingest → compute → digest → write dashboard.
 ```
 
 `nightly` is the production entrypoint. Unlike `run`, it defaults to a **durable** store, so each
-night's leans persist as falsifiable calls that the next night's self-scoring loop (§06) scores. It
+night's leans persist as falsifiable calls that the next night's self-scoring loop scores. It
 writes three things under `out/` (override with the flags below):
 
 | Artifact | Default path | What it is |
 |----------|--------------|------------|
 | `dashboard.json` | `out/dashboard.json` | the morning artifact you review (the contract) |
 | store | `out/store.duckdb` | the append-only point-in-time store (readings + logged calls) |
-| graph | `out/graph.duckdb` | the durable holdings look-through graph (§05) |
+| graph | `out/graph.duckdb` | the durable holdings look-through graph |
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
 
 Flags: `--output`, `--store-path`, `--graph-path`, `--log-path`, `--provider`, `--as-of`,
@@ -38,14 +38,14 @@ wall-clock timestamps are fine here; only `dashboard.json` stays clock-free):
 ```
 
 `n_calls_logged` is tomorrow's scoring fuel; `n_abstain` is how often the engine was too blind to
-call (the abstain-when-blind guardrail, §08). Tail it to see whether the nightly job is running.
+call (the abstain-when-blind guardrail). Tail it to see whether the nightly job is running.
 
 ## Scheduling
 
 Generate the scheduler config with `factor-scope schedule` (a pure render — review it before
 installing). It is **not** a daemon: it fires the one-shot job once a day.
 
-### macOS — launchd (the Mac-mini production path, D4)
+### macOS — launchd (the Mac-mini production path)
 
 ```bash
 factor-scope schedule --hour 22 --minute 0 --working-dir "$PWD" \
@@ -89,8 +89,8 @@ right action is none — *patience is a position*. The engine shortens your **la
 
 Add only when backtesting begins — not on the nightly critical path:
 
-- **Bitemporal backtesting** on ArcticDB under the §10 durability discipline: Deflated Sharpe Ratio,
+- **Bitemporal backtesting** on ArcticDB under a strict durability discipline: Deflated Sharpe Ratio,
   Probability of Backtest Overfitting, purged/embargoed CV (CPCV), parameter-stability, after-cost +
-  point-in-time always. The §06 self-scoring loop is the live durability mechanism until then.
+  point-in-time always. The self-scoring loop is the live durability mechanism until then.
 - An **optional local vector store** (e.g. LanceDB + local embeddings) for fuzzy theme/news recall —
   the emerging funnel's live discovery swap, behind `--live`, never in CI.

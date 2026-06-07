@@ -1,4 +1,4 @@
-"""Unit tests for the deterministic fake digestion provider (spec §08, D2).
+"""Unit tests for the deterministic fake digestion provider.
 
 The fake provider lets the whole bull/bear→synthesis pipeline run end-to-end with no API keys and
 no paid calls. It is pure rules over the structured inputs, so the same brief always yields the same

@@ -1,4 +1,4 @@
-"""The exact, point-in-time look-through query + connection builder (spec §05).
+"""The exact, point-in-time look-through query + connection builder.
 
 Answers the motivating question — "B is falling — who else of mine holds it, and my total
 look-through weight?" — as pure set arithmetic over the

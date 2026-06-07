@@ -1,4 +1,4 @@
-"""The nightly ops run log — one structured :class:`RunRecord` per run (spec §11).
+"""The nightly ops run log — one structured :class:`RunRecord` per run.
 
 This is *operations* telemetry, not the decision artifact: it answers "did last night's job run,
 what did it produce, on which provider, and what did it cost". Records are appended to a JSONL file
@@ -16,7 +16,7 @@ from typing import Any
 
 from factor_scope.contract import Dashboard, LeanAction, ListName
 
-# The Agent-SDK credit-metering change the spec calls out for sizing the nightly run (spec §11).
+# When claude -p starts metering against a separate Agent-SDK credit — used to size the run.
 _AGENT_SDK_DATE = "2026-06-15"
 
 
@@ -42,7 +42,7 @@ class RunRecord:
 
 
 def cost_note(provider: str) -> str:
-    """A one-line budgeting note for the run's judgment provider (spec §11)."""
+    """A one-line budgeting note for the run's judgment provider."""
 
     if provider == "claude_code":
         return (

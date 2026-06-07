@@ -1,4 +1,4 @@
-"""Unit tests for abstain-when-blind (spec §08).
+"""Unit tests for abstain-when-blind.
 
 The synthesis seat refuses to call when it is blind: an unknown trend gate, too few valid factor
 states, or valid factors pointing to opposing extremes that cancel. An abstain makes no claim — the

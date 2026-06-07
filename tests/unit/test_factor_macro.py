@@ -1,4 +1,4 @@
-"""Unit tests for the macro / liquidity dial — one book-wide regime (spec §03)."""
+"""Unit tests for the macro / liquidity dial — one book-wide regime."""
 
 import pytest
 

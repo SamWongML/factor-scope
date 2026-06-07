@@ -1,4 +1,4 @@
-"""The mechanical next-day scorer (spec §06).
+"""The mechanical next-day scorer.
 
 Scoring a call is pure mechanics, never judgment: take the realised forward return over the call's
 horizon and compare its sign to the lean's stated direction → ``hit`` / ``miss`` / ``abstain``.

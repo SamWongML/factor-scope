@@ -1,4 +1,4 @@
-"""Unit tests for the nightly ops run log (spec §11).
+"""Unit tests for the nightly ops run log.
 
 Every nightly run appends one structured :class:`RunRecord` — start/end, per-list item counts,
 abstains, the judgment provider, how many calls were logged for tomorrow's scoring, and a cost

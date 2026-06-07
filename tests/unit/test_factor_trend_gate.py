@@ -1,6 +1,6 @@
-"""Unit tests for the 200-day trend gate (spec §03/§08) — the one hard cap.
+"""Unit tests for the 200-day trend gate — the one hard cap.
 
-Below the 200-day MA → ``capped`` (lean capped at Hold/Avoid in Phase 5; nothing may open it).
+Below the 200-day MA → ``capped`` (the lean is capped at Hold/Avoid; nothing may open it).
 Above → ``open``. Too little history → ``unknown`` (never raises).
 """
 

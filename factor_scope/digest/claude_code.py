@@ -1,4 +1,4 @@
-"""The real Claude Code (headless) digestion provider — opt-in, never called in CI (spec §08, D2).
+"""The real Claude Code (headless) digestion provider — opt-in, never called in CI.
 
 Judgment stays on Claude Code: a small **bull/bear** team (isolated contexts, consider-the-opposite)
 argues both sides, then a synthesis seat nets them. Each seat is a headless ``claude -p ...

@@ -1,4 +1,4 @@
-"""Self-scoring loop (L3, spec §06) — the judgment layer's durability mechanism.
+"""Self-scoring loop — the judgment layer's durability mechanism.
 
 Each lean is logged as a falsifiable :class:`~factor_scope.scoring.calls.Call`, scored next day by
 the mechanical :mod:`~factor_scope.scoring.scorer` (forward return vs stated direction), and rolled

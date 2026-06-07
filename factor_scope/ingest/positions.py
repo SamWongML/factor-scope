@@ -1,7 +1,7 @@
 """Positions adapter — the user's book (`positions.csv → {code, name, cost_basis, shares, list}`).
 
 This is the simplest point-in-time source and the seed of the three dashboard lists. No personal
-wealth-marketplace API exists (理财通/蚂蚁财富 expose none — spec §04), so the file *is* the source;
+wealth-marketplace API exists (理财通/蚂蚁财富 expose none), so the file *is* the source;
 the engine stamps it as known-as-of the run date and computes per-item gain from cost basis + NAV.
 """
 

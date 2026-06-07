@@ -1,4 +1,4 @@
-"""Unit tests for the emerging funnel's Stage A — qualify the *industry* (spec §07).
+"""Unit tests for the emerging funnel's Stage A — qualify the *industry*.
 
 Stage A is a sequence of hard gates over descriptive theme inputs (no fitted composite): signal
 strength (acceleration + breadth − crowding), durability (broad adoption + path to profit +
