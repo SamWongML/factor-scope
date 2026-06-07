@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS readings (
     key VARCHAR NOT NULL,
     as_of VARCHAR NOT NULL,
     fetched_at VARCHAR NOT NULL,
-    payload VARCHAR NOT NULL
+    payload VARCHAR NOT NULL,
+    PRIMARY KEY (series, key, as_of, fetched_at, payload)
 );
 """
 
@@ -90,8 +91,14 @@ class DuckDBStore:
         ]
         if not rows:
             return 0
-        self._con.executemany(f"INSERT INTO readings ({_COLS}) VALUES (?, ?, ?, ?, ?)", rows)
-        return len(rows)
+        # Idempotent append: a retried run re-stamps the same deterministic fetched_at, so an
+        # identical row is a no-op (provenance is part of the key — two sources for the same
+        # fund/day stay distinct). Return how many were actually new.
+        before = self.count()
+        self._con.executemany(
+            f"INSERT INTO readings ({_COLS}) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", rows
+        )
+        return self.count() - before
 
     def read_as_of(self, series: str, as_of: str) -> list[Reading]:
         query = f"""

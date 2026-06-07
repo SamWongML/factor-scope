@@ -113,6 +113,19 @@ def _build_items(store: PointInTimeStore, as_of: str) -> list[tuple[str, Dashboa
             evidence.append(
                 Evidence(src="akshare:fund_etf_hist", as_of=price.as_of, one_line=one_line)
             )
+            if "divergence" in price.payload:  # cross-source reconciliation flag — show, don't hide
+                peer = float(price.payload["divergence"])
+                source = str(price.payload.get("source", "primary"))
+                evidence.append(
+                    Evidence(
+                        src="prices:unreconciled",
+                        as_of=price.as_of,
+                        one_line=(
+                            f"NAV unreconciled across sources: {source} {nav:g} "
+                            f"vs peer {peer:g} — needs review"
+                        ),
+                    )
+                )
         ctx = FactorContext(code=pos.key, as_of=as_of, store=store)
         item = DashboardItem(
             item=str(pos.payload["name"]),

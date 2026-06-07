@@ -17,6 +17,7 @@ live = [
     "edgartools",
     "fredapi",
     "httpx",
+    "mootdx",
 ]
 store = [
     "duckdb>=0.10",
