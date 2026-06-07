@@ -2,9 +2,11 @@
 
 Judgment stays on Claude Code: a small **bull/bear** team (isolated contexts, consider-the-opposite)
 argues both sides, then a synthesis seat nets them. Each seat is a headless ``claude -p ...
---output-format json`` call carrying the structured brief and a side-specific system prompt (the
-bull/bear agents in ``.claude/agents/``); the model returns a small JSON object we parse into a
-:class:`~factor_scope.digest.provider.Case` / :class:`~factor_scope.digest.provider.Proposal`.
+--output-format json`` call carrying the structured brief and a side-specific system prompt loaded
+from the committed seat definition in ``.claude/agents/{bull,bear,synthesis}.md`` (the single source
+of truth — the committed agents are what actually drive the seats); the model returns a small JSON
+object we parse into a :class:`~factor_scope.digest.provider.Case` /
+:class:`~factor_scope.digest.provider.Proposal`.
 
 The hard guardrails (gate, abstain, scorecard) are still enforced by the orchestrator on top of
 whatever the model says — so even an overconfident model can never open the gate. ``subprocess`` and
@@ -14,26 +16,23 @@ module) never shells out and the fake-only CI path stays offline.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from factor_scope.contract import LeanAction
 from factor_scope.digest.provider import Case, DigestInput, Proposal, Side
 
-_BULL_SYSTEM = (
-    "You are the BULL seat. Argue ONLY the case to own/add this name, grounded strictly in the "
-    "factor states given. Do not invent numbers. Reply with JSON: "
-    '{"strength": <float ≥ 0>, "confidence": <0..1>, "points": [<short reasons>]}.'
-)
-_BEAR_SYSTEM = (
-    "You are the BEAR seat. Argue ONLY the case to trim/avoid/exit this name, grounded strictly in "
-    "the factor states given. Do not invent numbers. Reply with JSON: "
-    '{"strength": <float ≥ 0>, "confidence": <0..1>, "points": [<short reasons>]}.'
-)
-_SYNTH_SYSTEM = (
-    "You are the synthesis seat. Anchor a base rate, weigh the bull and bear cases, and emit one "
-    'lean. Reply with JSON: {"action": <buy_early|hold|trim|exit|avoid|abstain>, '
-    '"confidence": <0..1>, "rationale": [<short reasons>]}. Allocation over timing; abstain when '
-    "blind. The trend gate and scorecard guardrails are applied after you — do not try to evade "
-    "them."
-)
+# The seat system prompts live in the committed agent definitions, never inline here — one source of
+# truth (spec §08), so the prompts actually used and the committed agents can't drift apart.
+_AGENTS_DIR = Path(__file__).resolve().parents[2] / ".claude" / "agents"
+
+
+def _load_seat_prompt(name: str) -> str:
+    """Load a seat's system prompt from ``.claude/agents/{name}.md`` — the body past frontmatter."""
+
+    lines = (_AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8").splitlines()
+    if lines and lines[0].strip() == "---":  # strip the leading YAML frontmatter block
+        lines = lines[lines.index("---", 1) + 1 :]
+    return "\n".join(lines).strip()
 
 
 class ClaudeCodeProvider:
@@ -46,7 +45,7 @@ class ClaudeCodeProvider:
         self._timeout_s = timeout_s
 
     def argue(self, side: Side, brief: DigestInput) -> Case:
-        system = _BULL_SYSTEM if side is Side.BULL else _BEAR_SYSTEM
+        system = _load_seat_prompt("bull" if side is Side.BULL else "bear")
         data = self._complete(system, _brief_prompt(brief))
         return Case(
             side=side,
@@ -61,7 +60,7 @@ class ClaudeCodeProvider:
             f"{'; '.join(bull.points)}\nBEAR ({bear.strength:g}, conf {bear.confidence:g}): "
             f"{'; '.join(bear.points)}"
         )
-        data = self._complete(_SYNTH_SYSTEM, prompt)
+        data = self._complete(_load_seat_prompt("synthesis"), prompt)
         return Proposal(
             action=LeanAction(str(data.get("action", "abstain"))),
             confidence=_as_float(data.get("confidence")),

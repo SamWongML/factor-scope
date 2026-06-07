@@ -1,7 +1,9 @@
 """US lead-chain adapter (EDGAR 13F / N-PORT). `edgar.csv → {filer, as_of, holding, shares}`.
 
 The US-side holdings that feed the cross-market lead and the connection graph. Each ``(filer,
-holding)`` pair is its own point-in-time key. Live is EdgarTools — opt-in, never called in CI.
+holding)`` pair is its own point-in-time key. The fixture and live 13F carry ``shares`` (US lead);
+live N-PORT instead carries a ``weight`` so US fund/ETF holdings become look-through ``HOLDS`` edges
+(see ``fetch_live`` / ``build_graph_from_store``). Live is EdgarTools — opt-in, never called in CI.
 """
 
 from __future__ import annotations
@@ -39,27 +41,47 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def fetch_live(cik: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
-    """Pull a filer's latest 13F holdings via EdgarTools. Requires the `live` extra + network."""
+def fetch_live(
+    cik: str, *, form: str = "13F-HR", fetched_at: str
+) -> list[Reading]:  # pragma: no cover - opt-in
+    """Pull a filer's latest holdings via EdgarTools. Requires the `live` extra + network.
+
+    ``form="13F-HR"`` reads a 13F manager's quarterly share positions (the ``infotable``) into
+    ``{filer, holding, shares}`` — the US lead-chain, not a graph edge. ``"NPORT-P"`` reads a
+    fund/ETF's monthly portfolio (``investment_data``) keyed by security name into ``{filer,
+    holding, weight}`` (``pct_value`` → fraction of net assets), so US fund/ETF holdings become
+    look-through ``HOLDS`` edges alongside the CN funds (spec §04/§05).
+    """
 
     from edgar import Company
 
-    filing = Company(cik).get_filings(form="13F-HR").latest(1)
-    table = filing.obj().infotable
+    filing = Company(cik).get_filings(form=form).latest(1)
+    obj = filing.obj()
     as_of = str(filing.filing_date)
-    readings: list[Reading] = []
-    for _, row in table.iterrows():
-        readings.append(
+    if form == "13F-HR":
+        return [
             Reading(
                 series=SERIES,
-                key=f"{cik}/{row['Ticker']}",
+                key=f"{cik}/{holding}",
                 as_of=as_of,
                 fetched_at=fetched_at,
-                payload={
-                    "filer": cik,
-                    "holding": str(row["Ticker"]),
-                    "shares": float(row["Shares"]),
-                },
+                payload={"filer": cik, "holding": holding, "shares": shares},
             )
+            for holding, shares in (
+                (str(row["Ticker"]), float(row["SharesPrnAmount"]))
+                for _, row in obj.infotable.iterrows()
+            )
+        ]
+    return [  # NPORT-P — monthly fund/ETF portfolio, weighted for the look-through graph
+        Reading(
+            series=SERIES,
+            key=f"{cik}/{holding}",
+            as_of=as_of,
+            fetched_at=fetched_at,
+            payload={"filer": cik, "holding": holding, "weight": weight},
         )
-    return readings
+        for holding, weight in (
+            (str(row["name"]), float(row["pct_value"]) / 100.0)
+            for _, row in obj.investment_data().iterrows()
+        )
+    ]

@@ -113,6 +113,19 @@ def _build_items(store: PointInTimeStore, as_of: str) -> list[tuple[str, Dashboa
             evidence.append(
                 Evidence(src="akshare:fund_etf_hist", as_of=price.as_of, one_line=one_line)
             )
+            if "divergence" in price.payload:  # cross-source reconciliation flag — show, don't hide
+                peer = float(price.payload["divergence"])
+                source = str(price.payload.get("source", "primary"))
+                evidence.append(
+                    Evidence(
+                        src="prices:unreconciled",
+                        as_of=price.as_of,
+                        one_line=(
+                            f"NAV unreconciled across sources: {source} {nav:g} "
+                            f"vs peer {peer:g} — needs review"
+                        ),
+                    )
+                )
         ctx = FactorContext(code=pos.key, as_of=as_of, store=store)
         item = DashboardItem(
             item=str(pos.payload["name"]),
@@ -182,14 +195,15 @@ def _attach_scorecard(
 ) -> None:
     """Score the prior calls knowable tonight and attach the rolling mirror to each item.
 
-    One descriptive scorecard is built from *all* resolved calls — the book-wide calibration mirror
-    tomorrow's digest reads — and shared onto every item. It is read-only: it never touches an
-    item's states or gate (see ``test_guardrails``). With no calls logged, nothing is attached.
+    One descriptive scorecard is built from the resolved calls inside the rolling window — the
+    book-wide calibration mirror tomorrow's digest reads — and shared onto every item. It is
+    read-only: it never touches an item's states or gate (see ``test_guardrails``). With no calls
+    logged, nothing is attached.
     """
 
     if store.count("calls") == 0:
         return
-    scorecard = build_scorecard(score_calls(store, as_of))
+    scorecard = build_scorecard(score_calls(store, as_of), as_of)
     for _, item in pairs:
         item.scorecard = scorecard
 
@@ -230,6 +244,8 @@ def _attach_leans(
             gain=item.gain,
             scorecard=item.scorecard,
             prior_action=_prior_action(store, code, as_of),
+            evidence=tuple(item.evidence),
+            as_of=as_of,
         )
         result = digest_item(provider, brief)
         item.lean = Lean(action=result.action, confidence=result.confidence, text=result.text)
@@ -284,6 +300,7 @@ def _candidate_from_reading(reading: Reading) -> Candidate:
         aum=float(p["aum"]),
         tracking_error=float(p["tracking_error"]),
         top10_weight=float(p["top10_weight"]),
+        crowding=float(p["crowding"]),
         as_of=reading.as_of,
     )
 
@@ -306,7 +323,7 @@ def _stage_b_evidence(score: FundScore, rank: int, n_candidates: int) -> Evidenc
             f"rank #{rank}/{n_candidates} · score {score.total:.2f} · {c.theme} · "
             f"methodology {c.methodology:.2f} · fee {c.fee:.2%} · AUM {c.aum:g}亿 · "
             f"tracking {c.tracking_error:.1%} · top10 {c.top10_weight:.0%} · "
-            f"overlap-with-core {score.overlap:.1%}"
+            f"crowding {c.crowding:.0%} · overlap-with-core {score.overlap:.1%}"
         ),
     )
 

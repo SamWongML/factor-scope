@@ -1,7 +1,8 @@
 """Integration tests for the durable on-disk connection graph.
 
 Build → persist → reload → query, plus the point-in-time read and building the graph straight from
-the ``fund_holdings`` readings already in the point-in-time store.
+the weighted holdings readings already in the point-in-time store (CN ``fund_holdings`` + US N-PORT
+``edgar``; 13F share rows are skipped).
 """
 
 import pytest
@@ -76,5 +77,39 @@ def test_build_graph_from_store_reads_fund_holdings(tmp_path) -> None:
     assert n == 2
     holders = graph.funds_holding("中际旭创", "2026-12-31")
     assert sorted(e.fund for e in holders) == ["515880", "561010"]
+    graph.close()
+    store.close()
+
+
+def test_build_graph_includes_nport_edgar_but_not_13f(tmp_path) -> None:
+    # US N-PORT fund/ETF holdings carry a weight → graph edges; 13F manager positions carry
+    # only shares → not look-through edges (spec §04/§05).
+    store = DuckDBStore(":memory:")
+    store.append(
+        [
+            Reading(
+                series="edgar",
+                key="0000036405/APPLE INC",
+                as_of=Q1,
+                fetched_at="t",
+                payload={"filer": "0000036405", "holding": "APPLE INC", "weight": 0.071},
+            ),
+            Reading(
+                series="edgar",
+                key="0001067983/COHR",
+                as_of=Q1,
+                fetched_at="t",
+                payload={"filer": "0001067983", "holding": "COHR", "shares": 1_250_000.0},
+            ),
+        ]
+    )
+    graph = DuckDBGraphStore(tmp_path / "graph.duckdb")
+    n = build_graph_from_store(graph, store)
+    assert n == 1  # only the weighted N-PORT row became an edge
+    holders = graph.funds_holding("APPLE INC", "2026-12-31")
+    assert [e.fund for e in holders] == ["0000036405"]
+    assert holders[0].weight == pytest.approx(0.071)
+    assert holders[0].source == "edgar"
+    assert graph.funds_holding("COHR", "2026-12-31") == []  # 13F shares row is not an edge
     graph.close()
     store.close()

@@ -1,6 +1,7 @@
 """Theme-funds adapter — candidate funds for the emerging funnel's Stage B.
 
-`theme_funds.csv → {theme, code, name, as_of, methodology, fee, aum, tracking_error, top10_weight}`.
+`theme_funds.csv → {theme, code, name, as_of, methodology, fee, aum, tracking_error, top10_weight,
+crowding}`.
 Each row is one candidate CN fund/ETF for a theme, with the fixed-scorecard inputs; keyed by fund
 code and stamped with its research ``as_of``. The candidate's *holdings* are ingested through the
 ordinary ``fund_holdings`` feed, so the look-through can measure overlap-with-core without any
@@ -26,6 +27,7 @@ _REQUIRED = (
     "aum",
     "tracking_error",
     "top10_weight",
+    "crowding",
 )
 
 
@@ -50,6 +52,7 @@ def parse(text: str, *, fetched_at: str) -> list[Reading]:
                     "aum": as_float(row, "aum", line_no, SERIES),
                     "tracking_error": as_float(row, "tracking_error", line_no, SERIES),
                     "top10_weight": as_float(row, "top10_weight", line_no, SERIES),
+                    "crowding": as_float(row, "crowding", line_no, SERIES),
                 },
             )
         )

@@ -66,3 +66,26 @@ def test_count_and_empty_series() -> None:
     with DuckDBStore() as store:
         assert store.count() == 0
         assert store.read_as_of("prices", "2026-01-01") == []
+
+
+def test_append_is_idempotent_on_re_run() -> None:
+    # A retried nightly run re-appends the same readings (same fetched_at, derived from as_of).
+    # Append-only must not mean append-duplicates: an identical row is a no-op, not a second copy.
+    with DuckDBStore() as store:
+        batch = [_reading("X", "2026-01-01", 1.0), _reading("Y", "2026-01-01", 2.0)]
+        assert store.append(batch) == 2  # first run writes both
+        assert store.append(batch) == 0  # re-run writes nothing — already present
+        assert store.count("prices") == 2
+        assert [r.payload["nav"] for r in store.history("prices", "X")] == [1.0]  # no duplicate
+
+
+def test_append_keeps_rows_that_differ_only_by_source() -> None:
+    # Two sources reading the same fund/day are DISTINCT facts — provenance is part of the identity,
+    # so dedup must not collapse an AkShare row and a Baostock row for the same (key, as_of).
+    with DuckDBStore() as store:
+        akshare = Reading(series="prices", key="X", as_of="2026-01-01", fetched_at="t",
+                          payload={"nav": 1.0, "source": "akshare"})
+        baostock = akshare.model_copy(update={"payload": {"nav": 1.0, "source": "baostock"}})
+        assert store.append([akshare, baostock]) == 2
+        assert store.append([akshare, baostock]) == 0  # still idempotent on re-run
+        assert store.count("prices") == 2

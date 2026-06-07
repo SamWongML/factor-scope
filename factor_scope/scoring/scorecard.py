@@ -11,6 +11,7 @@ factor state, open the trend gate, or supply a number to the artifact (those are
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, timedelta
 
 from factor_scope.contract import ReliabilityBucket, Scorecard
 from factor_scope.scoring.scorer import Outcome, ScoredCall
@@ -22,6 +23,18 @@ DEFAULT_PATTERN_MIN_N = 3  # a state-pattern needs at least this many calls to b
 DEFAULT_TOL = 0.1  # confidence vs realised gap before we call it over/under-confident
 DEFAULT_NUDGE = 0.5  # how far confidence_nudge moves toward realised reliability
 DEFAULT_DAMPEN = 0.5  # how far a weak-pattern read pulls confidence toward zero
+
+
+def parse_window_days(window: str) -> int:
+    """Days in a rolling-window string like ``"60d"`` — the single source the filter trims by.
+
+    Parsing the same ``window`` that labels the scorecard means the displayed window and the applied
+    cutoff can never drift. Only the day unit is supported; anything else is a programming error.
+    """
+
+    if not window.endswith("d"):
+        raise ValueError(f"unsupported scorecard window: {window!r}")
+    return int(window[:-1])
 
 
 def brier(pairs: list[tuple[float, bool]]) -> float:
@@ -109,6 +122,7 @@ def weak_patterns(
 
 def build_scorecard(
     scored: list[ScoredCall],
+    as_of: str,
     *,
     window: str = DEFAULT_WINDOW,
     min_n: int = DEFAULT_MIN_N,
@@ -118,11 +132,15 @@ def build_scorecard(
 ) -> Scorecard:
     """Roll up scored calls into the descriptive :class:`~factor_scope.contract.Scorecard`.
 
-    Abstains make no claim and are excluded. Below ``min_n`` decided calls the block is gated: it
-    reports the sample size only, so a thin record cannot mislead tomorrow's digest.
+    The window is *rolling*: calls made before ``as_of - window`` are trimmed first, so an old
+    regime can't rule a new one (spec §06). The cutoff is parsed from the same ``window`` that
+    labels the result, so the two can't drift. Abstains make no claim and are excluded. Below
+    ``min_n`` decided calls the block is gated: it reports the sample size only and nothing more.
     """
 
-    decided = [sc for sc in scored if sc.outcome in (Outcome.HIT, Outcome.MISS)]
+    cutoff = (date.fromisoformat(as_of) - timedelta(days=parse_window_days(window))).isoformat()
+    in_window = [sc for sc in scored if sc.call.as_of >= cutoff]
+    decided = [sc for sc in in_window if sc.outcome in (Outcome.HIT, Outcome.MISS)]
     n = len(decided)
     if n < min_n:
         return Scorecard(window=window, n=n)

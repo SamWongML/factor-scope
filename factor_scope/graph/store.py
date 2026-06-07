@@ -124,11 +124,13 @@ class DuckDBGraphStore:
 
 
 def build_graph_from_store(graph: GraphStore, store: PointInTimeStore) -> int:
-    """Materialise the HOLDS graph straight from the ``fund_holdings`` readings (no LLM).
+    """Materialise the HOLDS graph from the weighted holdings readings (no LLM).
 
     Reads the *full* append-only history (every quarter's disclosure) so the graph keeps its own
-    point-in-time read at query time — an earlier snapshot never sees a later disclosure. Returns
-    the number of edges added.
+    point-in-time read at query time — an earlier snapshot never sees a later disclosure. Both feeds
+    of weighted fund/ETF holdings become edges: CN ``fund_holdings`` and US N-PORT ``edgar`` rows
+    (which carry a ``weight``); 13F manager positions carry ``shares`` not a weight and are skipped.
+    Returns the number of edges added.
     """
 
     edges = [
@@ -140,5 +142,16 @@ def build_graph_from_store(graph: GraphStore, store: PointInTimeStore) -> int:
             source="fund_holdings",
         )
         for r in store.history("fund_holdings")
+    ]
+    edges += [
+        Edge(
+            fund=str(r.payload["filer"]),
+            security=str(r.payload["holding"]),
+            weight=float(r.payload["weight"]),
+            as_of=r.as_of,
+            source="edgar",
+        )
+        for r in store.history("edgar")
+        if "weight" in r.payload  # N-PORT fund/ETF holdings; 13F (shares-only) is not a graph edge
     ]
     return graph.add_edges(edges)

@@ -29,6 +29,13 @@ class Config:
     # Where the durable connection graph lives. None → an ephemeral in-memory graph built from the
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None
+    # US fund/ETF CIKs whose monthly N-PORT holdings the ``--live`` path pulls from EDGAR to feed
+    # the look-through graph (spec §04/§05). Empty by default — the fixtures path never reads it.
+    edgar_ciks: tuple[str, ...] = ()
+    # Relative band within which the two CN price sources (AkShare/Baostock) corroborate. Defaults
+    # to the SEC/CSSF NAV-error materiality baseline (0.5%); raise it per equity ETFs, lower it for
+    # money-market funds. A same-day gap beyond it flags the reading (never kills the run).
+    corroboration_tolerance: float = 0.005
     # Digestion judgment provider: "fake" (default, offline) | "claude_code". DeepSeek is a chore
     # model (off the judgment path), not a judgment provider — see digest.get_provider.
     provider: str = "fake"
