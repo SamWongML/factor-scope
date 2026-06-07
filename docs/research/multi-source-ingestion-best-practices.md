@@ -92,7 +92,7 @@ algorithmic refinement.
   each adapter's live read, so a transient blip or a hung socket doesn't waste the run or hang it. (P1)
 - **Skip** formal circuit breakers / hedging — over-engineering at this scale. Track a simple per-source
   health outcome in the run log instead. (P2)
-- When Mootdx lands (#21), you'll have **3 sources** → you can move from "primary + corroborator" to a
+- When Mootdx lands, you'll have **3 sources** → you can move from "primary + corroborator" to a
   **2-of-3 median/vote**, which is strictly more robust (see Area 2).
 
 ---
@@ -248,7 +248,7 @@ algorithmic refinement.
 8. **Retry with exponential backoff + full jitter** and per-source **timeout** in each live read.
 
 **P2 — when scale/sources grow**
-9. With **Mootdx (#21)** → **median-of-3 + MAD outlier flag** instead of primary/corroborator.
+9. With **Mootdx** → **median-of-3 + MAD outlier flag** instead of primary/corroborator.
 10. **Idempotent re-runs**: dedup key `(series, key, as_of, fetched_at, source)`.
 
 ---

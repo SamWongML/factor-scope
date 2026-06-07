@@ -30,7 +30,7 @@ class Config:
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None
     # US fund/ETF CIKs whose monthly N-PORT holdings the ``--live`` path pulls from EDGAR to feed
-    # the look-through graph (spec §04/§05). Empty by default — the fixtures path never reads it.
+    # the look-through graph. Empty by default — the fixtures path never reads it.
     edgar_ciks: tuple[str, ...] = ()
     # Relative band within which the two CN price sources (AkShare/Baostock) corroborate. Defaults
     # to the SEC/CSSF NAV-error materiality baseline (0.5%); raise it per equity ETFs, lower it for

@@ -3,7 +3,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://docs.python.org/3/)
 [![uv](https://img.shields.io/badge/package_manager-uv-orange)](https://github.com/astral-sh/uv)
 
-**Wealth-Assistant Engine** — a local-first, nightly-batch decision-support tool for an A-share / funds-and-ETFs portfolio. Each run writes one dated artifact, `out/dashboard.json`, reviewed each morning.
+**factor-scope** is a local-first, nightly-batch decision-support tool for an A-share / funds-and-ETFs portfolio. Each run writes one dated artifact, `out/dashboard.json`, reviewed each morning.
 
 > It never places orders. You remain the only thing that clicks buy.
 > Not financial advice. Educational research tooling.

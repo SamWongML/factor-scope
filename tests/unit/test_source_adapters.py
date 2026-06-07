@@ -194,7 +194,7 @@ def test_baostock_fetch_live_returns_latest_nav(monkeypatch) -> None:
     assert readings[0].series == "prices"  # a second source for the same prices series
     assert readings[0].key == "561010"
     assert readings[0].as_of == "2026-06-05"  # the latest disclosed bar, not the run date
-    # provenance: every price reading records which source it came from (§ lineage)
+    # provenance: every price reading records which source it came from
     assert readings[0].payload == {"nav": 1.92, "source": "baostock"}
 
 

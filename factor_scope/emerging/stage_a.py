@@ -14,8 +14,8 @@ A theme advances only if it clears *all four* gates, in order:
    narrative alone?
 4. **Investable wrapper** — is there a fund/ETF to express it? If not, it is a watch-only idea.
 
-The cut-points are constants chosen for economic meaning, never tuned to returns (principle #1,
-mirroring the band thresholds). The first failing gate is reported so every stop is auditable.
+The cut-points are constants chosen for economic meaning, never tuned to returns — they mirror
+the band thresholds. The first failing gate is reported so every stop is auditable.
 """
 
 from __future__ import annotations

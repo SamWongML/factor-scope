@@ -39,7 +39,7 @@ class DigestInput:
     The scorecard is the book-wide self-scoring mirror; ``prior_action`` is the most recent prior
     lean on this code (used only to phrase the evolution line). ``evidence`` is the dated, sourced
     reads behind the item and ``as_of`` is the point-in-time date they are judged against — the
-    inputs the evidence-quality auto-downgrade reasons over (spec §08). All of it is descriptive.
+    inputs the evidence-quality auto-downgrade reasons over. All of it is descriptive.
     """
 
     code: str

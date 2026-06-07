@@ -133,7 +133,7 @@ def build_scorecard(
     """Roll up scored calls into the descriptive :class:`~factor_scope.contract.Scorecard`.
 
     The window is *rolling*: calls made before ``as_of - window`` are trimmed first, so an old
-    regime can't rule a new one (spec §06). The cutoff is parsed from the same ``window`` that
+    regime can't rule a new one. The cutoff is parsed from the same ``window`` that
     labels the result, so the two can't drift. Abstains make no claim and are excluded. Below
     ``min_n`` decided calls the block is gated: it reports the sample size only and nothing more.
     """

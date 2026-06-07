@@ -19,7 +19,7 @@ The criteria:
 Each criterion is mapped to a sub-score in ``[0, 1]`` (higher = better) against a constant ref,
 then combined with **fixed economic-priority weights** (methodology and overlap are the decisive
 pair). These weights are deliberate constants — never tuned to returns — so this is a transparent
-*screening* scorecard, not a fitted composite of the judgment factors (principle #1).
+*screening* scorecard, not a fitted composite of the judgment factors.
 """
 
 from __future__ import annotations

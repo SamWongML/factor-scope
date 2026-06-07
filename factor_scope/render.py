@@ -90,7 +90,7 @@ def render(dash: Dashboard) -> str:
     """Return the morning artifact as plain text."""
 
     lines: list[str] = []
-    lines.append("◆ WEALTH-ASSISTANT ENGINE — morning artifact")
+    lines.append("◆ FACTOR-SCOPE — morning artifact")
     lines.append(f"  as_of: {dash.as_of}   generated_at: {dash.generated_at}")
     lines.append(f"  items: {len(dash.items)}   (schema v{dash.schema_version})")
     lines.append("")

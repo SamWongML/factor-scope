@@ -51,7 +51,7 @@ Export the JSON schema with `factor-scope schema` (or `dashboard_json_schema()`)
   cut-points. Economic meaning, never tuned to P&L: that is "states, not a composite".
 - `window` — point-in-time series helpers over the store (`history` filtered to `as_of <= D`):
   `price_navs`/`fred_values`, horizon returns, rolling realised vol, drawdown, the 200-day MA.
-- `battery` — the 8 states as pure `(FactorContext) -> FactorState` functions in spec order, plus
+- `battery` — the 8 states as pure `(FactorContext) -> FactorState` functions, plus
   `compute_gate`. Each ranks one reading against its **own** history → a `Band` + a risk `direction`
   + dated `evidence` + a `valid` flag; a stale/short/missing input → `valid=False` (never raises,
   never dropped). Data-backed today: trend gate, reversal, low-vol/drawdown, the macro dial; the

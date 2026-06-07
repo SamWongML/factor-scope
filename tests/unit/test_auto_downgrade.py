@@ -1,6 +1,6 @@
-"""Unit tests for the evidence-quality auto-downgrade (spec §08).
+"""Unit tests for the evidence-quality auto-downgrade.
 
-§08 mandates evidence-grounded reasoning with an *auto-downgrade* on low-quality evidence:
+Evidence-grounded reasoning calls for an *auto-downgrade* on low-quality evidence:
 stale, single-source, conflicting, or forum-only. The downgrade is a deterministic, pure
 function of the brief — it may only *lower* the stated confidence, and it can never change the
 action, a factor state, or the trend gate. These tests pin one condition at a time.

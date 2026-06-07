@@ -1,4 +1,4 @@
-"""Surfacing the cross-source price divergence flag into the dashboard item (spec §02 evidence).
+"""Surfacing the cross-source price divergence flag into the dashboard item.
 
 When the live reconciliation can't agree two same-day NAVs, it keeps the value but tags the reading
 ``payload["divergence"]`` (P0/P1). The morning artifact must *show* that — tag-and-keep, not

@@ -83,7 +83,7 @@ def test_build_graph_from_store_reads_fund_holdings(tmp_path) -> None:
 
 def test_build_graph_includes_nport_edgar_but_not_13f(tmp_path) -> None:
     # US N-PORT fund/ETF holdings carry a weight → graph edges; 13F manager positions carry
-    # only shares → not look-through edges (spec §04/§05).
+    # only shares → not look-through edges (a 13F position has no weight to attribute).
     store = DuckDBStore(":memory:")
     store.append(
         [
