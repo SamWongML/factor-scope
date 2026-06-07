@@ -1,9 +1,9 @@
-"""Theme-funds adapter — candidate funds for the emerging funnel's Stage B (spec §07).
+"""Theme-funds adapter — candidate funds for the emerging funnel's Stage B.
 
 `theme_funds.csv → {theme, code, name, as_of, methodology, fee, aum, tracking_error, top10_weight}`.
 Each row is one candidate CN fund/ETF for a theme, with the fixed-scorecard inputs; keyed by fund
 code and stamped with its research ``as_of``. The candidate's *holdings* are ingested through the
-ordinary ``fund_holdings`` feed, so the §05 look-through can measure overlap-with-core without any
+ordinary ``fund_holdings`` feed, so the look-through can measure overlap-with-core without any
 new graph logic. Live is AkShare's theme-fund universe — opt-in, never called in CI.
 """
 

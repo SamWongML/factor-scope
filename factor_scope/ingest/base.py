@@ -1,4 +1,4 @@
-"""Shared helpers for the ingestion adapters (L1).
+"""Shared helpers for the ingestion adapters.
 
 Each adapter turns one source into stamped :class:`~factor_scope.store.Reading` rows. Every adapter
 has a **fixture backend** (``load_fixture``, the default, offline + deterministic) and an opt-in

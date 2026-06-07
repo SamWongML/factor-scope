@@ -1,4 +1,4 @@
-"""Integration tests for the point-in-time store: append-only + as-of reads (spec §09)."""
+"""Integration tests for the point-in-time store: append-only + as-of reads."""
 
 import pytest
 

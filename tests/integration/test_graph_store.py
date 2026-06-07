@@ -1,4 +1,4 @@
-"""Integration tests for the durable on-disk connection graph (spec §05 / D8).
+"""Integration tests for the durable on-disk connection graph.
 
 Build → persist → reload → query, plus the point-in-time read and building the graph straight from
 the ``fund_holdings`` readings already in the point-in-time store.

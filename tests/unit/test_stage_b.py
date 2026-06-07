@@ -1,8 +1,8 @@
-"""Unit tests for the emerging funnel's Stage B — screen the theme's funds to a top 3 (spec §07).
+"""Unit tests for the emerging funnel's Stage B — screen the theme's funds to a top 3.
 
 Stage B scores each candidate fund on a *fixed* scorecard (the same criteria every time, with
 constant economic weights — never tuned to returns) and ranks them. Overlap-with-core reuses the
-Phase-3 §05 look-through: a candidate that just repeats names my book already holds is a leveraged
+look-through: a candidate that just repeats names my book already holds is a leveraged
 repeat, not diversification, so high overlap shrinks its score and can drop it out of the top 3.
 """
 

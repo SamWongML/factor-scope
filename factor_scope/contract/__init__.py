@@ -1,9 +1,10 @@
 """The dashboard.json contract — the single artifact every layer reads and writes.
 
-Mirrors the schema in the spec (§02 dashboard model + §06 self-scoring). Every field a later
-phase produces already has a home here, so layers can be built and swapped against one stable
-contract. Defaults are chosen so an *under-construction* item (no states/leans/connections yet)
-is still valid — that is what keeps the entrypoint runnable at every phase boundary.
+Mirrors the dashboard's data model and the self-scoring mirror it carries. Every field the
+engine can eventually produce already has a home here, so each stage can be built and swapped
+against one stable contract. Defaults are chosen so an *under-construction* item (no
+states/leans/connections yet) is still valid — that is what keeps the entrypoint runnable at
+any point in the engine's build-out.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ class ListName(StrEnum):
 class Band(StrEnum):
     """Logic-based bands a factor reading is ranked into against its *own* history.
 
-    Cut-points are constants chosen for economic meaning, never tuned to returns (spec §03).
+    Cut-points are constants chosen for economic meaning, never tuned to returns.
     """
 
     EXTREME_LOW = "extreme_low"
@@ -36,11 +37,11 @@ class Band(StrEnum):
 
 
 class GateState(StrEnum):
-    """The 200-day trend gate — a hard rule (spec §03/§08)."""
+    """The 200-day trend gate — a hard rule."""
 
     OPEN = "open"  # above the 200-day MA: judgment may lean as the states justify
     CAPPED = "capped"  # below the 200-day MA: lean capped at Hold/Avoid, no exceptions
-    UNKNOWN = "unknown"  # not yet computed (pre-Phase-2)
+    UNKNOWN = "unknown"  # not yet computed for this item
 
 
 class LeanAction(StrEnum):
@@ -51,11 +52,11 @@ class LeanAction(StrEnum):
     TRIM = "trim"
     EXIT = "exit"
     AVOID = "avoid"
-    ABSTAIN = "abstain"  # too blind to call (spec §08 abstain-when-blind)
+    ABSTAIN = "abstain"  # too blind to call — abstain rather than guess
 
 
 class FactorState(BaseModel):
-    """A single descriptive factor *state* — never a fitted score (spec §03)."""
+    """A single descriptive factor *state* — never a fitted score."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -67,7 +68,7 @@ class FactorState(BaseModel):
 
 
 class Connection(BaseModel):
-    """A holdings overlap surfaced by the deterministic look-through (spec §05)."""
+    """A holdings overlap surfaced by the deterministic look-through."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -77,7 +78,7 @@ class Connection(BaseModel):
 
 
 class Lean(BaseModel):
-    """The calibrated lean a human will size, with its confidence (spec §02/§08)."""
+    """The calibrated lean a human will size, with its confidence."""
 
     action: LeanAction
     confidence: float = Field(ge=0.0, le=1.0)
@@ -85,7 +86,7 @@ class Lean(BaseModel):
 
 
 class ReliabilityBucket(BaseModel):
-    """One row of the reliability-by-confidence table (spec §06)."""
+    """One row of the reliability-by-confidence table."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -95,7 +96,7 @@ class ReliabilityBucket(BaseModel):
 
 
 class Scorecard(BaseModel):
-    """The rolling, descriptive self-scoring mirror (spec §06).
+    """The rolling, descriptive self-scoring mirror.
 
     It may widen or narrow stated confidence; it can never change a state, open the gate, or
     supply a number. Display is gated on a minimum sample so noise cannot mislead.
@@ -110,7 +111,7 @@ class Scorecard(BaseModel):
 
 
 class Evidence(BaseModel):
-    """A dated, sourced evidence slot — fetch-don't-recall (spec §04/§08)."""
+    """A dated, sourced evidence slot — fetch, don't recall."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -120,9 +121,9 @@ class Evidence(BaseModel):
 
 
 class DashboardItem(BaseModel):
-    """One object per item on a list (spec §02).
+    """One object per item on a list.
 
-    The JSON key is ``list`` (matching the spec); the Python attribute is ``list_name`` to avoid
+    The JSON key is ``list``; the Python attribute is ``list_name`` to avoid
     shadowing the builtin. Both names are accepted on input.
     """
 
@@ -130,7 +131,7 @@ class DashboardItem(BaseModel):
 
     item: str
     list_name: ListName = Field(alias="list")
-    gain: float | None = None  # per-item return vs cost basis (cost vs current NAV; spec §04)
+    gain: float | None = None  # per-item return vs cost basis (cost vs current NAV)
     states: list[FactorState] = Field(default_factory=list)
     lean: Lean | None = None
     evolution: str | None = None  # e.g. "Hold→Trim (2 nights)"
@@ -144,7 +145,7 @@ class DashboardItem(BaseModel):
 
 
 class Dashboard(BaseModel):
-    """The dated morning artifact: one run → one dashboard.json (spec §02/§11)."""
+    """The dated morning artifact: one run → one dashboard.json."""
 
     schema_version: int = 1
     as_of: str  # the as-of date the engine reasoned on (point-in-time)

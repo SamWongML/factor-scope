@@ -1,4 +1,4 @@
-"""Unit tests for the fixture parsers of the remaining L1 adapters."""
+"""Unit tests for the fixture parsers of the remaining ingestion adapters."""
 
 import pytest
 

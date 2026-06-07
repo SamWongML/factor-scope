@@ -29,12 +29,12 @@ The engine runs six layers, each adding to a single artifact without replacing p
 
 | Layer | Module | What it does |
 |-------|--------|--------------|
-| L1 Ingest | `ingest/` | Pull CN prices/holdings + US FRED/EDGAR + `positions.csv` |
-| L2 Store | `store/` | Append every reading into a point-in-time DuckDB log |
-| L3 Factors | `factors/` | Compute 8 descriptive factor states + the 200-day trend gate |
-| L4 Graph | `graph/` | Build the holdings graph; deterministic fund look-through |
-| L5 Digest | `digest/` | Bull/bear debate → calibrated lean (fake \| claude_code) |
-| L6 Scoring | `scoring/` | Rolling Brier scorecard — self-scoring mirror |
+| Ingest | `ingest/` | Pull CN prices/holdings + US FRED/EDGAR + `positions.csv` |
+| Store | `store/` | Append every reading into a point-in-time DuckDB log |
+| Factors | `factors/` | Compute 8 descriptive factor states + the 200-day trend gate |
+| Graph | `graph/` | Build the holdings graph; deterministic fund look-through |
+| Digest | `digest/` | Bull/bear debate → calibrated lean (fake \| claude_code) |
+| Scoring | `scoring/` | Rolling Brier scorecard — self-scoring mirror |
 | +Emerging | `emerging/` | Stage-A screen → Stage-B top-3 to watch |
 
 Data flow: `cli.run` → `Config` → `pipeline.run` → `dashboard.json` → terminal render.
@@ -114,6 +114,6 @@ make system     # end-to-end entrypoint smoke test
 make check      # lint (ruff) + typecheck (mypy strict) + full suite — the gate
 ```
 
-Tests are marked `unit` / `integration` / `system` (see `pyproject.toml`). Work test-first: RED → GREEN → REFACTOR. The entrypoint must stay runnable at every phase boundary.
+Tests are marked `unit` / `integration` / `system` (see `pyproject.toml`). Work test-first: RED → GREEN → REFACTOR. The entrypoint must always stay runnable.
 
 Architecture + contract: `docs/ARCHITECTURE.md`. Full spec: `docs/spec/SPEC.md`. Agent instructions: `CLAUDE.md`.

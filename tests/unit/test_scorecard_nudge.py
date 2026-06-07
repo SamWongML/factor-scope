@@ -1,4 +1,4 @@
-"""Unit tests for the scorecard's confidence channel into the digest (spec §06/§08).
+"""Unit tests for the scorecard's confidence channel into the digest.
 
 The self-scoring mirror's *only* influence on tomorrow's lean is the confidence number: it pulls a
 stated confidence toward the bucket's realised reliability and dampens it on a state-pattern it has

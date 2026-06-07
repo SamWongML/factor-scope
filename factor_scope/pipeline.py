@@ -1,11 +1,11 @@
 """The nightly pipeline — orchestrates the layers into one ``dashboard.json``.
 
-Phase 1 wires the point-in-time store between ingestion and the artifact: ``ingest`` fills the
+This module wires the point-in-time store between ingestion and the artifact: ``ingest`` fills the
 store and ``build_dashboard`` reads it (point-in-time, as of the run date) to produce the three
 lists with real ``evidence[]`` and a per-item ``gain`` (cost basis vs current NAV). So the
 entrypoint keeps working standalone, a fixtures ``run`` against an empty store auto-ingests first.
-Later phases enrich each item in place — states + gate (P2), connections (P3), scorecard (P4), the
-lean (P5), the emerging list (P6) — without changing this entrypoint's contract.
+Each item is then enriched in place — states and gate, look-through connections, the scorecard,
+a calibrated lean, and the emerging list — without changing this entrypoint's contract.
 """
 
 from __future__ import annotations
@@ -180,7 +180,7 @@ def _attach_connections(
 def _attach_scorecard(
     pairs: list[tuple[str, DashboardItem]], store: PointInTimeStore, as_of: str
 ) -> None:
-    """Score the prior calls knowable tonight and attach the rolling mirror to each item (spec §06).
+    """Score the prior calls knowable tonight and attach the rolling mirror to each item.
 
     One descriptive scorecard is built from *all* resolved calls — the book-wide calibration mirror
     tomorrow's digest reads — and shared onto every item. It is read-only: it never touches an
@@ -206,7 +206,7 @@ def _prior_action(store: PointInTimeStore, code: str, as_of: str) -> LeanAction 
 def _attach_leans(
     pairs: list[tuple[str, DashboardItem]], store: PointInTimeStore, as_of: str, provider_name: str
 ) -> None:
-    """Digest each item into a calibrated lean, then log it as a falsifiable call (spec §08/§06).
+    """Digest each item into a calibrated lean, then log it as a falsifiable call.
 
     The bull/bear→synthesis runs on the selected provider (the deterministic ``fake`` by default);
     the orchestrator enforces the gate, abstain, and scorecard guardrails. Each emitted lean is
@@ -314,7 +314,7 @@ def _stage_b_evidence(score: FundScore, rank: int, n_candidates: int) -> Evidenc
 def _emerging_connections(
     score: FundScore, graph: GraphStore, as_of: str, book: list[Holding]
 ) -> list[Connection]:
-    """Surface the candidate's overlap with my core as §05 connections (the leveraged repeat)."""
+    """Surface the candidate's overlap with my core as connections (the leveraged repeat)."""
 
     names = {h.code: h.name for h in book}
     connections: list[Connection] = []
@@ -333,10 +333,10 @@ def _emerging_connections(
 def _build_emerging(
     store: PointInTimeStore, graph: GraphStore, as_of: str, book: list[Holding]
 ) -> list[tuple[str, DashboardItem]]:
-    """Run the two-stage funnel → the ``emerging`` list (top-3 funds per cleared theme, spec §07).
+    """Run the two-stage funnel → the ``emerging`` list (top-3 funds per cleared theme).
 
     Stage A qualifies each industry; Stage B screens a cleared theme's candidate funds on the fixed
-    scorecard (overlap-with-core via the §05 look-through) to a ranked top 3. Each surviving fund
+    scorecard (overlap-with-core via the look-through) to a ranked top 3. Each surviving fund
     becomes an emerging item carrying its factor states/gate (where price history exists), the
     Stage-A/Stage-B one-page comparison as evidence, and its overlap as connections. The digest
     then leans over the shortlist (in ``_attach_leans``) and promotes at most one.
@@ -388,7 +388,7 @@ def build_dashboard(config: Config) -> Dashboard:
         book = _build_book(store, as_of)
         core_pairs = _build_items(store, as_of)
         _attach_connections(core_pairs, graph, book, as_of)
-        # The emerging list is the funnel's output (spec §07), not a hand-placed position; it owns
+        # The emerging list is the funnel's output, not a hand-placed position; it owns
         # its own overlap-with-core connections, so it is built after the core look-through.
         emerging_pairs = _build_emerging(store, graph, as_of, book)
         pairs = core_pairs + emerging_pairs
@@ -430,7 +430,7 @@ def _count_calls_logged(config: Config, as_of: str) -> int:
 def _night_already_ingested(config: Config, as_of: str) -> bool:
     """True once tonight's positions are in the durable store — so re-runs don't re-ingest.
 
-    Positions are stamped with the run's ``as_of`` (D7), so this is per-night: re-running the same
+    Positions are stamped with the run's ``as_of``, so this is per-night: re-running the same
     night is a no-op (keeps the artifact byte-for-byte and never double-counts calls in the
     audit-trail scorer), while a new night still ingests fresh data.
     """
@@ -445,7 +445,7 @@ def _night_already_ingested(config: Config, as_of: str) -> bool:
 def nightly(
     config: Config, *, clock: Callable[[], str] = _utc_now_iso
 ) -> tuple[Dashboard, RunRecord]:
-    """The one-shot nightly job (spec §11): ingest → compute → digest → artifact → run log.
+    """The one-shot nightly job: ingest → compute → digest → artifact → run log.
 
     Runs the full pipeline against a *durable* store so the leans it emits persist as falsifiable
     calls — tomorrow's self-scoring loop scores them. Appends one structured :class:`RunRecord` to

@@ -1,4 +1,4 @@
-"""Unit tests for the scorecard math: Brier score + Brier skill score (spec §06).
+"""Unit tests for the scorecard math: Brier score + Brier skill score.
 
 Hand-computed cases: a perfect forecaster scores 0, the worst scores 1, and the skill score is
 measured against the base-rate forecaster (predict the overall hit-rate every time).

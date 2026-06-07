@@ -1,8 +1,8 @@
 """The single, stable CLI entrypoint (`factor-scope`).
 
 `run` is the load-bearing command: it builds the morning artifact and prints it. Its contract
-(emit a schema-valid ``dashboard.json`` + a terminal render) holds at every phase boundary;
-later phases only enrich what fills the artifact.
+(emit a schema-valid ``dashboard.json`` + a terminal render) always holds; deeper analysis
+only enriches what fills the artifact, never the shape of the contract.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def run(
     fixtures: bool = typer.Option(
         True,
         "--fixtures/--live",
-        help="Use bundled sample data (default) or opt in to live sources (Phase 1+).",
+        help="Use bundled sample data (default) or opt in to live sources.",
     ),
     fixtures_dir: Path = typer.Option(
         DEFAULT_FIXTURES_DIR, help="Directory holding the committed sample data."
@@ -143,7 +143,7 @@ def nightly(
 ) -> None:
     """Run the one-shot nightly job: ingest → compute → digest → artifact, run log, persisted calls.
 
-    This is the production entrypoint (spec §11): unlike ``run``, it defaults to a *durable* store
+    This is the production entrypoint: unlike ``run``, it defaults to a *durable* store
     so each night's leans accumulate as falsifiable calls, and it appends a structured ops record
     to the run log. Schedule it with ``factor-scope schedule`` (launchd on macOS, cron on Linux).
     """
@@ -194,7 +194,7 @@ def schedule(
 ) -> None:
     """Emit the scheduler config for the nightly job — a launchd plist (default) or a cron line.
 
-    Pure render (spec §11, D4): install the plist under ``~/Library/LaunchAgents`` and
+    Pure render: install the plist under ``~/Library/LaunchAgents`` and
     ``launchctl load`` it, or add the cron line to your crontab. See ``docs/ops/RUNBOOK.md``.
     """
 

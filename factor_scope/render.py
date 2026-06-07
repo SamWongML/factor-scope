@@ -1,8 +1,8 @@
-"""Render a :class:`~factor_scope.contract.Dashboard` to a readable terminal summary (L6).
+"""Render a :class:`~factor_scope.contract.Dashboard` to a readable terminal summary.
 
 This is the human review surface: ``factor-scope run`` prints it so the current state of the
-engine is reviewable at every phase. It degrades gracefully — fields not yet produced by the
-current phase simply read as "—".
+engine is reviewable at a glance. It degrades gracefully — fields the engine has not yet
+produced simply read as "—".
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _item_line(item: DashboardItem) -> str:
 
 
 def _scorecard_lines(card: Scorecard) -> list[str]:
-    """The self-scoring mirror (spec §06): how the last leans resolved. Descriptive only."""
+    """The self-scoring mirror: how the last leans resolved. Descriptive only."""
 
     head = f"  SELF-SCORING MIRROR  —  n={card.n} resolved calls ({card.window})"
     if card.brier is None:  # gated: too thin a record to read

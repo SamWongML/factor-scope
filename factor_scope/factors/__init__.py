@@ -1,4 +1,4 @@
-"""Factor states + the trend gate (L3 core, spec §03).
+"""Factor states + the trend gate.
 
 Each raw input becomes a descriptive *state* — a band vs its own history, a ``direction``, and a
 ``valid`` flag — never a fitted weight and never a composite. The public surface is the battery

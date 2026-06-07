@@ -1,4 +1,4 @@
-"""The battery as a whole: 8 states per item, missing inputs degrade to valid=False (spec §03).
+"""The battery as a whole: 8 states per item, missing inputs degrade to valid=False.
 
 The contract is "a handful is enough; a failed/stale factor → valid:false and is ignored". The
 data-backed states (trend gate, reversal, low-vol, macro) compute from the store; the ones whose

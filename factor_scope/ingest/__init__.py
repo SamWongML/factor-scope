@@ -1,4 +1,4 @@
-"""Ingestion (L1) — the adapters that fill the point-in-time store.
+"""Ingestion — the adapters that fill the point-in-time store.
 
 ``gather_fixture_readings`` runs every adapter's offline fixture backend (the default, deterministic
 path used by tests and ``--fixtures``). ``gather_live_readings`` is the opt-in ``--live`` path: it
@@ -37,10 +37,10 @@ def gather_fixture_readings(config: Config, *, as_of: str) -> list[Reading]:
     readings += fred.load_fixture(root / fred.FIXTURE, fetched_at=fetched_at)
     readings += edgar.load_fixture(root / edgar.FIXTURE, fetched_at=fetched_at)
     calls_fixture = root / calls.FIXTURE
-    if calls_fixture.exists():  # prior falsifiable leans for the self-scoring loop (spec §06)
+    if calls_fixture.exists():  # prior falsifiable leans for the self-scoring loop
         readings += calls.load_fixture(calls_fixture, fetched_at=fetched_at)
     themes_fixture = root / themes.FIXTURE
-    if themes_fixture.exists():  # candidate industries for the emerging funnel (spec §07)
+    if themes_fixture.exists():  # candidate industries for the emerging funnel
         readings += themes.load_fixture(themes_fixture, fetched_at=fetched_at)
     theme_funds_fixture = root / theme_funds.FIXTURE
     if theme_funds_fixture.exists():  # candidate funds the funnel screens to a top 3

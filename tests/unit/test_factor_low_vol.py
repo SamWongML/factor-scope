@@ -1,4 +1,4 @@
-"""Unit tests for the low-vol / drawdown regime state (spec §03)."""
+"""Unit tests for the low-vol / drawdown regime state."""
 
 import pytest
 

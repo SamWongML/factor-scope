@@ -3,7 +3,7 @@
 A :class:`ScheduleSpec` captures *what* to run, *when*, *where*, and *where its output goes*. Both
 renderers are pure functions of that spec — no platform calls, no wall-clock — so the scheduled job
 is deterministic and reviewable before it is installed. The launchd plist is the documented
-Mac-mini production path (D4); cron is the Linux alternative.
+Mac-mini production path; cron is the Linux alternative.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# The engine stamps ``generated_at`` at 22:00 (spec §02); the nightly job fires after the close, so
+# The engine stamps ``generated_at`` at 22:00; the nightly job fires after the close, so
 # 22:00 local is the sensible default. These are defaults only — every field is overridable.
 DEFAULT_LABEL = "com.factor-scope.nightly"
 DEFAULT_PROGRAM = ("factor-scope", "nightly", "--fixtures")
@@ -21,7 +21,7 @@ DEFAULT_PROGRAM = ("factor-scope", "nightly", "--fixtures")
 
 @dataclass(frozen=True)
 class ScheduleSpec:
-    """Everything a scheduler needs to fire the nightly job once a day (spec §11, D4)."""
+    """Everything a scheduler needs to fire the nightly job once a day."""
 
     label: str = DEFAULT_LABEL
     program_arguments: tuple[str, ...] = DEFAULT_PROGRAM

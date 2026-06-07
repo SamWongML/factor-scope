@@ -1,6 +1,6 @@
 """Run configuration and source selection.
 
-Kept deliberately small for Phase 0; later phases extend it with store paths, the graph backend,
+Kept deliberately small; it can grow to carry store paths, the graph backend,
 and the LLM provider selection. The key knobs are ``source`` (fixtures vs live) and the as-of
 date, which together make a run deterministic and point-in-time.
 """
@@ -30,7 +30,7 @@ class Config:
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None
     # Digestion judgment provider: "fake" (default, offline) | "claude_code". DeepSeek is a chore
-    # model (off the judgment path, spec §08), not a judgment provider — see digest.get_provider.
+    # model (off the judgment path), not a judgment provider — see digest.get_provider.
     provider: str = "fake"
-    # Where the nightly job appends its append-only ops run log (one JSON record per run, spec §11).
+    # Where the nightly job appends its append-only ops run log (one JSON record per run).
     log_path: Path = field(default=Path("out") / "nightly.jsonl")

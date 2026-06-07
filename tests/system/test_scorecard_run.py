@@ -1,8 +1,8 @@
-"""System gate for Phase 4 — the run artifact carries the self-scoring scorecard (spec §06).
+"""System test — the run artifact carries the self-scoring scorecard.
 
 End-to-end over the bundled fixtures: prior calls are scored against the committed price history and
 a rolling, descriptive ``scorecard`` is attached to every item. The mirror is read-only — it never
-opens a capped gate or changes a state. Deterministic, schema-valid. Stays green at later phases.
+opens a capped gate or changes a state. Deterministic, schema-valid.
 """
 
 import json
@@ -43,7 +43,7 @@ def test_run_attaches_a_scorecard(tmp_path) -> None:
 
 def test_scorecard_does_not_open_a_capped_gate() -> None:
     # Build with the scorecard; the capped energy-storage ETF must stay capped — the descriptive
-    # mirror can never open the hard trend gate (spec §06 guardrail).
+    # mirror can never open the hard trend gate.
     dash = build_dashboard(Config())
     capped = [it for it in dash.items if it.gate is GateState.CAPPED]
     assert capped, "expected at least one capped item in the fixture story"

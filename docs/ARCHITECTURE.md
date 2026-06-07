@@ -1,28 +1,28 @@
 # ARCHITECTURE
 
-Updated as layers land. The spine is the **contract**; everything reads/writes `dashboard.json`.
+The spine is the **contract**; everything reads/writes `dashboard.json`.
 
-## Package map (target — `(✓)` = exists, `( )` = future phase)
+## Package map (`(✓)` = exists, `( )` = planned)
 ```
 factor_scope/
   __init__.py        (✓) version
   config.py          (✓) Config: source (fixtures|live), as_of, store_path, output_path, provider
   contract/          (✓) pydantic models for dashboard.json + JSON-schema export   [the spine]
   pipeline.py        (✓) ingest(config) fills the store; build_dashboard/run read it → Dashboard
-  render.py          (✓) terminal render of a Dashboard (L6 review surface)
+  render.py          (✓) terminal render of a Dashboard (the review surface)
   cli.py             (✓) typer app: `run`, `ingest`, `schema`  (the stable entrypoint)
-  ingest/            (✓) P1  L1 adapters: positions, prices, fund_holdings, fred, edgar (fixture|live)
-  store/             (✓) P1  L2 point-in-time DuckDB store (append-only); GraphStore iface in P3
-  factors/           (✓) P2  L3 the 8 descriptive states + trend gate (pure functions; no composite)
-  graph/             ( ) P3  build edges + deterministic look-through
-  scoring/           ( ) P4  call log, mechanical scorer, Brier/BSS scorecard
-  digest/            ( ) P5  LLMProvider (fake|claude_code|deepseek) + bull/bear/synthesis
-  emerging/          ( ) P6  Stage-A qualify + Stage-B fund screen → top 3
+  ingest/            (✓) adapters: positions, prices, fund_holdings, fred, edgar (fixture|live)
+  store/             (✓) point-in-time DuckDB store (append-only); GraphStore interface
+  factors/           (✓) the 8 descriptive states + trend gate (pure functions; no composite)
+  graph/             (✓) build edges + deterministic look-through
+  scoring/           (✓) call log, mechanical scorer, Brier/BSS scorecard
+  digest/            (✓) LLMProvider (fake|claude_code|deepseek) + bull/bear/synthesis
+  emerging/          (✓) Stage-A qualify + Stage-B fund screen → top 3
 data/fixtures/       (✓) committed sample data (positions.csv, prices.csv, …, manifest.json)
 tests/ unit|integration|system   (✓)
 ```
 
-## The point-in-time store (`factor_scope/store`, P1)
+## The point-in-time store (`factor_scope/store`)
 - Every ingested fact is a `Reading` — `(series, key, as_of, fetched_at, payload)` — appended to an
   **append-only** DuckDB log (`PointInTimeStore` protocol; `DuckDBStore` is the default backend,
   file or `:memory:`). No update/delete exists, so a later disclosure never rewrites an earlier read.
@@ -46,7 +46,7 @@ tests/ unit|integration|system   (✓)
 
 Export the JSON schema with `factor-scope schema` (or `dashboard_json_schema()`).
 
-## The factor battery (`factor_scope/factors`, P2)
+## The factor battery (`factor_scope/factors`)
 - `bands` — `percentile_rank` (mid-rank, 0..1) + `rank_to_band` on **constant** 5/25/75/95
   cut-points. Economic meaning, never tuned to P&L: that is "states, not a composite".
 - `window` — point-in-time series helpers over the store (`history` filtered to `as_of <= D`):
@@ -57,22 +57,22 @@ Export the JSON schema with `factor-scope schema` (or `dashboard_json_schema()`)
   never dropped). Data-backed today: trend gate, reversal, low-vol/drawdown, the macro dial; the
   other four are present-but-invalid until their sources land. **No weighted composite is formed.**
 - The 200-day trend gate is the one hard cap: below the MA → `capped`, above → `open`, too little
-  history → `unknown`. Phase 5's lean is capped under `capped`; nothing may open it.
+  history → `unknown`. The lean is capped under `capped`; nothing may open it.
 
 ## Data flow (one run)
 `cli.run` → `Config` → `pipeline.run`:
-1. (P1) ingest adapters → point-in-time store; read it as-of the run date → items + evidence + gain.
-2. (P2) attach factor `states[]` + compute `gate`.
-3. (P3) attach `connections[]` from the look-through; set `connections_flag`.
-4. (P4) attach the rolling `scorecard`.
-5. (P5) digest (bull/bear → synthesis) → `lean` + evolution + flip_trigger + invalidation; gate
+1. ingest adapters → point-in-time store; read it as-of the run date → items + evidence + gain.
+2. attach factor `states[]` + compute `gate`.
+3. attach `connections[]` from the look-through; set `connections_flag`.
+4. attach the rolling `scorecard`.
+5. digest (bull/bear → synthesis) → `lean` + evolution + flip_trigger + invalidation; gate
    enforced; abstain-when-blind.
-6. (P6) populate the `emerging` list (Stage-A → Stage-B top-3).
+6. populate the `emerging` list (Stage-A → Stage-B top-3).
 7. Validate → write `dashboard.json` → `render` to terminal.
 
 Each step only *adds* to the artifact, so partial pipelines still produce a valid (sparser) dashboard.
 
 ## Determinism & point-in-time
 Fixtures runs derive `generated_at` from `as_of` (no wall clock) so the artifact reproduces
-byte-for-byte. The store (P1+) stamps every row `as_of` + `fetched_at`, append-only — reasoning sees
+byte-for-byte. The store stamps every row `as_of` + `fetched_at`, append-only — reasoning sees
 only what was knowable as of the run date.

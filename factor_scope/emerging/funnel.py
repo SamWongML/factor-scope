@@ -1,4 +1,4 @@
-"""Emerging funnel — wire Stage A → Stage B into a per-theme shortlist (L3, spec §07).
+"""Emerging funnel — wire Stage A → Stage B into a per-theme shortlist.
 
 The two-stage funnel: qualify each industry (Stage A), and only for a cleared theme screen its
 candidate funds to a top 3 (Stage B). The output is a :class:`Shortlist` per cleared theme — the

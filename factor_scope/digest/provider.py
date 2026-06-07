@@ -1,4 +1,4 @@
-"""The digestion provider interface (L4, spec §08, D2).
+"""The digestion provider interface.
 
 Digestion turns the structured inputs — factor states, the gate, connections, the scorecard — into
 a calibrated lean via a two-sided bull/bear debate then a synthesis seat. A *provider* supplies the
@@ -25,7 +25,7 @@ from factor_scope.contract import (
 
 
 class Side(StrEnum):
-    """The two seats of the debate (spec §08 — argue both sides, isolated)."""
+    """The two seats of the debate (argue both sides, isolated)."""
 
     BULL = "bull"
     BEAR = "bear"
@@ -90,7 +90,7 @@ class LLMProvider(Protocol):
 def get_provider(name: str) -> LLMProvider:
     """Select a judgment provider by name. ``fake`` (default) is the only one CI ever calls.
 
-    DeepSeek is a *chore* model (reformat/summarise, off the judgment path, spec §08), so it is not
+    DeepSeek is a *chore* model (reformat/summarise, off the judgment path), so it is not
     a judgment provider — selecting it is an error pointing the user at the real options.
     """
 

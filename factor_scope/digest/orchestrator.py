@@ -1,4 +1,4 @@
-"""The synthesis seat — drive the debate, then enforce the hard guardrails (L4, spec §08).
+"""The synthesis seat — drive the debate, then enforce the hard guardrails.
 
 The provider argues both sides and proposes a lean; this orchestrator owns everything that must be
 true *regardless of what any model says*:
@@ -23,7 +23,7 @@ from factor_scope.digest.fake import FLAT_EPS
 from factor_scope.digest.provider import Case, DigestInput, LLMProvider, Side
 from factor_scope.scoring.scorecard import confidence_nudge, dampen_for_weak_pattern
 
-MIN_VALID_STATES = 2  # below this we are too blind to call (spec §08)
+MIN_VALID_STATES = 2  # below this we are too blind to call
 OPPOSE_MIN = 1.5  # a "strong case" floor — both sides this strong, and cancelling, → abstain
 DEFAULT_HORIZON_D = 30  # the horizon a fresh lean is scored over (calendar days)
 
@@ -110,7 +110,7 @@ def _enforce_gate(action: LeanAction, brief: DigestInput) -> LeanAction:
 
 
 def _apply_scorecard(confidence: float, brief: DigestInput, tokens: tuple[str, ...]) -> float:
-    """Pull the stated confidence toward realised reliability — the mirror's only channel (§06)."""
+    """Pull the stated confidence toward realised reliability — the mirror's only channel."""
 
     nudged = confidence_nudge(brief.scorecard, confidence)
     dampened = dampen_for_weak_pattern(brief.scorecard, nudged, tokens)

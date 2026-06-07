@@ -1,10 +1,9 @@
-"""System gate for Phase 3 — the run artifact carries the look-through connections (spec §05).
+"""System test — the run artifact carries the look-through connections.
 
 End-to-end over the bundled fixtures: a name held by two of my funds (中际旭创, in both the optical-
 module and comms ETFs) surfaces in those items' ``connections[]`` with ``connections_flag`` set, the
 right ``also_in``, and my total look-through weight. Because the optical ETF reads reversal-DOWN
-risk, the shared name is flagged falling (``↓``). Deterministic, schema-valid. Stays green at every
-later phase boundary.
+risk, the shared name is flagged falling (``↓``). Deterministic, schema-valid.
 """
 
 import json

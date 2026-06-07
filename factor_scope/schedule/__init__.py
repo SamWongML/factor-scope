@@ -1,6 +1,6 @@
-"""Scheduling adapter + nightly ops (L6, spec §11, decision D4).
+"""Scheduling adapter + nightly ops.
 
-Phase 7 makes the nightly run *operable* without putting any platform code on the critical path.
+This package makes the nightly run *operable* without platform code on the critical path.
 Two thin, deterministic pieces live here:
 
 - :mod:`~factor_scope.schedule.deploy` — render a macOS **launchd** plist (the Mac-mini production

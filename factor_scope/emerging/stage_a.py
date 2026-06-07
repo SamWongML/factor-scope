@@ -1,8 +1,8 @@
-"""Emerging funnel — Stage A: qualify the *industry* before any fund is considered (spec §07).
+"""Emerging funnel — Stage A: qualify the *industry* before any fund is considered.
 
 The mistake the funnel exists to avoid is jumping straight from a hot theme to a ticker. Stage A is
 industry research: a sequence of hard gates over **descriptive** theme inputs — not a fitted score.
-A theme advances only if it clears *all four* gates, in spec order:
+A theme advances only if it clears *all four* gates, in order:
 
 1. **Signal strength** — acceleration (the most important sub-signal) + breadth across distinct
    sources, minus a crowding penalty. Acceleration must clear its own floor and the net must clear
@@ -10,12 +10,12 @@ A theme advances only if it clears *all four* gates, in spec order:
 2. **Durability** (the decisive filter) — broad adoption *and* a credible path to profitability
    *and* resilience to being a one-cycle fad. The 2026 thematic literature is blunt: the themes that
    lasted shared these; the fads that died (SPAC/cannabis/pandemic plays) lacked them.
-3. **Lead-chain corroboration** — does the US relay (§08) confirm real end-demand, not a domestic
+3. **Lead-chain corroboration** — does the US relay confirm real end-demand, not a domestic
    narrative alone?
 4. **Investable wrapper** — is there a fund/ETF to express it? If not, it is a watch-only idea.
 
 The cut-points are constants chosen for economic meaning, never tuned to returns (principle #1,
-mirroring the §03 band thresholds). The first failing gate is reported so every stop is auditable.
+mirroring the band thresholds). The first failing gate is reported so every stop is auditable.
 """
 
 from __future__ import annotations
@@ -46,11 +46,11 @@ class Theme:
     acceleration: float  # rate of change of attention/research volume (0..1); higher = accelerating
     base_level: float  # current absolute attention level (0..1); a low base leaves room to run
     breadth: int  # count of distinct sources/companies corroborating the signal
-    crowding: float  # crowding penalty (0..1); a crowded theme is a crash-risk gauge (§03)
+    crowding: float  # crowding penalty (0..1); a crowded theme is a crash-risk gauge
     broad_adoption: bool  # affects many sectors, not a niche
     path_to_profit: bool  # a credible route to earnings, not just a growth story
     fad_resistant: bool  # resilient to being a one-cycle fad
-    lead_chain: bool  # the US relay corroborates real end-demand (§08)
+    lead_chain: bool  # the US relay corroborates real end-demand
     wrapper_exists: bool  # an investable fund/ETF (or a fund heavily exposed) exists
     as_of: str  # the research date this read was true as of (point-in-time)
 
@@ -74,7 +74,7 @@ def signal_strength(theme: Theme) -> float:
 
 
 def qualify_theme(theme: Theme) -> StageAResult:
-    """Run the four Stage-A gates in spec order; stop at the first failure (auditable reason)."""
+    """Run the four Stage-A gates in order; stop at the first failure (auditable reason)."""
 
     sig = signal_strength(theme)
     reasons: list[str] = []

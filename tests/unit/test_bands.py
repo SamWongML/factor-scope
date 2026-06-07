@@ -1,4 +1,4 @@
-"""Unit tests for the rank-against-own-history banding (spec §03).
+"""Unit tests for the rank-against-own-history banding.
 
 Bands are constant, economic-meaning cut-points on a percentile — never tuned to P&L.
 """

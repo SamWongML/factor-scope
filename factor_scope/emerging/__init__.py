@@ -1,11 +1,11 @@
-"""Emerging radar funnel (L3, spec §07) — industry → top-3 funds.
+"""Emerging radar funnel — industry → top-3 funds.
 
 A two-stage funnel that turns a faint industry signal into a defensible shortlist: **Stage A**
 qualifies the *industry* (signal strength, durability, lead-chain corroboration, an investable
 wrapper); only a cleared theme reaches **Stage B**, which screens its candidate funds on a fixed
-scorecard (methodology, overlap-with-core via the §05 look-through, cost, liquidity, tracking,
-concentration) and ranks them to a top 3. The digest (§08) then argues bull/bear over that
-shortlist and promotes at most one. Deterministic and fixtures-first; reuses the Phase-3 graph for
+scorecard (methodology, overlap-with-core via the look-through, cost, liquidity, tracking,
+concentration) and ranks them to a top 3. The digest then argues bull/bear over that
+shortlist and promotes at most one. Deterministic and fixtures-first; reuses the graph for
 overlap (no new graph logic).
 """
 

@@ -1,10 +1,10 @@
-"""Falsifiable calls — the log the self-scoring loop scores against (spec §06).
+"""Falsifiable calls — the log the self-scoring loop scores against.
 
 When the digest emits a lean it becomes a :class:`Call`: a falsifiable claim — *which way*, *how
 sure*, *over what horizon*, *under which state pattern*. A call is appended to the point-in-time
 store (series ``calls``, keyed by ``call_id`` and stamped with the night it was made) and is then
 **immutable**: the append-only store never rewrites it, so tomorrow's score sees exactly the claim
-that was made. Leans land in Phase 5; Phase 4 wires the loop and feeds it a fixture of prior calls.
+that was made. A fixture of prior calls seeds the loop so the scorecard is real from run one.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ class Call:
 
 
 def log_call(store: PointInTimeStore, call: Call, *, fetched_at: str) -> int:
-    """Append a call to the point-in-time store. Append-only — never an update (spec §09)."""
+    """Append a call to the point-in-time store. Append-only — never an update."""
 
     return store.append([call.to_reading(fetched_at=fetched_at)])
 

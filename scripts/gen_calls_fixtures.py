@@ -1,11 +1,11 @@
-"""Regenerate the prior-calls fixture for Phase 4 (the self-scoring loop, spec §06).
+"""Regenerate the prior-calls fixture the self-scoring loop scores against.
 
-Leans land in Phase 5, so the §06 loop is wired now and fed a fixture of *prior* falsifiable calls
+The loop is fed a fixture of *prior* falsifiable calls
 to score against the committed price history. This generator is deterministic and seedless — it
 reads ``data/fixtures/prices.csv`` and emits a fixed schedule of calls (no RNG, no wall clock) — so
 a fixtures run reproduces ``dashboard.json`` byte-for-byte. Run from the repo root:
 
-    uv run python scripts/gen_fixtures_phase4.py
+    uv run python scripts/gen_calls_fixtures.py
 
 It rewrites ``data/fixtures/calls.csv``. The calls are shaped to tell a clear calibration story:
 a confident **reversal:extreme_high** "trim the winner" pattern keeps fighting an uptrend and misses

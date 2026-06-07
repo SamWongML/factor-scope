@@ -1,4 +1,4 @@
-"""Unit tests for reliability-by-confidence bucketing (spec §06).
+"""Unit tests for reliability-by-confidence bucketing.
 
 Calls are grouped by stated-confidence bucket; each bucket's realised hit-rate is compared to the
 stated confidence to flag over/under-confidence. A bucket with too few samples is hidden so noise

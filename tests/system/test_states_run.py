@@ -1,8 +1,8 @@
-"""System gate for Phase 2 — the run artifact carries factor states + the trend gate.
+"""System test — the run artifact carries factor states + the trend gate.
 
 End-to-end over the bundled fixtures: every item gets a non-empty ``states[]`` bundle and a
 computed ``gate``; at least one item is ``capped`` (below its 200-day MA) and at least one is
-``open``. Deterministic, schema-valid. Stays green at every later phase boundary.
+``open``. Deterministic, schema-valid.
 """
 
 import json
@@ -31,7 +31,7 @@ def test_run_attaches_states_and_gate(tmp_path) -> None:
         assert len(item.states) == 8
 
     # The priced core book (holdings + watchlist) always has a computed gate; a faint emerging
-    # candidate may stay `unknown` until it has 200 sessions of history (spec §07 — missing ≠ bad).
+    # candidate may stay `unknown` until it has 200 sessions of history (missing ≠ bad).
     core = [it for it in dash.items if it.list_name is not ListName.EMERGING]
     for item in core:
         assert item.gate is not GateState.UNKNOWN

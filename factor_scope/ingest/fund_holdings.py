@@ -1,6 +1,6 @@
 """Quarterly fund/ETF holdings. `fund_holdings.csv → {fund, as_of, holding, weight}`.
 
-These rows become the connection-graph edges in Phase 3 (the exact look-through). Each ``(fund,
+These rows become the connection-graph edges (the exact look-through). Each ``(fund,
 holding)`` pair is its own point-in-time key so a quarter's disclosure never overwrites a prior one.
 Live is AkShare's ``fund_portfolio_hold_em`` — opt-in, never called in CI.
 """

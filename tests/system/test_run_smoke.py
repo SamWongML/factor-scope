@@ -1,8 +1,8 @@
-"""System test — the 'nothing is broken in the session' gate for Phase 0.
+"""System test — the 'nothing is broken' smoke gate.
 
 End-to-end: invoke the `factor-scope run` entrypoint over the bundled fixtures and assert it
 produces a schema-valid dashboard.json, deterministically, with the expected lists populated.
-This test must stay green at every phase boundary.
+This test must always stay green.
 """
 
 import json
@@ -31,7 +31,7 @@ def test_run_entrypoint_emits_valid_dashboard(tmp_path) -> None:
     assert dash.as_of == "2026-06-05"
     assert len(dash.by_list(ListName.HOLDINGS)) == 2
     assert len(dash.by_list(ListName.WATCHLIST)) == 1
-    # The emerging list is now the funnel's output — a top-3 of the cleared theme's funds (§07).
+    # The emerging list is now the funnel's output — a top-3 of the cleared theme's funds.
     assert len(dash.by_list(ListName.EMERGING)) == 3
 
 

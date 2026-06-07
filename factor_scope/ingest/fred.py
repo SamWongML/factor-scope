@@ -1,6 +1,6 @@
 """Macro series adapter (FRED). Fixture: `fred.csv → {series_id, as_of, value}`.
 
-The book-wide macro/liquidity dial (spec §03 factor 8): rates, real rates, breakevens, the dollar,
+The book-wide macro/liquidity dial: rates, real rates, breakevens, the dollar,
 and Fed liquidity. Live is ``fredapi`` — opt-in, never called in CI.
 """
 
@@ -15,7 +15,7 @@ SERIES = "fred"
 FIXTURE = "fred.csv"
 _REQUIRED = ("series_id", "as_of", "value")
 
-# The book-wide macro dial the spec names (rates / real rate / breakeven / dollar / liquidity).
+# The book-wide macro dial (rates / real rate / breakeven / dollar / liquidity).
 DEFAULT_SERIES = ("DGS10", "DFII10", "T10YIE", "DTWEXBGS", "DEXCHUS", "WALCL")
 
 

@@ -1,4 +1,4 @@
-"""Unit tests for the scheduling adapter (spec §11, D4).
+"""Unit tests for the scheduling adapter.
 
 The adapter is a *thin renderer*: given a :class:`ScheduleSpec` it emits a macOS **launchd** plist
 (the Mac-mini production path) or a **cron** line (the Linux alternative). No platform code on the
