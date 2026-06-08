@@ -13,6 +13,7 @@ in-memory). DuckDB is the engine and Parquet the cold export format (``export_pa
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from pathlib import Path
@@ -50,6 +51,16 @@ class PointInTimeStore(Protocol):
 
     def count(self, series: str | None = None) -> int:
         """Number of rows (in ``series`` if given)."""
+
+    def snapshot_id(self, as_of: str, *, exclude: Iterable[str] = ()) -> str:
+        """A deterministic content fingerprint of the store state knowable as of ``as_of``.
+
+        Hashes every reading with ``as_of <= D`` (optionally skipping ``exclude``-ed series) in a
+        canonical order, so two stores with identical knowable-by-D facts — excluded series aside —
+        share an id and a later disclosure (``as_of > D``) never moves it. Lets a deterministic run
+        record *which* frozen snapshot it reasoned over — the seam that reconciles online-default
+        with reproducibility.
+        """
 
 
 _SCHEMA = """
@@ -131,6 +142,19 @@ class DuckDBStore:
                 "SELECT count(*) FROM readings WHERE series = ?", [series]
             ).fetchone()
         return int(row[0]) if row is not None else 0
+
+    def snapshot_id(self, as_of: str, *, exclude: Iterable[str] = ()) -> str:
+        excluded = sorted(set(exclude))
+        clause = f"AND series NOT IN ({', '.join(['?'] * len(excluded))})" if excluded else ""
+        rows = self._con.execute(
+            f"SELECT {_COLS} FROM readings WHERE as_of <= ? {clause} "
+            "ORDER BY series, key, as_of, fetched_at, payload",
+            [as_of, *excluded],
+        ).fetchall()
+        # `payload` is already canonical (sorted-key JSON) and the ORDER BY pins row order, so the
+        # serialization — hence the digest — is stable across stores and insertion order.
+        blob = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(blob).hexdigest()
 
     def export_parquet(self, path: str | Path) -> None:
         """Export the whole append-only log to Parquet (the cold-storage format)."""

@@ -164,7 +164,8 @@ def nightly(
     typer.echo(
         f"\n✓ nightly {record.as_of}: {record.n_items} items "
         f"({record.n_abstain} abstained), {record.n_calls_logged} calls logged · "
-        f"{record.provider} · wrote {output}, logged to {log_path}",
+        f"{record.provider} · snapshot {record.snapshot_id[:12]} · "
+        f"wrote {output}, logged to {log_path}",
         err=True,
     )
 

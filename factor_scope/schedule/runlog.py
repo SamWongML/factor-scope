@@ -35,6 +35,7 @@ class RunRecord:
     as_of: str
     started_at: str
     ended_at: str
+    snapshot_id: str  # the frozen store-state fingerprint this run read (mirrors the artifact)
     provider: str
     n_items: int
     n_holdings: int
@@ -88,6 +89,7 @@ def summarize_run(
         as_of=dash.as_of,
         started_at=started_at,
         ended_at=ended_at,
+        snapshot_id=dash.snapshot_id,
         provider=provider,
         n_items=n_holdings + n_watchlist + n_emerging,
         n_holdings=n_holdings,

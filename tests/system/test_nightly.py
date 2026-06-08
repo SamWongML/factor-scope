@@ -61,6 +61,8 @@ def test_nightly_entrypoint_writes_artifact_and_run_log(tmp_path) -> None:
     assert record["n_items"] == 6
     assert record["n_holdings"] == 2 and record["n_emerging"] == 3
     assert record["output_path"] == str(p["output"])
+    # The run log records the frozen snapshot the run read — the same id the artifact carries.
+    assert record["snapshot_id"] and record["snapshot_id"] == dash.snapshot_id
 
 
 def test_nightly_persists_tonights_leans_as_calls_for_next_day_scoring(tmp_path) -> None:
