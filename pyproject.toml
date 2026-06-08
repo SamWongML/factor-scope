@@ -3,6 +3,7 @@ name = "factor-scope"
 version = "0.1.0"
 description = "factor-scope — a local-first, nightly-batch decision-support engine for an A-share / funds portfolio."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",
