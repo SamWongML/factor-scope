@@ -23,7 +23,7 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
 
 - `factor_scope/contract/` — pydantic models for `dashboard.json` + JSON-schema export. **The spine.**
 - `pipeline.py` — `ingest()` fills the store; `build_dashboard`/`run` read it → `Dashboard`.
-- `ingest/ store/ factors/ graph/ scoring/ digest/ emerging/` — the six layers; each is a
+- `ingest/ store/ factors/ graph/ scoring/ digest/` — the six layers, plus `emerging/`; each is a
   pipeline step that only **adds** to the artifact, so a partial pipeline still emits a valid one.
 - `cli.py` typer app · `render.py` terminal view · `schedule/` launchd+cron deploy.
 - `data/fixtures/` committed sample data · `tests/{unit,integration,system}`.
