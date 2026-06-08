@@ -32,9 +32,9 @@ class FakeGraph:
     def _pit(candidates: list[Edge], as_of: str) -> list[Edge]:
         best: dict[tuple[str, str], Edge] = {}
         for e in candidates:
-            if e.as_of <= as_of:
+            if e.valid_from <= as_of < e.valid_to:  # live within the half-open window
                 key = (e.fund, e.security)
-                if key not in best or e.as_of > best[key].as_of:
+                if key not in best or e.valid_from > best[key].valid_from:
                     best[key] = e
         return list(best.values())
 
@@ -95,6 +95,17 @@ def test_lookthrough_is_point_in_time() -> None:
     late = look_through(graph, "S1", "2026-07-01", book)
     assert late.funds == ["F1", "F2", "F3"]
     assert late.lookthrough_wt == pytest.approx(0.08)
+
+
+def test_lookthrough_respects_validity_window() -> None:
+    graph = FakeGraph(
+        [Edge(fund="F1", security="S1", weight=0.10, as_of=Q1, source="fh",
+              valid_from=Q1, valid_to=Q2)]
+    )
+    book = [Holding(code="F1", name="Fund One", weight=0.6)]
+    # Inside the window F1 holds S1; once valid_to (Q2) passes it no longer does (Q2 is exclusive).
+    assert look_through(graph, "S1", "2026-05-01", book).funds == ["F1"]
+    assert look_through(graph, "S1", Q2, book).funds == []
 
 
 def test_build_connections_surfaces_only_shared_names() -> None:

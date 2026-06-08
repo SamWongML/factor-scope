@@ -60,20 +60,38 @@ def test_graph_query_is_point_in_time(tmp_path) -> None:
         assert len(late) == 1 and late[0].weight == pytest.approx(0.18)
 
 
-def test_duplicate_disclosures_collapse_to_one_row_per_holder(tmp_path) -> None:
-    # The store is append-only: re-ingesting the same night re-writes the same disclosure, so the
-    # same edge lands twice. Writes never dedup (count stays 2), but the point-in-time read must
-    # collapse them to exactly one row per holder — the graph-native equivalent of the readings
-    # store's QUALIFY ``row_number()=1``. Without the per-holder aggregation the look-through weight
-    # would double-count on re-ingest.
+def test_reingesting_identical_disclosures_is_idempotent(tmp_path) -> None:
+    # The graph keys idempotency on the disclosure identity — (endpoints, as_of, source,
+    # valid_from). The readings store stays append-only, but at the edge level re-running ingest on
+    # the same night's disclosure adds nothing (so look-through weight is never double-counted); a
+    # genuinely new disclosure — a new as_of — is still a new row. ``add_edges`` returns the number
+    # of edges actually written.
     with LadybugGraphStore(tmp_path / "graph") as graph:
         edge = Edge(fund="F", security="S", weight=0.12, as_of=Q1, source="fund_holdings")
-        graph.add_edges([edge, edge])  # same disclosure, ingested twice
-        assert graph.count() == 2  # append-only: both rows are kept
-        holders = graph.funds_holding("S", "2026-12-31")
-        assert len(holders) == 1 and holders[0].weight == pytest.approx(0.12)
-        held = graph.securities_of("F", "2026-12-31")
-        assert len(held) == 1 and held[0].weight == pytest.approx(0.12)
+        assert graph.add_edges([edge, edge]) == 1  # same disclosure twice in one batch → one edge
+        assert graph.add_edges([edge]) == 0  # re-ingested on a later night → nothing new
+        assert graph.count() == 1  # edge count unchanged
+        [holder] = graph.funds_holding("S", "2026-12-31")
+        assert holder.weight == pytest.approx(0.12)
+        # A genuinely new disclosure (a new as_of) is a distinct row, not a dedup.
+        later = Edge(fund="F", security="S", weight=0.2, as_of=Q2, source="fund_holdings")
+        assert graph.add_edges([later]) == 1
+        assert graph.count() == 2
+
+
+def test_edge_is_live_only_within_its_validity_window(tmp_path) -> None:
+    # A holding carries an explicit half-open ``[valid_from, valid_to)`` window. The point-in-time
+    # read returns it only inside that window; once valid_to passes the holder drops out entirely
+    # (survivorship-aware — not carried forward as if still held), and valid_to is exclusive.
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        graph.add_edges(
+            [Edge(fund="F", security="S", weight=0.2, as_of=Q1, source="fh",
+                  valid_from=Q1, valid_to=Q2)]
+        )
+        assert graph.funds_holding("S", "2026-01-01") == []  # before valid_from
+        assert [e.fund for e in graph.funds_holding("S", "2026-05-01")] == ["F"]  # inside window
+        assert graph.funds_holding("S", Q2) == []  # valid_to is exclusive
+        assert graph.funds_holding("S", "2026-09-01") == []  # after the window
 
 
 def test_same_as_of_restatement_returns_a_real_weight_source_pair(tmp_path) -> None:
@@ -120,6 +138,31 @@ def test_build_graph_from_store_reads_fund_holdings(tmp_path) -> None:
         assert n == 2
         holders = graph.funds_holding("中际旭创", "2026-12-31")
         assert sorted(e.fund for e in holders) == ["515880", "561010"]
+    store.close()
+
+
+def test_build_graph_closes_a_window_when_a_holding_drops_out(tmp_path) -> None:
+    # Survivorship through the real ingest path: F discloses S and T at Q1, then a Q2 snapshot that
+    # keeps T (reweighted) but drops S. The graph must close each Q1 edge at F's next snapshot (Q2):
+    # inside [Q1, Q2) F still holds S; from Q2 on S is gone — not carried forward as if still held —
+    # while T reopens with its Q2 weight.
+    store = DuckDBStore(":memory:")
+    store.append(
+        [
+            Reading(series="fund_holdings", key="F/S", as_of=Q1, fetched_at="t",
+                    payload={"fund": "F", "holding": "S", "weight": 0.10}),
+            Reading(series="fund_holdings", key="F/T", as_of=Q1, fetched_at="t",
+                    payload={"fund": "F", "holding": "T", "weight": 0.20}),
+            Reading(series="fund_holdings", key="F/T", as_of=Q2, fetched_at="t",
+                    payload={"fund": "F", "holding": "T", "weight": 0.25}),
+        ]
+    )
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        build_graph_from_store(graph, store)
+        assert [e.fund for e in graph.funds_holding("S", "2026-05-01")] == ["F"]  # inside [Q1, Q2)
+        assert graph.funds_holding("S", "2026-07-01") == []  # dropped at Q2 → not carried forward
+        held = graph.securities_of("F", "2026-07-01")
+        assert [(e.security, e.weight) for e in held] == [("T", pytest.approx(0.25))]
     store.close()
 
 
