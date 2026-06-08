@@ -42,7 +42,7 @@ from factor_scope.graph import (
     build_graph_from_store,
 )
 from factor_scope.graph.lookthrough import look_through
-from factor_scope.ingest import gather_fixture_readings, gather_live_readings
+from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
@@ -71,20 +71,21 @@ def _open_graph(config: Config) -> LadybugGraphStore:
     return LadybugGraphStore(":memory:" if config.graph_path is None else config.graph_path)
 
 
-def _gather(config: Config, as_of: str) -> list[Reading]:
-    if config.source == "fixtures":
-        return gather_fixture_readings(config, as_of=as_of)
-    return gather_live_readings(config, as_of=as_of)
+def _resolve_market(config: Config, market: Market | None) -> Market:
+    """The injected market (tests) or the one ``config`` selects by name."""
+
+    return market if market is not None else get_market(config.market)
 
 
-def ingest(config: Config) -> int:
+def ingest(config: Config, *, market: Market | None = None) -> int:
     """Fill the store + connection graph from the source. Returns the number of rows appended."""
 
     as_of = _resolve_as_of(config)
+    mkt = _resolve_market(config, market)
     store = _open_store(config)
     graph = _open_graph(config)
     try:
-        n = store.append(_gather(config, as_of))
+        n = store.append(mkt.gather(config, as_of=as_of))
         build_graph_from_store(graph, store)
         return n
     finally:
@@ -395,7 +396,10 @@ def _build_emerging(
 
 
 def build_dashboard(
-    config: Config, *, digest_failures: list[DigestFailure] | None = None
+    config: Config,
+    *,
+    digest_failures: list[DigestFailure] | None = None,
+    market: Market | None = None,
 ) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
 
@@ -404,15 +408,17 @@ def build_dashboard(
 
     ``digest_failures`` is an optional sink the nightly job passes to collect any items whose seat
     call raised (each degraded to abstain) for the ops run log; it never affects the artifact.
+    ``market`` overrides the config-selected adapter (used to drive the pipeline from fake sources).
     """
 
     as_of = _resolve_as_of(config)
+    mkt = _resolve_market(config, market)
     store = _open_store(config)
     graph = _open_graph(config)
     try:
         if store.count("positions") == 0:
             # Empty store → auto-ingest so `run` works without a separate `ingest` step.
-            store.append(_gather(config, as_of))
+            store.append(mkt.gather(config, as_of=as_of))
         if graph.count() == 0:
             # Empty graph → build it from the (durable or just-ingested) holdings readings.
             build_graph_from_store(graph, store)
@@ -433,10 +439,15 @@ def build_dashboard(
     return Dashboard(as_of=as_of, generated_at=f"{as_of}T22:00:00Z", items=items)
 
 
-def run(config: Config, *, digest_failures: list[DigestFailure] | None = None) -> Dashboard:
+def run(
+    config: Config,
+    *,
+    digest_failures: list[DigestFailure] | None = None,
+    market: Market | None = None,
+) -> Dashboard:
     """Build the dashboard and persist it to ``config.output_path``."""
 
-    dash = build_dashboard(config, digest_failures=digest_failures)
+    dash = build_dashboard(config, digest_failures=digest_failures, market=market)
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     config.output_path.write_text(dash.model_dump_json(indent=2), encoding="utf-8")
     return dash
@@ -474,7 +485,10 @@ def _night_already_ingested(config: Config, as_of: str) -> bool:
 
 
 def nightly(
-    config: Config, *, clock: Callable[[], str] = _utc_now_iso
+    config: Config,
+    *,
+    clock: Callable[[], str] = _utc_now_iso,
+    market: Market | None = None,
 ) -> tuple[Dashboard, RunRecord]:
     """The one-shot nightly job: ingest → compute → digest → artifact → run log.
 
@@ -487,9 +501,11 @@ def nightly(
     as_of = _resolve_as_of(config)
     started_at = clock()
     if not _night_already_ingested(config, as_of):
-        ingest(config)  # append the night's readings into the durable store + materialise the graph
+        # append the night's readings into the durable store + materialise the graph
+        ingest(config, market=market)
     digest_failures: list[DigestFailure] = []
-    dash = run(config, digest_failures=digest_failures)  # build + write; logs each lean as a call
+    # build + write; logs each lean as a call
+    dash = run(config, digest_failures=digest_failures, market=market)
     ended_at = clock()
     record = summarize_run(
         dash,

@@ -10,7 +10,7 @@ import pytest
 
 from factor_scope import pipeline
 from factor_scope.config import Config
-from factor_scope.ingest import gather_fixture_readings
+from factor_scope.markets import get_market
 from factor_scope.store import DuckDBStore, Reading
 
 pytestmark = pytest.mark.integration
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 def test_build_items_surfaces_a_price_divergence() -> None:
     with DuckDBStore() as store:
-        store.append(gather_fixture_readings(Config(), as_of="2026-06-05"))
+        store.append(get_market("ashare").gather(Config(), as_of="2026-06-05"))
         # Override one held fund's latest NAV with a divergence-flagged read (a later as_of wins).
         store.append(
             [
