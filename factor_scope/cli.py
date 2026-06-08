@@ -91,7 +91,7 @@ def ingest(
         Path("out") / "store.duckdb", "--store-path", help="The durable store to append into."
     ),
     graph_path: Path = typer.Option(
-        Path("out") / "graph.duckdb",
+        Path("out") / "graph.ladybug",
         "--graph-path",
         help="The durable connection graph to materialise from the holdings feeds.",
     ),
@@ -131,7 +131,7 @@ def nightly(
         help="The durable store leans persist into (so tomorrow's self-scoring can read them).",
     ),
     graph_path: Path = typer.Option(
-        Path("out") / "graph.duckdb", "--graph-path", help="The durable connection graph."
+        Path("out") / "graph.ladybug", "--graph-path", help="The durable connection graph."
     ),
     log_path: Path = typer.Option(
         Path("out") / "nightly.jsonl", "--log-path", help="The append-only ops run log (JSONL)."

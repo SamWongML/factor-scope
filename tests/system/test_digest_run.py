@@ -62,7 +62,7 @@ def test_emitted_leans_are_logged_as_calls(tmp_path) -> None:
     from factor_scope.store import DuckDBStore
 
     store_path = tmp_path / "store.duckdb"
-    graph_path = tmp_path / "graph.duckdb"
+    graph_path = tmp_path / "graph.ladybug"
     cfg = Config(store_path=store_path, graph_path=graph_path)
     dash = build_dashboard(cfg)
     build_dashboard(cfg)  # re-run the same night: logging must be idempotent (no double-count)

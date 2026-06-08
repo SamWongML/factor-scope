@@ -3,8 +3,8 @@
 A durable, on-disk, point-in-time holdings graph (``(:Fund)-[:HOLDS{weight,as_of}]->(:Security)``)
 built straight from the holdings feeds (no LLM), and the exact set-arithmetic look-through it
 powers: "B is falling — who else of mine holds it, and my total look-through weight?" The
-:class:`GraphStore` ``Protocol`` keeps the engine swappable; the default backend is
-:class:`DuckDBGraphStore`.
+:class:`GraphStore` ``Protocol`` keeps the engine swappable; the backend is
+:class:`LadybugGraphStore` (LadybugDB / openCypher).
 """
 
 from __future__ import annotations
@@ -16,17 +16,17 @@ from factor_scope.graph.lookthrough import (
     look_through,
 )
 from factor_scope.graph.store import (
-    DuckDBGraphStore,
     Edge,
     GraphStore,
+    LadybugGraphStore,
     build_graph_from_store,
 )
 
 __all__ = [
-    "DuckDBGraphStore",
     "Edge",
     "GraphStore",
     "Holding",
+    "LadybugGraphStore",
     "LookThrough",
     "build_connections",
     "build_graph_from_store",

@@ -18,7 +18,7 @@ writes three things under `out/` (override with the flags below):
 |----------|--------------|------------|
 | `dashboard.json` | `out/dashboard.json` | the morning artifact you review (the contract) |
 | store | `out/store.duckdb` | the append-only point-in-time store (readings + logged calls) |
-| graph | `out/graph.duckdb` | the durable holdings look-through graph |
+| graph | `out/graph.ladybug` | the durable holdings look-through graph |
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
 
 Flags: `--output`, `--store-path`, `--graph-path`, `--log-path`, `--provider`, `--as-of`,

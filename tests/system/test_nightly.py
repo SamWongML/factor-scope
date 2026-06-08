@@ -29,7 +29,7 @@ def _paths(tmp_path):
     return dict(
         output=tmp_path / "dashboard.json",
         store=tmp_path / "store.duckdb",
-        graph=tmp_path / "graph.duckdb",
+        graph=tmp_path / "graph.ladybug",
         log=tmp_path / "nightly.jsonl",
     )
 

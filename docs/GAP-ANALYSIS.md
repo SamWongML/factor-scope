@@ -150,7 +150,7 @@ These are genuinely met and test-enforced; they are the spine the remediations h
 - **States, not a composite** — each factor is a pure `(FactorContext) -> FactorState`; cut-points (`bands.py`) are fixed constants, never tuned to P&L.
 - **Abstain-when-blind + scorecard guardrails** — `MIN_VALID_STATES`, opposing-extremes downgrade, scorecard nudge — all test-covered (`test_abstain`, `test_guardrails`, `test_auto_downgrade`).
 - **Dashboard contract** — pydantic models + JSON-schema export; descriptive models frozen (one exception, P2-2).
-- **Offline by default** — core install + full suite + CI run offline on the `fake` provider; heavy/network deps imported lazily inside the call (`claude_code._complete`, `DuckDBGraphStore.__init__`).
+- **Offline by default** — core install + full suite + CI run offline on the `fake` provider; heavy/network deps imported lazily inside the call (`claude_code._complete`, `LadybugGraphStore.__init__`).
 - **FRED / EDGAR / positions ingest** — spec-conformant (FRED `DEFAULT_SERIES`, EDGAR 13F + N-PORT, exact positions schema).
 - **Nightly scheduling + ops** — launchd one-shot + cron line; `docs/ops/RUNBOOK.md` is accurate and honest about the deferred "graduate" tier.
 
