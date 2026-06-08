@@ -1,4 +1,4 @@
-"""Integration tests for the durable on-disk connection graph.
+"""Integration tests for the durable on-disk connection graph (LadybugDB backend).
 
 Build → persist → reload → query, plus the point-in-time read and building the graph straight from
 the weighted holdings readings already in the point-in-time store (CN ``fund_holdings`` + US N-PORT
@@ -7,7 +7,7 @@ the weighted holdings readings already in the point-in-time store (CN ``fund_hol
 
 import pytest
 
-from factor_scope.graph import DuckDBGraphStore, Edge, build_graph_from_store
+from factor_scope.graph import Edge, LadybugGraphStore, build_graph_from_store
 from factor_scope.store import DuckDBStore, Reading
 
 pytestmark = pytest.mark.integration
@@ -16,9 +16,18 @@ Q1 = "2026-03-31"
 Q2 = "2026-06-30"
 
 
+def test_add_edges_returns_count(tmp_path) -> None:
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        n = graph.add_edges(
+            [Edge(fund="561010", security="中际旭创", weight=0.094, as_of=Q1, source="fh")]
+        )
+        assert n == 1
+        assert graph.count() == 1
+
+
 def test_graph_persists_across_connections(tmp_path) -> None:
-    path = tmp_path / "graph.duckdb"
-    with DuckDBGraphStore(path) as graph:
+    path = tmp_path / "graph"
+    with LadybugGraphStore(path) as graph:
         graph.add_edges(
             [
                 Edge(fund="561010", security="中际旭创", weight=0.094, as_of=Q1, source="fh"),
@@ -26,7 +35,7 @@ def test_graph_persists_across_connections(tmp_path) -> None:
             ]
         )
     # Reopen: the durable, append-only graph survives the connection.
-    with DuckDBGraphStore(path) as graph:
+    with LadybugGraphStore(path) as graph:
         assert graph.count() == 2
         holders = graph.funds_holding("中际旭创", "2026-12-31")
         assert sorted(e.fund for e in holders) == ["515880", "561010"]
@@ -36,8 +45,7 @@ def test_graph_persists_across_connections(tmp_path) -> None:
 
 
 def test_graph_query_is_point_in_time(tmp_path) -> None:
-    path = tmp_path / "graph.duckdb"
-    with DuckDBGraphStore(path) as graph:
+    with LadybugGraphStore(tmp_path / "graph") as graph:
         graph.add_edges(
             [
                 Edge(fund="F", security="S", weight=0.10, as_of=Q1, source="fund_holdings"),
@@ -50,6 +58,41 @@ def test_graph_query_is_point_in_time(tmp_path) -> None:
         # As of after the later one, the newer weight wins (one row per fund).
         late = graph.funds_holding("S", "2026-07-01")
         assert len(late) == 1 and late[0].weight == pytest.approx(0.18)
+
+
+def test_duplicate_disclosures_collapse_to_one_row_per_holder(tmp_path) -> None:
+    # The store is append-only: re-ingesting the same night re-writes the same disclosure, so the
+    # same edge lands twice. Writes never dedup (count stays 2), but the point-in-time read must
+    # collapse them to exactly one row per holder — the graph-native equivalent of the readings
+    # store's QUALIFY ``row_number()=1``. Without the per-holder aggregation the look-through weight
+    # would double-count on re-ingest.
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        edge = Edge(fund="F", security="S", weight=0.12, as_of=Q1, source="fund_holdings")
+        graph.add_edges([edge, edge])  # same disclosure, ingested twice
+        assert graph.count() == 2  # append-only: both rows are kept
+        holders = graph.funds_holding("S", "2026-12-31")
+        assert len(holders) == 1 and holders[0].weight == pytest.approx(0.12)
+        held = graph.securities_of("F", "2026-12-31")
+        assert len(held) == 1 and held[0].weight == pytest.approx(0.12)
+
+
+def test_same_as_of_restatement_returns_a_real_weight_source_pair(tmp_path) -> None:
+    # Two disclosures dated the same day (a same-quarter restatement) carry different
+    # (weight, source). The point-in-time read must return one *real* edge per holder — weight and
+    # source from the SAME disclosure — never a per-column mix (e.g. the larger weight paired with a
+    # source that belonged to the other edge), which would inject a value that was never disclosed.
+    real_pairs = {(0.10, "zzz"), (0.90, "aaa")}
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        graph.add_edges(
+            [
+                Edge(fund="F", security="S", weight=0.10, as_of=Q1, source="zzz"),
+                Edge(fund="F", security="S", weight=0.90, as_of=Q1, source="aaa"),
+            ]
+        )
+        [holder] = graph.funds_holding("S", "2026-12-31")
+        assert (holder.weight, holder.source) in real_pairs
+        [held] = graph.securities_of("F", "2026-12-31")
+        assert (held.weight, held.source) in real_pairs
 
 
 def test_build_graph_from_store_reads_fund_holdings(tmp_path) -> None:
@@ -72,12 +115,11 @@ def test_build_graph_from_store_reads_fund_holdings(tmp_path) -> None:
             ),
         ]
     )
-    graph = DuckDBGraphStore(tmp_path / "graph.duckdb")
-    n = build_graph_from_store(graph, store)
-    assert n == 2
-    holders = graph.funds_holding("中际旭创", "2026-12-31")
-    assert sorted(e.fund for e in holders) == ["515880", "561010"]
-    graph.close()
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        n = build_graph_from_store(graph, store)
+        assert n == 2
+        holders = graph.funds_holding("中际旭创", "2026-12-31")
+        assert sorted(e.fund for e in holders) == ["515880", "561010"]
     store.close()
 
 
@@ -103,13 +145,12 @@ def test_build_graph_includes_nport_edgar_but_not_13f(tmp_path) -> None:
             ),
         ]
     )
-    graph = DuckDBGraphStore(tmp_path / "graph.duckdb")
-    n = build_graph_from_store(graph, store)
-    assert n == 1  # only the weighted N-PORT row became an edge
-    holders = graph.funds_holding("APPLE INC", "2026-12-31")
-    assert [e.fund for e in holders] == ["0000036405"]
-    assert holders[0].weight == pytest.approx(0.071)
-    assert holders[0].source == "edgar"
-    assert graph.funds_holding("COHR", "2026-12-31") == []  # 13F shares row is not an edge
-    graph.close()
+    with LadybugGraphStore(tmp_path / "graph") as graph:
+        n = build_graph_from_store(graph, store)
+        assert n == 1  # only the weighted N-PORT row became an edge
+        holders = graph.funds_holding("APPLE INC", "2026-12-31")
+        assert [e.fund for e in holders] == ["0000036405"]
+        assert holders[0].weight == pytest.approx(0.071)
+        assert holders[0].source == "edgar"
+        assert graph.funds_holding("COHR", "2026-12-31") == []  # 13F shares row is not an edge
     store.close()

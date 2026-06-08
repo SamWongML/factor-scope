@@ -17,7 +17,7 @@ from factor_scope.emerging.stage_b import (
     score_fund,
     screen_funds,
 )
-from factor_scope.graph import DuckDBGraphStore, Edge
+from factor_scope.graph import Edge, LadybugGraphStore
 from factor_scope.graph.lookthrough import Holding
 
 pytestmark = pytest.mark.unit
@@ -25,10 +25,10 @@ pytestmark = pytest.mark.unit
 AS_OF = "2026-06-05"
 
 
-def _graph() -> DuckDBGraphStore:
+def _graph() -> LadybugGraphStore:
     """A book (561010 holds 中际旭创) plus candidate funds; one candidate overlaps the book."""
 
-    graph = DuckDBGraphStore(":memory:")
+    graph = LadybugGraphStore(":memory:")
     graph.add_edges(
         [
             # my core fund holds 中际旭创

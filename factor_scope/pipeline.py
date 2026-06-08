@@ -35,9 +35,9 @@ from factor_scope.emerging import (
 )
 from factor_scope.factors import FactorContext, compute_gate, compute_states
 from factor_scope.graph import (
-    DuckDBGraphStore,
     GraphStore,
     Holding,
+    LadybugGraphStore,
     build_connections,
     build_graph_from_store,
 )
@@ -67,8 +67,8 @@ def _open_store(config: Config) -> DuckDBStore:
     return DuckDBStore(":memory:" if config.store_path is None else config.store_path)
 
 
-def _open_graph(config: Config) -> DuckDBGraphStore:
-    return DuckDBGraphStore(":memory:" if config.graph_path is None else config.graph_path)
+def _open_graph(config: Config) -> LadybugGraphStore:
+    return LadybugGraphStore(":memory:" if config.graph_path is None else config.graph_path)
 
 
 def _gather(config: Config, as_of: str) -> list[Reading]:

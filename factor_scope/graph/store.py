@@ -1,24 +1,25 @@
 """The connection-graph store — a durable, on-disk, point-in-time holdings graph.
 
-The look-through is exact set arithmetic over quarterly holdings snapshots, so the default
-backend materialises the ``(:Fund)-[:HOLDS {weight, as_of}]->(:Security)`` graph as an append-only
-edge table in DuckDB: durable on disk, offline, deterministic, and point-in-time at
-query time (the same ``QUALIFY`` latest-as-of pattern as the readings store). The
-:class:`GraphStore` ``Protocol`` keeps the engine swappable (a graph-native Kùzu / Neo4j is the
-production swap); nothing here is an in-memory graph rebuilt each run.
+The look-through is exact set arithmetic over quarterly holdings snapshots. The backend is
+**LadybugDB**: an embedded, on-disk, openCypher graph database. The
+``(:Fund)-[:HOLDS {weight, as_of}]->(:Security)`` graph is therefore stored graph-natively —
+durable on disk, offline, deterministic, and point-in-time at query time (the latest disclosure
+as-of the query date, the same latest-as-of read the readings store makes). The
+:class:`GraphStore` ``Protocol`` keeps the engine swappable; nothing here is an in-memory graph
+rebuilt each run.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
 from factor_scope.store import PointInTimeStore
 
-__all__ = ["DuckDBGraphStore", "Edge", "GraphStore", "build_graph_from_store"]
+__all__ = ["Edge", "GraphStore", "LadybugGraphStore", "build_graph_from_store"]
 
 
 class Edge(BaseModel):
@@ -31,7 +32,6 @@ class Edge(BaseModel):
     weight: float  # the security's weight in the fund (0..1) at ``as_of``
     as_of: str  # ISO disclosure date (point-in-time; quarterly snapshots)
     source: str  # the feed this edge came from, e.g. "fund_holdings"
-    rel: str = "HOLDS"  # the edge kind; EXPOSED_TO (security→driver/theme) may come later
 
 
 @runtime_checkable
@@ -51,76 +51,107 @@ class GraphStore(Protocol):
         """Number of edges in the graph."""
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS edges (
-    fund VARCHAR NOT NULL,
-    security VARCHAR NOT NULL,
-    rel VARCHAR NOT NULL,
-    weight DOUBLE NOT NULL,
-    as_of VARCHAR NOT NULL,
-    source VARCHAR NOT NULL
-);
-"""
+_SCHEMA = (
+    "CREATE NODE TABLE IF NOT EXISTS Fund(code STRING, PRIMARY KEY(code))",
+    "CREATE NODE TABLE IF NOT EXISTS Security(code STRING, PRIMARY KEY(code))",
+    "CREATE REL TABLE IF NOT EXISTS HOLDS("
+    "FROM Fund TO Security, weight DOUBLE, as_of STRING, source STRING)",
+)
 
-_COLS = "fund, security, rel, weight, as_of, source"
+def _latest_read(returned: str) -> str:
+    """Cypher for the latest HOLDS disclosure per holder as-of ``$as_of``, anchored on ``$code``.
+
+    HOLDS always points Fund→Security; ``returned`` (``"Fund"`` or ``"Security"``) is the side we
+    list, the other side is pinned by ``$code``. Per holder we take ``max(as_of) <= $as_of``
+    (``as_of`` is a zero-padded ISO date, so lexical max is the chronological latest), then the max
+    weight at that date, then the max source at that weight — so the returned ``(weight, source)``
+    is always one *real* disclosure (never a per-column mix), and identical re-ingested edges
+    collapse to one row. The graph-native equivalent of the readings store's latest-as-of read; an
+    earlier query date never sees a later disclosure, and nothing rewrites an edge.
+    """
+
+    def hop(edge: str, *, first: bool) -> str:
+        node = f"(n:{returned})" if first else "(n)"  # ``n`` keeps its label only when first bound
+        anchor = "(:Security {code: $code})" if returned == "Fund" else "(:Fund {code: $code})"
+        left, right = (node, anchor) if returned == "Fund" else (anchor, node)
+        return f"{left}-[{edge}:HOLDS]->{right}"
+
+    return (
+        f"MATCH {hop('h', first=True)} WHERE h.as_of <= $as_of "
+        "WITH n, max(h.as_of) AS latest "
+        f"MATCH {hop('e', first=False)} WHERE e.as_of = latest "
+        "WITH n, latest, max(e.weight) AS weight "
+        f"MATCH {hop('g', first=False)} WHERE g.as_of = latest AND g.weight = weight "
+        "RETURN n.code, weight, latest, max(g.source) ORDER BY n.code"
+    )
 
 
-class DuckDBGraphStore:
-    """A DuckDB-backed :class:`GraphStore`. ``path=":memory:"`` for an ephemeral graph."""
+_FUNDS_HOLDING = _latest_read("Fund")
+_SECURITIES_OF = _latest_read("Security")
+
+
+class LadybugGraphStore:
+    """A LadybugDB-backed :class:`GraphStore`. ``path=":memory:"`` for an ephemeral graph."""
 
     def __init__(self, path: str | Path = ":memory:") -> None:
-        import duckdb  # lazy: the `store` extra is only needed when a graph is opened
+        import ladybug  # lazy: the `store` extra is only needed when a graph is opened
 
         self._path = str(path)
-        if self._path != ":memory:":
-            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-        self._con = duckdb.connect(self._path)
-        self._con.execute(_SCHEMA)
+        db_path = "" if self._path == ":memory:" else self._path  # "" is LadybugDB's in-memory db
+        if db_path:
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._db = ladybug.Database(db_path)
+        self._con = ladybug.Connection(self._db)
+        for stmt in _SCHEMA:
+            self._con.execute(stmt)
 
     def add_edges(self, edges: Iterable[Edge]) -> int:
-        rows = [(e.fund, e.security, e.rel, e.weight, e.as_of, e.source) for e in edges]
+        rows = [e.model_dump() for e in edges]
         if not rows:
             return 0
-        self._con.executemany(f"INSERT INTO edges ({_COLS}) VALUES (?, ?, ?, ?, ?, ?)", rows)
+        # Split write: MERGE the (idempotent) nodes, then CREATE one edge per row. A single UNWIND
+        # that MERGEs the nodes and CREATEs the edge together collapses same-(fund, security) rows
+        # into one edge — fatal for append-only re-ingest, where duplicate disclosures must survive.
+        self._con.execute("UNWIND $rows AS r MERGE (:Fund {code: r.fund})", {"rows": rows})
+        self._con.execute("UNWIND $rows AS r MERGE (:Security {code: r.security})", {"rows": rows})
+        self._con.execute(
+            "UNWIND $rows AS r MATCH (f:Fund {code: r.fund}), (s:Security {code: r.security}) "
+            "CREATE (f)-[:HOLDS {weight: r.weight, as_of: r.as_of, source: r.source}]->(s)",
+            {"rows": rows},
+        )
         return len(rows)
 
     def funds_holding(self, security: str, as_of: str) -> list[Edge]:
-        query = f"""
-        SELECT {_COLS} FROM edges
-        WHERE rel = 'HOLDS' AND security = ? AND as_of <= ?
-        QUALIFY row_number() OVER (PARTITION BY fund ORDER BY as_of DESC) = 1
-        ORDER BY fund
-        """
-        return [self._to_edge(r) for r in self._con.execute(query, [security, as_of]).fetchall()]
+        rows = self._read(_FUNDS_HOLDING, {"code": security, "as_of": as_of})
+        return [
+            Edge(fund=fund, security=security, weight=weight, as_of=ao, source=src)
+            for fund, weight, ao, src in rows
+        ]
 
     def securities_of(self, fund: str, as_of: str) -> list[Edge]:
-        query = f"""
-        SELECT {_COLS} FROM edges
-        WHERE rel = 'HOLDS' AND fund = ? AND as_of <= ?
-        QUALIFY row_number() OVER (PARTITION BY security ORDER BY as_of DESC) = 1
-        ORDER BY security
-        """
-        return [self._to_edge(r) for r in self._con.execute(query, [fund, as_of]).fetchall()]
+        rows = self._read(_SECURITIES_OF, {"code": fund, "as_of": as_of})
+        return [
+            Edge(fund=fund, security=security, weight=weight, as_of=ao, source=src)
+            for security, weight, ao, src in rows
+        ]
 
     def count(self) -> int:
-        row = self._con.execute("SELECT count(*) FROM edges").fetchone()
-        return int(row[0]) if row is not None else 0
+        return int(self._read("MATCH ()-[h:HOLDS]->() RETURN count(h)")[0][0])
+
+    def _read(self, cypher: str, params: dict[str, Any] | None = None) -> list[list[Any]]:
+        result = self._con.execute(cypher, parameters=params)
+        assert not isinstance(result, list)  # a single-statement query returns exactly one result
+        return cast("list[list[Any]]", result.get_all())  # positional rows (default, not dict mode)
 
     def close(self) -> None:
         self._con.close()
+        self._db.close()
 
-    def __enter__(self) -> DuckDBGraphStore:
+    def __enter__(self) -> LadybugGraphStore:
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
-
-    @staticmethod
-    def _to_edge(row: tuple[Any, ...]) -> Edge:
-        fund, security, rel, weight, as_of, source = row
-        return Edge(
-            fund=fund, security=security, rel=rel, weight=weight, as_of=as_of, source=source
-        )
 
 
 def build_graph_from_store(graph: GraphStore, store: PointInTimeStore) -> int:
