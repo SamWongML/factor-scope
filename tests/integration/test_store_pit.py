@@ -79,6 +79,45 @@ def test_append_is_idempotent_on_re_run() -> None:
         assert [r.payload["nav"] for r in store.history("prices", "X")] == [1.0]  # no duplicate
 
 
+def test_snapshot_id_is_content_addressed_and_point_in_time() -> None:
+    # The id fingerprints the store state knowable as of D: same facts → same id, regardless of
+    # insertion order, and a later disclosure (as_of > D) never changes the as-of-D snapshot.
+    with DuckDBStore() as a, DuckDBStore() as b:
+        rows = [_reading("X", "2026-01-01", 1.0), _reading("Y", "2026-02-01", 2.0)]
+        a.append(rows)
+        b.append(list(reversed(rows)))
+        assert a.snapshot_id("2026-06-01") == b.snapshot_id("2026-06-01")
+
+        a.append([_reading("X", "2026-09-01", 9.0)])  # a future disclosure
+        assert a.snapshot_id("2026-06-01") == b.snapshot_id("2026-06-01")  # as-of-D id unchanged
+        assert a.snapshot_id("2026-09-30") != b.snapshot_id("2026-06-01")  # but the later id moves
+
+
+def test_snapshot_id_changes_when_a_knowable_reading_changes() -> None:
+    with DuckDBStore() as a, DuckDBStore() as b:
+        a.append([_reading("X", "2026-01-01", 1.0)])
+        b.append([_reading("X", "2026-01-01", 2.0)])  # same key/date, different value
+        assert a.snapshot_id("2026-06-01") != b.snapshot_id("2026-06-01")
+
+
+def test_snapshot_id_can_exclude_a_series() -> None:
+    # The run's own call log is derived output, not ingested research — excluding it keeps the
+    # data-snapshot fingerprint stable across re-runs that re-log the same calls.
+    with DuckDBStore() as store:
+        store.append([_reading("X", "2026-01-01", 1.0)])
+        base = store.snapshot_id("2026-06-01", exclude=("calls",))
+        store.append(
+            [
+                Reading(
+                    series="calls", key="X", as_of="2026-01-01", fetched_at="t",
+                    payload={"action": "hold"},
+                )
+            ]
+        )
+        assert store.snapshot_id("2026-06-01", exclude=("calls",)) == base  # excluded → no move
+        assert store.snapshot_id("2026-06-01") != base  # but it is a real, knowable fact otherwise
+
+
 def test_append_keeps_rows_that_differ_only_by_source() -> None:
     # Two sources reading the same fund/day are DISTINCT facts — provenance is part of the identity,
     # so dedup must not collapse an AkShare row and a Baostock row for the same (key, as_of).

@@ -33,6 +33,7 @@ def _dash() -> Dashboard:
     return Dashboard(
         as_of="2026-06-05",
         generated_at="2026-06-05T22:00:00Z",
+        snapshot_id="snap-test",
         items=[
             item("光通信", ListName.HOLDINGS, LeanAction.TRIM),
             item("通信ETF", ListName.HOLDINGS, LeanAction.HOLD),
@@ -56,6 +57,7 @@ def test_summarize_counts_items_per_list_and_abstains() -> None:
     assert record.n_abstain == 1  # only the watchlist item abstained
     assert record.n_calls_logged == 4
     assert record.provider == "fake"
+    assert record.snapshot_id == "snap-test"  # the run log records which snapshot was read
 
 
 def test_cost_note_flags_the_agent_sdk_metering_for_claude_code() -> None:
@@ -84,5 +86,6 @@ def test_append_run_log_is_append_only_jsonl(tmp_path) -> None:
     assert first["as_of"] == "2026-06-05"
     assert first["n_items"] == 4
     assert first["provider"] == "fake"
+    assert first["snapshot_id"] == "snap-test"
     # Round-trips back into a RunRecord.
     assert RunRecord(**first).n_abstain == 1

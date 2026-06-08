@@ -53,6 +53,7 @@ def test_dashboard_roundtrips_through_json() -> None:
     dash = Dashboard(
         as_of="2026-06-05",
         generated_at="2026-06-05T22:00:00Z",
+        snapshot_id="snap-abc123",
         items=[DashboardItem(item="通信ETF", list=ListName.WATCHLIST)],
     )
     blob = dash.model_dump_json()

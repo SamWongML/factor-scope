@@ -2,10 +2,13 @@
 
 This module wires the point-in-time store between ingestion and the artifact: ``ingest`` fills the
 store and ``build_dashboard`` reads it (point-in-time, as of the run date) to produce the three
-lists with real ``evidence[]`` and a per-item ``gain`` (cost basis vs current NAV). So the
-entrypoint keeps working standalone, a fixtures ``run`` against an empty store auto-ingests first.
-Each item is then enriched in place — states and gate, look-through connections, the scorecard,
-a calibrated lean, and the emerging list — without changing this entrypoint's contract.
+lists with real ``evidence[]`` and a per-item ``gain`` (cost basis vs current NAV). The snapshot
+boundary is one-way — research/ingest *fetches* and writes dated Readings; ``run`` reasons over the
+frozen snapshot deterministically and never fetches. So a fixtures ``run`` materialises its offline
+snapshot to stay standalone, while a *live* ``run`` against an empty store refuses (``ingest``
+first) rather than reaching for the network; the artifact records the snapshot id it read. Each item
+is then enriched in place — states and gate, look-through connections, the scorecard, a calibrated
+lean, and the emerging list — without changing this entrypoint's contract.
 """
 
 from __future__ import annotations
@@ -46,6 +49,15 @@ from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
+
+
+class SnapshotError(RuntimeError):
+    """``run`` was asked to reason over a snapshot that does not exist yet.
+
+    The snapshot boundary is one-way: research/ingest fetches and writes Readings; ``run`` only
+    reads a frozen snapshot. A live source against an empty store cannot be reasoned over without
+    fetching, so ``run`` refuses rather than crossing back over the boundary.
+    """
 
 
 def _resolve_as_of(config: Config) -> str:
@@ -412,16 +424,27 @@ def build_dashboard(
     """
 
     as_of = _resolve_as_of(config)
-    mkt = _resolve_market(config, market)
     store = _open_store(config)
     graph = _open_graph(config)
     try:
         if store.count("positions") == 0:
-            # Empty store → auto-ingest so `run` works without a separate `ingest` step.
-            store.append(mkt.gather(config, as_of=as_of))
+            if market is None and config.source == "live":
+                # The snapshot boundary: `run` reasons over a frozen snapshot, it never fetches.
+                # A live source must be pulled by `ingest` first; `run` then reads what it wrote.
+                raise SnapshotError(
+                    "no snapshot to reason over: run `factor-scope ingest --live` first, "
+                    "then `run --live --store-path …` reads the frozen snapshot it wrote"
+                )
+            # Offline snapshot (fixtures, or an injected test market) → materialise it so `run`
+            # works standalone. Reading committed files is not fetching; the artifact stays
+            # byte-for-byte deterministic.
+            store.append(_resolve_market(config, market).gather(config, as_of=as_of))
         if graph.count() == 0:
             # Empty graph → build it from the (durable or just-ingested) holdings readings.
             build_graph_from_store(graph, store)
+        # Fingerprint the frozen snapshot the run reasons over — the read data, not the calls this
+        # run is about to log (those are derived output, so excluding them keeps a re-run stable).
+        snapshot_id = store.snapshot_id(as_of, exclude=("calls",))
         book = _build_book(store, as_of)
         core_pairs = _build_items(store, as_of)
         _attach_connections(core_pairs, graph, book, as_of)
@@ -436,7 +459,9 @@ def build_dashboard(
         store.close()
         graph.close()
 
-    return Dashboard(as_of=as_of, generated_at=f"{as_of}T22:00:00Z", items=items)
+    return Dashboard(
+        as_of=as_of, generated_at=f"{as_of}T22:00:00Z", snapshot_id=snapshot_id, items=items
+    )
 
 
 def run(

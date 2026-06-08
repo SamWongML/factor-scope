@@ -150,6 +150,7 @@ class Dashboard(BaseModel):
     schema_version: int = 1
     as_of: str  # the as-of date the engine reasoned on (point-in-time)
     generated_at: str  # when this artifact was produced
+    snapshot_id: str  # fingerprint of the frozen store state this run read (see store.snapshot_id)
     items: list[DashboardItem] = Field(default_factory=list)
 
     def by_list(self, name: ListName) -> list[DashboardItem]:
