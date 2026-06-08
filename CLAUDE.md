@@ -19,11 +19,11 @@ make check    # lint + typecheck + test — THE bar; a change isn't done until t
 
 CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
 
-## Layout — full map in `docs/ARCHITECTURE.md`
+## Layout — full map in `docs/GAP-ANALYSIS.md`
 
 - `factor_scope/contract/` — pydantic models for `dashboard.json` + JSON-schema export. **The spine.**
 - `pipeline.py` — `ingest()` fills the store; `build_dashboard`/`run` read it → `Dashboard`.
-- `ingest/ store/ factors/ graph/ scoring/ digest/ emerging/` — the six layers; each is a
+- `ingest/ store/ factors/ graph/ scoring/ digest/` — the six layers, plus `emerging/`; each is a
   pipeline step that only **adds** to the artifact, so a partial pipeline still emits a valid one.
 - `cli.py` typer app · `render.py` terminal view · `schedule/` launchd+cron deploy.
 - `data/fixtures/` committed sample data · `tests/{unit,integration,system}`.
@@ -58,4 +58,4 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
   headless `claude -p`, agents in `.claude/agents/`) · DeepSeek is a **chore** model only, never a
   `--provider` value.
 
-Ops (nightly job, scheduling, provider budget): `docs/ops/RUNBOOK.md`. Full spec: `docs/spec/SPEC.md`.
+Ops (nightly job, scheduling, provider budget): `docs/ops/RUNBOOK.md`. Full spec: `docs/spec/wealth-assistant-engine-v4.html`.
