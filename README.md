@@ -2,6 +2,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://docs.python.org/3/)
 [![uv](https://img.shields.io/badge/package_manager-uv-orange)](https://github.com/astral-sh/uv)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **factor-scope** is a local-first, nightly-batch decision-support tool for an A-share / funds-and-ETFs portfolio. Each run writes one dated artifact, `out/dashboard.json`, reviewed each morning.
 
