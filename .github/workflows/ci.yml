@@ -20,11 +20,5 @@ jobs:
       - name: Sync project (+dev, +store) into a uv venv
         run: uv sync --extra dev --extra store --python 3.11
 
-      - name: Lint (ruff)
-        run: uv run ruff check factor_scope tests
-
-      - name: Type-check (mypy)
-        run: uv run mypy factor_scope
-
-      - name: Tests (offline — no live sources, no paid LLMs)
-        run: uv run pytest -q
+      - name: Lint + type-check + test (offline — no live sources, no paid LLMs)
+        run: make check
