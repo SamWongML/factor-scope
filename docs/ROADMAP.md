@@ -100,29 +100,29 @@ both ends; the engine never trades.
 
 ## The upgrade issue set (`U01`–`U17`)
 
-Each issue is sized to one Claude Code session. Labels: `p0-foundation` / `p1` / `p2` / `p3-deferred`
-plus stage tags `stage1-discovery` / `stage2-universe` / `stage3-reasoning` / `factors` / `frontend`
-/ `cross-cutting`.
+Each issue is sized to one Claude Code session. Labels use two uniform axes — a bare **priority**
+(`p0` / `p1` / `p2` / `p3`) plus a single-word **area** (`foundation` / `universe` / `factors` /
+`discovery` / `reasoning` / `frontend` / `cross-cutting` / `deferred`).
 
 | ID | Title | Labels | Depends on |
 |----|-------|--------|------------|
-| **U01** | CI invokes `make check` | `p0-foundation` | — |
-| **U02** | Generalization seams (provider/source protocols + config) | `p0-foundation` `cross-cutting` | — |
-| **U03** | Snapshot boundary (research/ingest writes Readings; deterministic reasoning) | `p0-foundation` `cross-cutting` | U02 |
-| **U04** | Graph edge model: idempotent + temporal (`valid_from`/`valid_to`) | `p0-foundation` `cross-cutting` | U03 |
-| **U05** | Online-by-default flip + pin live extras / `uv.lock` | `p0-foundation` `cross-cutting` | U03 |
-| **U06** | Full fund universe + AkShare/AkTools live ingest | `p1` `stage2-universe` | U02, U03, U04 |
+| **U01** | CI invokes `make check` | `p0` `foundation` | — |
+| **U02** | Generalization seams (provider/source protocols + config) | `p0` `foundation` `cross-cutting` | — |
+| **U03** | Snapshot boundary (research/ingest writes Readings; deterministic reasoning) | `p0` `foundation` `cross-cutting` | U02 |
+| **U04** | Graph edge model: idempotent + temporal (`valid_from`/`valid_to`) | `p0` `foundation` `cross-cutting` | U03 |
+| **U05** | Online-by-default flip + pin live extras / `uv.lock` | `p0` `foundation` `cross-cutting` | U03 |
+| **U06** | Full fund universe + AkShare/AkTools live ingest | `p1` `universe` | U02, U03, U04 |
 | **U07** | Complete the factor battery (4 stubbed states + reversal) | `p1` `factors` | U06 |
-| **U08** | Inferred theme→fund mapping (overlap + return correlation) | `p1` `stage2-universe` | U04, U06, U07 |
-| **U09** | Theme-discovery service (BERTopic online + LLM-populated, evidence-rich) | `p1` `stage1-discovery` | U02, U03, U05 |
-| **U10** | Provider tiering: DeepSeek V4 tiers + deep-think seats + stream-json cost envelope | `p1` `stage3-reasoning` | U02, U05 |
-| **U11** | Multi-stage fund shortlisting funnel → top 3 | `p1` `stage3-reasoning` | U08, U07, U10 |
-| **U12** | Per-product bull/bear seats: parallel, evidence+as_of brief, de-bias + calibration | `p1` `stage3-reasoning` | U11, U10, U07 |
+| **U08** | Inferred theme→fund mapping (overlap + return correlation) | `p1` `universe` | U04, U06, U07 |
+| **U09** | Theme-discovery service (BERTopic online + LLM-populated, evidence-rich) | `p1` `discovery` | U02, U03, U05 |
+| **U10** | Provider tiering: DeepSeek V4 tiers + deep-think seats + stream-json cost envelope | `p1` `reasoning` | U02, U05 |
+| **U11** | Multi-stage fund shortlisting funnel → top 3 | `p1` `reasoning` | U08, U07, U10 |
+| **U12** | Per-product bull/bear seats: parallel, evidence+as_of brief, de-bias + calibration | `p1` `reasoning` | U11, U10, U07 |
 | **U13** | Anti-hype guardrails (Ben-David) + survivorship-aware universe | `p1` `cross-cutting` | U06, U07, U11/U12 |
-| **U14** | Freeze the Scorecard contract model | `p2` `stage3-reasoning` | U11, U12 |
+| **U14** | Freeze the Scorecard contract model | `p2` `reasoning` | U11, U12 |
 | **U15** | Cost telemetry + multi-provider budget guard | `p2` `cross-cutting` | U10, U03 |
-| **U16** | Frontend: theme curation (keep/drop) + dashboard viewer | `frontend` `stage1-discovery` | U09, U03, U12 |
-| **U17** | Graduate-tier robustness (DSR / PBO / CPCV / ArcticDB) — deferred | `p3-deferred` | U13 |
+| **U16** | Frontend: theme curation (keep/drop) + dashboard viewer | `p2` `frontend` `discovery` | U09, U03, U12 |
+| **U17** | Graduate-tier robustness (DSR / PBO / CPCV / ArcticDB) — deferred | `p3` `deferred` | U13 |
 
 ### Execution order (phases; within a phase, top-to-bottom)
 
