@@ -116,4 +116,4 @@ make check      # lint (ruff) + typecheck (mypy strict) + full suite — the gat
 
 Tests are marked `unit` / `integration` / `system` (see `pyproject.toml`). Work test-first: RED → GREEN → REFACTOR. The entrypoint must always stay runnable.
 
-Architecture + contract: `docs/ARCHITECTURE.md`. Full spec: `docs/spec/SPEC.md`. Agent instructions: `CLAUDE.md`.
+Architecture + contract: `docs/GAP-ANALYSIS.md`. Full spec: `docs/spec/wealth-assistant-engine-v4.html`. Agent instructions: `CLAUDE.md`.
