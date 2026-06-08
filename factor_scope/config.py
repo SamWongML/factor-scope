@@ -19,6 +19,10 @@ class Config:
     """Everything a single run needs to be reproducible."""
 
     source: str = "fixtures"  # "fixtures" (default, offline) | "live" (opt-in)
+    # Which market's adapters supply the readings — selected by name (see markets.get_market). The
+    # only concrete adapter is "ashare"; this is the seam later markets target. Orthogonal to
+    # ``source``: the market owns *which* sources, ``source`` owns fixtures-vs-live for each.
+    market: str = "ashare"
     fixtures_dir: Path = field(default=DEFAULT_FIXTURES_DIR)
     as_of: str | None = None  # None → take the as-of stamped in the fixtures (deterministic)
     output_path: Path = field(default=Path("out") / "dashboard.json")

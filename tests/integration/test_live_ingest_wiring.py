@@ -2,8 +2,8 @@
 
 These stay offline by stubbing each adapter's heavy ``fetch_live`` (the real bodies hit the
 network and live behind ``FACTOR_SCOPE_LIVE=1`` in ``test_adapters_live.py``). They pin the wiring
-of ``gather_live_readings``: every held fund's holdings are refreshed (so the connection graph
-rebuilds from live disclosures) and each configured EDGAR filer is pulled.
+of the A-share market's live gather: every held fund's holdings are refreshed (so the connection
+graph rebuilds from live disclosures) and each configured EDGAR filer is pulled.
 """
 
 import logging
@@ -18,11 +18,11 @@ from factor_scope.ingest import (
     edgar,
     fred,
     fund_holdings,
-    gather_live_readings,
     mootdx,
     prices,
 )
 from factor_scope.ingest.base import IngestError
+from factor_scope.markets.ashare import AShareMarket
 from factor_scope.store import Reading
 
 pytestmark = pytest.mark.integration
@@ -74,7 +74,7 @@ def _stub_adapters(monkeypatch) -> None:
 
 def test_gather_live_refreshes_fund_holdings_per_held_fund(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
-    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
 
     held = [r for r in readings if r.series == "positions"]
     refreshed = [r for r in readings if r.series == "fund_holdings"]
@@ -86,7 +86,7 @@ def test_gather_live_refreshes_fund_holdings_per_held_fund(monkeypatch) -> None:
 def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     config = Config(source="live", edgar_ciks=("0001067983", "0000102909"))
-    readings = gather_live_readings(config, as_of="2026-06-05")
+    readings = AShareMarket().gather(config, as_of="2026-06-05")
 
     edgar_rows = [r for r in readings if r.series == "edgar"]
     assert {r.payload["filer"] for r in edgar_rows} == {"0001067983", "0000102909"}
@@ -97,14 +97,14 @@ def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:
 
 def test_gather_live_pulls_no_edgar_filers_by_default(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
-    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
     assert not [r for r in readings if r.series == "edgar"]
 
 
 def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     # AkShare and Baostock agree → one corroborated price per held fund (not one per source)
-    readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+    readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
     held = {r.key for r in readings if r.series == "positions"}
     priced = [r for r in readings if r.series == "prices"]
     assert {r.key for r in priced} == held
@@ -130,7 +130,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
         )
     # AkShare offline must not kill the run — the other sources substitute for it (failover).
     with caplog.at_level(logging.WARNING):
-        readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
     held = {r.key for r in readings if r.series == "positions"}
     priced = [r for r in readings if r.series == "prices"]
     assert {r.key for r in priced} == held
@@ -151,7 +151,7 @@ def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch, capl
         ],
     )
     with caplog.at_level(logging.WARNING):
-        readings = gather_live_readings(Config(source="live"), as_of="2026-06-05")
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
     priced = {r.key: r for r in readings if r.series == "prices"}
     assert priced  # the run completed despite the disagreement
     assert priced["561010"].payload["nav"] == 1.0  # primary AkShare value retained
@@ -173,7 +173,7 @@ def test_gather_live_trips_circuit_breaker_on_systemic_divergence(monkeypatch) -
         ],
     )
     with pytest.raises(IngestError, match="unreconciled"):
-        gather_live_readings(Config(source="live"), as_of="2026-06-05")
+        AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
 
 
 def test_gather_live_respects_configured_tolerance(monkeypatch) -> None:
@@ -189,7 +189,7 @@ def test_gather_live_respects_configured_tolerance(monkeypatch) -> None:
         ],
     )
     config = Config(source="live", corroboration_tolerance=0.05)
-    readings = gather_live_readings(config, as_of="2026-06-05")
+    readings = AShareMarket().gather(config, as_of="2026-06-05")
     priced = [r for r in readings if r.series == "prices"]
     assert priced and not any("divergence" in r.payload for r in priced)  # 2% within the 5% band
 

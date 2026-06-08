@@ -10,7 +10,7 @@ import pytest
 
 from factor_scope.config import Config
 from factor_scope.factors import FACTOR_NAMES, FactorContext, compute_states
-from factor_scope.ingest import gather_fixture_readings
+from factor_scope.markets import get_market
 from factor_scope.store import DuckDBStore
 
 pytestmark = pytest.mark.unit
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 def _fixture_store() -> DuckDBStore:
     store = DuckDBStore(":memory:")
-    store.append(gather_fixture_readings(Config(), as_of="2026-06-05"))
+    store.append(get_market("ashare").gather(Config(), as_of="2026-06-05"))
     return store
 
 
