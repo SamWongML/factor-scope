@@ -32,7 +32,6 @@ from factor_scope.ingest import (
     mootdx,
     positions,
     prices,
-    theme_funds,
     themes,
     trading_activity,
 )
@@ -129,23 +128,21 @@ class ASharePrices:
 
 
 class AShareThemes:
-    """Emerging-theme candidates + their candidate funds (the funnel's Stage A/B inputs).
+    """Emerging themes + their reference constituents (the funnel's Stage-A inputs + mapping seed).
 
-    Fixtures load the bundled themes and theme funds when present. Live theme discovery (BERTopic /
-    an LLM tagging pass) is opt-in and not wired into CI, so the live path yields none for now.
+    Fixtures load the bundled themes when present; each theme's candidate funds are *inferred* from
+    its constituents downstream (holdings overlap + return correlation), not loaded from a tagged
+    table. Live theme discovery (BERTopic / an LLM tagging pass) is opt-in and not wired into CI, so
+    the live path yields none for now.
     """
 
     def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
         if config.source != "fixtures":
             return []  # pragma: no cover - opt-in live path (theme discovery)
-        readings: list[Reading] = []
         themes_path = config.fixtures_dir / themes.FIXTURE
-        if themes_path.exists():
-            readings += themes.load_fixture(themes_path, fetched_at=fetched_at)
-        funds_path = config.fixtures_dir / theme_funds.FIXTURE
-        if funds_path.exists():
-            readings += theme_funds.load_fixture(funds_path, fetched_at=fetched_at)
-        return readings
+        if not themes_path.exists():
+            return []
+        return themes.load_fixture(themes_path, fetched_at=fetched_at)
 
 
 def _gather_macro(config: Config, *, fetched_at: str) -> list[Reading]:

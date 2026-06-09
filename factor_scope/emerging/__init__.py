@@ -12,6 +12,7 @@ overlap (no new graph logic).
 from __future__ import annotations
 
 from factor_scope.emerging.funnel import Shortlist, group_by_theme, run_funnel
+from factor_scope.emerging.mapping import ThemeFundLink, infer_links, return_correlation
 from factor_scope.emerging.stage_a import (
     StageAResult,
     Theme,
@@ -32,9 +33,12 @@ __all__ = [
     "Shortlist",
     "StageAResult",
     "Theme",
+    "ThemeFundLink",
     "group_by_theme",
+    "infer_links",
     "overlap_with_core",
     "qualify_theme",
+    "return_correlation",
     "run_funnel",
     "score_fund",
     "screen_funds",

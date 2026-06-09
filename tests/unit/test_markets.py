@@ -53,7 +53,6 @@ def test_ashare_fixture_gather_keeps_every_series() -> None:
         "edgar",
         "calls",
         "themes",
-        "theme_funds",
     }
     # positions are stamped with the run's as_of (point-in-time), prices keep their own dates
     assert all(r.as_of == AS_OF for r in readings if r.series == "positions")

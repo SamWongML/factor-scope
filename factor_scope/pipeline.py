@@ -34,6 +34,7 @@ from factor_scope.emerging import (
     FundScore,
     Shortlist,
     Theme,
+    infer_links,
     run_funnel,
 )
 from factor_scope.factors import FactorContext, compute_gate, compute_states
@@ -45,6 +46,7 @@ from factor_scope.graph import (
     build_graph_from_store,
 )
 from factor_scope.graph.lookthrough import look_through
+from factor_scope.ingest.base import fetched_at_for
 from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
@@ -99,6 +101,7 @@ def ingest(config: Config, *, market: Market | None = None) -> int:
     try:
         n = store.append(mkt.gather(config, as_of=as_of))
         build_graph_from_store(graph, store)
+        n += _materialise_mapping(store, graph, as_of)
         return n
     finally:
         store.close()
@@ -308,6 +311,7 @@ def _theme_from_reading(reading: Reading) -> Theme:
         lead_chain=bool(p["lead_chain"]),
         wrapper_exists=bool(p["wrapper_exists"]),
         as_of=reading.as_of,
+        constituents=tuple(p.get("constituents") or ()),
     )
 
 
@@ -315,7 +319,7 @@ def _candidate_from_reading(reading: Reading) -> Candidate:
     p = reading.payload
     return Candidate(
         theme=str(p["theme"]),
-        code=reading.key,
+        code=str(p["code"]),
         name=str(p["name"]),
         methodology=float(p["methodology"]),
         fee=float(p["fee"]),
@@ -325,6 +329,54 @@ def _candidate_from_reading(reading: Reading) -> Candidate:
         crowding=float(p["crowding"]),
         as_of=reading.as_of,
     )
+
+
+def _materialise_mapping(store: PointInTimeStore, graph: GraphStore, as_of: str) -> int:
+    """Infer the theme→fund mapping from the graph + prices; cache it as dated ``theme_map`` rows.
+
+    The Stage-B candidate set is *derived*, not hand-tagged: each theme's reference constituents
+    seed a holdings-overlap (重合度) + return-correlation (涨跌幅相关性) ranking of the fund
+    universe (:func:`~factor_scope.emerging.infer_links`). For each inferred link the per-fund
+    scorecard inputs are joined point-in-time from the universe feeds — name/fee/tracking/top-10
+    from ``fund_universe``, AUM from ``etf_scale``, the theme's own crowding from ``themes`` — and
+    ``methodology`` is the *measured* pure-play (the mapping score). The result is frozen as
+    ``theme_map`` Readings keyed by ``theme:code`` (so a fund can map to several themes) with a
+    deterministic ``fetched_at``, so a later disclosure never rewrites a past mapping. Returns the
+    number of rows appended.
+    """
+
+    themes = store.read_as_of("themes", as_of)
+    universe = {
+        r.key: r for r in store.read_as_of("fund_universe", as_of) if r.payload.get("valid")
+    }
+    aum = {r.key: float(r.payload["aum"]) for r in store.read_as_of("etf_scale", as_of)}
+    constituents = {r.key: list(r.payload.get("constituents") or ()) for r in themes}
+    crowding = {r.key: float(r.payload["crowding"]) for r in themes}
+    codes = sorted(universe.keys() & aum.keys())  # funds with both a full scorecard and a size read
+    fetched_at = fetched_at_for(as_of)
+    rows = [
+        Reading(
+            series="theme_map",
+            key=f"{link.theme}:{link.code}",
+            as_of=as_of,
+            fetched_at=fetched_at,
+            payload={
+                "theme": link.theme,
+                "code": link.code,
+                "name": str(universe[link.code].payload["name"]),
+                "methodology": link.score,  # measured pure-play (重合度 confirmed by correlation)
+                "fee": float(universe[link.code].payload["fee"]),
+                "aum": aum[link.code],
+                "tracking_error": float(universe[link.code].payload["tracking_error"]),
+                "top10_weight": float(universe[link.code].payload["top10_weight"]),
+                "crowding": crowding[link.theme],
+                "overlap": link.overlap,
+                "correlation": link.correlation,
+            },
+        )
+        for link in infer_links(constituents, codes, graph, store, as_of)
+    ]
+    return store.append(rows)
 
 
 def _stage_a_evidence(shortlist: Shortlist) -> Evidence:
@@ -384,7 +436,7 @@ def _build_emerging(
     if store.count("themes") == 0:
         return []
     themes = [_theme_from_reading(r) for r in store.read_as_of("themes", as_of)]
-    candidates = [_candidate_from_reading(r) for r in store.read_as_of("theme_funds", as_of)]
+    candidates = [_candidate_from_reading(r) for r in store.read_as_of("theme_map", as_of)]
     pairs: list[tuple[str, DashboardItem]] = []
     for shortlist in run_funnel(themes, candidates, graph, as_of, book):
         for rank, score in enumerate(shortlist.funds, start=1):
@@ -442,6 +494,10 @@ def build_dashboard(
         if graph.count() == 0:
             # Empty graph → build it from the (durable or just-ingested) holdings readings.
             build_graph_from_store(graph, store)
+        if store.count("theme_map") == 0:
+            # Derive + freeze the theme→fund mapping if `ingest` did not already cache it, so the
+            # offline `run` reasons over the same data-derived candidates as the durable nightly.
+            _materialise_mapping(store, graph, as_of)
         # Fingerprint the frozen snapshot the run reasons over — the read data, not the calls this
         # run is about to log (those are derived output, so excluding them keeps a re-run stable).
         snapshot_id = store.snapshot_id(as_of, exclude=("calls",))

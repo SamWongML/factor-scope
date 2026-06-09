@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from factor_scope.graph.lookthrough import Holding, look_through
+from factor_scope.graph.lookthrough import Holding, look_through, overlap_with
 from factor_scope.graph.store import GraphStore
 
 __all__ = [
@@ -100,16 +100,13 @@ def overlap_with_core(
     For each security the candidate holds, run the exact look-through against my book; a positive
     look-through weight means I already own that name through my core, so the candidate's weight in
     it is a leveraged repeat. Returns ``(total overlapping weight, sorted overlapping names)`` —
-    reusing the existing set arithmetic, with no new graph logic.
+    reusing the shared set-arithmetic primitive, with no new graph logic.
     """
 
-    overlap = 0.0
-    names: list[str] = []
-    for edge in graph.securities_of(fund_code, as_of):
-        if look_through(graph, edge.security, as_of, book).lookthrough_wt > 0:
-            overlap += edge.weight
-            names.append(edge.security)
-    return overlap, sorted(names)
+    def mine(security: str) -> bool:
+        return look_through(graph, security, as_of, book).lookthrough_wt > 0
+
+    return overlap_with(graph, fund_code, as_of, mine)
 
 
 def score_fund(
