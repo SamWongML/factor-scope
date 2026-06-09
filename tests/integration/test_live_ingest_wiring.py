@@ -112,7 +112,7 @@ def _stub_adapters(monkeypatch) -> None:
         "fetch_live",
         lambda code, *, fetched_at: [
             Reading(series="fundamentals", key=code, as_of="2026-05-29", fetched_at=fetched_at,
-                    payload={"pe": 42.5, "pb": 5.4})
+                    payload={"pe": 42.5})
         ],
     )
     monkeypatch.setattr(

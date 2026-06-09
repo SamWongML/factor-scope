@@ -23,7 +23,7 @@ def _ctx(code: str, pes: list[float]) -> FactorContext:
                 key=code,
                 as_of=f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}",
                 fetched_at="2026-06-05T22:00:00Z",
-                payload={"pe": pe, "pb": 1.0},
+                payload={"pe": pe},
             )
             for i, pe in enumerate(pes)
         ]

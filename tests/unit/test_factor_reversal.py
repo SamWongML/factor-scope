@@ -82,6 +82,13 @@ def test_reversal_without_turnover_stays_a_price_only_read() -> None:
     assert "Amihud" not in (state.evidence or "")
 
 
+def test_violent_runup_lands_extreme_high() -> None:
+    # the final 20-day return is the unique top of the whole return history → strictly EXTREME_HIGH.
+    navs = [1.0 + 0.001 * i for i in range(80)] + [1.08 + 0.05 * j for j in range(20)]
+    state = reversal(_ctx("UP", navs))
+    assert state.level is Band.EXTREME_HIGH
+
+
 def test_too_short_series_is_invalid_not_an_error() -> None:
     state = reversal(_ctx("S", [1.0, 1.1, 1.2, 1.3]))
     assert state.valid is False

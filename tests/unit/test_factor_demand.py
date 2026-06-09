@@ -46,6 +46,13 @@ def test_fading_revisions_read_headwind() -> None:
     assert "headwind" in state.direction
 
 
+def test_demand_collapse_lands_extreme_low() -> None:
+    # steady small revisions, then a sharp collapse → the latest revision is the unique bottom of
+    # its own history → strictly EXTREME_LOW (not merely LOW).
+    state = demand(_ctx([0.01 * i for i in range(11)] + [-0.50]))
+    assert state.level is Band.EXTREME_LOW
+
+
 def test_too_short_history_is_invalid_not_an_error() -> None:
     state = demand(_ctx([0.02, 0.03, 0.04]))
     assert state.valid is False

@@ -43,6 +43,13 @@ def test_fresh_accumulation_reads_lead_confirms() -> None:
     assert "accumulated" in state.direction
 
 
+def test_accumulation_burst_lands_extreme_high() -> None:
+    # a long run of steady adds, then one outsized quarter → the latest change is the unique
+    # top of its own history → strictly EXTREME_HIGH (not merely HIGH).
+    state = cross_market(_ctx([100.0 + 10.0 * i for i in range(12)] + [710.0]))
+    assert state.level is Band.EXTREME_HIGH
+
+
 def test_swing_to_distribution_reads_chain_risk() -> None:
     # steady adds, then a sharp sell → the latest change ranks at the bottom
     state = cross_market(_ctx([100.0, 130.0, 160.0, 190.0, 220.0, 250.0, 80.0]))

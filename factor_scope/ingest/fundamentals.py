@@ -1,9 +1,9 @@
-"""Per-fund valuation history — the underlying basket's PE / PB, the valuation surface.
+"""Per-fund valuation history — the underlying basket's PE, the valuation surface.
 
-`fundamentals.csv → {code, as_of, pe, pb}`. One row per fund per disclosure, keyed by code and
-stamped with the valuation feed's own trading date. ``pe`` (市盈率) and ``pb`` (市净率) are the
-tracked basket's multiples; the valuation factor ranks ``pe`` point-in-time against the fund's own
-history (a stretched multiple is the anti-hype overvaluation gauge).
+`fundamentals.csv → {code, as_of, pe}`. One row per fund per disclosure, keyed by code and stamped
+with the valuation feed's own trading date. ``pe`` (市盈率) is the tracked basket's earnings
+multiple; the valuation factor ranks it point-in-time against the fund's own history (a stretched
+multiple is the anti-hype overvaluation gauge).
 
 Live pulls AkShare's index valuation history (``index_value_hist_funddb``) for the fund's basket —
 opt-in, never called in CI.
@@ -20,7 +20,7 @@ from factor_scope.store import Reading
 
 SERIES = "fundamentals"
 FIXTURE = "fundamentals.csv"
-_REQUIRED = ("code", "as_of", "pe", "pb")
+_REQUIRED = ("code", "as_of", "pe")
 
 
 def parse(text: str, *, fetched_at: str) -> list[Reading]:
@@ -32,10 +32,7 @@ def parse(text: str, *, fetched_at: str) -> list[Reading]:
                 key=required_str(row, "code", line_no, SERIES),
                 as_of=required_str(row, "as_of", line_no, SERIES),
                 fetched_at=fetched_at,
-                payload={
-                    "pe": as_float(row, "pe", line_no, SERIES),
-                    "pb": as_float(row, "pb", line_no, SERIES),
-                },
+                payload={"pe": as_float(row, "pe", line_no, SERIES)},
             )
         )
     return readings
@@ -46,7 +43,7 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
 
 
 def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
-    """Map AkShare's index valuation bars (日期 / 市盈率 / 市净率) to Readings — the pure core."""
+    """Map AkShare's index valuation bars (日期 / 市盈率) to Readings — the pure core."""
 
     return [
         Reading(
@@ -54,7 +51,7 @@ def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str)
             key=code,
             as_of=str(bar["日期"]),
             fetched_at=fetched_at,
-            payload={"pe": float(bar["市盈率"]), "pb": float(bar["市净率"])},
+            payload={"pe": float(bar["市盈率"])},
         )
         for bar in bars
     ]
