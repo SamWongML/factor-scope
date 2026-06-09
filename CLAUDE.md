@@ -61,4 +61,4 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
   only, never a `--provider` value.
 
 Ops (nightly job, scheduling, provider budget): `docs/ops/RUNBOOK.md`. Direction, architecture map &
-upgrade plan (`U01`–`U17`): `docs/ROADMAP.md`.
+upgrade plan: `docs/ROADMAP.md`.
