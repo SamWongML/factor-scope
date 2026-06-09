@@ -16,11 +16,13 @@ from factor_scope import ingest
 from factor_scope.config import Config
 from factor_scope.ingest import (
     baostock,
+    demand,
     edgar,
     etf_scale,
     fred,
     fund_holdings,
     fund_universe,
+    fundamentals,
     mootdx,
     prices,
     trading_activity,
@@ -105,6 +107,22 @@ def _stub_adapters(monkeypatch) -> None:
                     payload={"turnover": 3.1, "amount": 2.8})
         ],
     )
+    monkeypatch.setattr(
+        fundamentals,
+        "fetch_live",
+        lambda code, *, fetched_at: [
+            Reading(series="fundamentals", key=code, as_of="2026-05-29", fetched_at=fetched_at,
+                    payload={"pe": 42.5})
+        ],
+    )
+    monkeypatch.setattr(
+        demand,
+        "fetch_live",
+        lambda *, fetched_at: [
+            Reading(series="demand", key=demand.KEY, as_of="2026-03-31", fetched_at=fetched_at,
+                    payload={"revision": 0.08})
+        ],
+    )
 
 
 def test_gather_live_pulls_the_full_universe_and_etf_scale(monkeypatch) -> None:
@@ -128,6 +146,11 @@ def test_gather_live_refreshes_holdings_for_each_on_exchange_etf(monkeypatch) ->
     # the crowding surface (turnover + traded value) is pulled for the same on-exchange ETFs
     activity = {r.key for r in readings if r.series == "trading_activity"}
     assert activity == on_exchange
+    # …as is each ETF's valuation history (the valuation factor's PE surface)
+    valued = {r.key for r in readings if r.series == "fundamentals"}
+    assert valued == on_exchange
+    # and the book-wide end-demand dial is pulled once for the whole run
+    assert [r for r in readings if r.series == "demand"]
 
 
 def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:

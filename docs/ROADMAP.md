@@ -228,6 +228,19 @@ Nothing is dropped: every original issue survives as a re-scoped U-issue, a merg
   beat the broad index at 10 years** → crowding/valuation/run-up/launch-date must be able to
   **veto**; the universe must be **survivorship-aware**; treat "high attention + high valuation" as a
   *late* signal, not an early one.
+- **Decision — ETF flow is a U13 concern, not a `crowding` sub-input.** `crowding` stays a single
+  turnover-percentile state (换手率 ranked vs its own history). It does **not** absorb ETF
+  flow / 份额 growth, for three reasons: (i) the no-composite rule forbids blending flow + turnover
+  into one band anyway; (ii) best practice keeps them separate — MSCI's factor-crowding model carries
+  neither turnover nor flow, and CN desks split rotation into `景气度 + 资金流 + 拥挤度` (three axes,
+  crowding = the turnover-based risk overlay); (iii) raw net flow is largely collinear with turnover
+  (its orthogonal slice is the *signed/unexpected* residual, which a single ranked signal can't
+  isolate) and is operationally fragile point-in-time (Δshares×NAV is lagged + restated; SSE stamps
+  份额 post-close vs SZSE pre-open; stale NAV on cross-border; AP-arbitrage/"Ponzi" flow noise). The
+  over-extension content flow *does* carry — thematic launch-at-peak overvaluation — is already
+  reached by `valuation` (PE) + the launch/survivorship work here. If flow is pursued, add it as its
+  **own** signed shares-outstanding-growth state under U13 (with first-printed 份额 snapshotting and
+  SSE/SZSE as-of reconciliation), never folded into `crowding`.
 
 ### §6 — Multi-agent bull/bear debate (→ U12; the "seat" model)
 

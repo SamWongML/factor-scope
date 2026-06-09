@@ -22,11 +22,13 @@ from factor_scope.ingest import (
     _live_or_empty,
     baostock,
     calls,
+    demand,
     edgar,
     etf_scale,
     fred,
     fund_holdings,
     fund_universe,
+    fundamentals,
     mootdx,
     positions,
     prices,
@@ -69,6 +71,9 @@ class AShareUniverse:
             readings += trading_activity.load_fixture(
                 config.fixtures_dir / trading_activity.FIXTURE, fetched_at=fetched_at
             )
+            readings += fundamentals.load_fixture(
+                config.fixtures_dir / fundamentals.FIXTURE, fetched_at=fetched_at
+            )
             readings += edgar.load_fixture(
                 config.fixtures_dir / edgar.FIXTURE, fetched_at=fetched_at
             )
@@ -80,6 +85,7 @@ class AShareUniverse:
             if fund.payload["on_exchange"]:  # ETFs disclose holdings → the look-through graph edges
                 readings += fund_holdings.fetch_live(fund.key, fetched_at=fetched_at)
                 readings += trading_activity.fetch_live(fund.key, fetched_at=fetched_at)
+                readings += fundamentals.fetch_live(fund.key, fetched_at=fetched_at)
         for cik in config.edgar_ciks:  # pragma: no cover - opt-in live path
             readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
         return readings
@@ -154,6 +160,14 @@ def _gather_macro(config: Config, *, fetched_at: str) -> list[Reading]:
     ]
 
 
+def _gather_demand(config: Config, *, fetched_at: str) -> list[Reading]:
+    """The book-wide end-demand dial (orders/capex revisions). Fixtures load it; live pulls."""
+
+    if config.source == "fixtures":
+        return demand.load_fixture(config.fixtures_dir / demand.FIXTURE, fetched_at=fetched_at)
+    return demand.fetch_live(fetched_at=fetched_at)  # pragma: no cover - opt-in live path
+
+
 def _gather_prior_calls(config: Config, *, fetched_at: str) -> list[Reading]:
     """The engine's own prior leans — seed data for the offline self-scoring loop (fixtures only).
 
@@ -182,5 +196,6 @@ class AShareMarket:
         readings = composed.gather(config, as_of=as_of)
         fetched_at = fetched_at_for(as_of)
         readings += _gather_macro(config, fetched_at=fetched_at)
+        readings += _gather_demand(config, fetched_at=fetched_at)
         readings += _gather_prior_calls(config, fetched_at=fetched_at)
         return readings
