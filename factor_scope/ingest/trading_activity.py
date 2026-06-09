@@ -44,7 +44,7 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
+def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
     """Map AkShare's ETF daily bars (日期 / 换手率 / 成交额) to Readings — the pure core of live."""
 
     return [
@@ -65,4 +65,4 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
     import akshare as ak
 
     frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")
-    return from_bars(code, (bar for _, bar in frame.iterrows()), fetched_at=fetched_at)
+    return _from_bars(code, (bar for _, bar in frame.iterrows()), fetched_at=fetched_at)

@@ -49,7 +49,7 @@ def test_trading_activity_maps_the_akshare_bar_columns() -> None:
     # the live ETF daily bar (日期 / 换手率 / 成交额) maps to the same Reading shape as the fixture,
     # pinned offline so the column mapping is covered without the network.
     bars = [{"日期": "2026-05-30", "换手率": "4.25", "成交额": "3.60"}]
-    reading = trading_activity.from_bars("561010", bars, fetched_at=FETCHED_AT)[0]
+    reading = trading_activity._from_bars("561010", bars, fetched_at=FETCHED_AT)[0]
     assert reading.key == "561010"
     assert reading.as_of == "2026-05-30"
     assert reading.payload == {"turnover": 4.25, "amount": 3.60}
