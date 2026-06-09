@@ -23,13 +23,16 @@ from factor_scope.ingest import (
     baostock,
     calls,
     edgar,
+    etf_scale,
     fred,
     fund_holdings,
+    fund_universe,
     mootdx,
     positions,
     prices,
     theme_funds,
     themes,
+    trading_activity,
 )
 from factor_scope.ingest.base import fetched_at_for
 from factor_scope.markets.base import ComposedMarket
@@ -37,28 +40,46 @@ from factor_scope.store import Reading
 
 
 class AShareUniverse:
-    """The book — local ``positions.csv`` plus the holdings disclosures behind it.
+    """The book — the local ``positions.csv`` plus the full fund universe behind it.
 
-    Fixtures load the bundled positions, fund holdings, and US (EDGAR) holdings. Live keeps the
-    local positions file as the universe seed but refreshes each held fund's holdings and every
-    configured EDGAR filer, so the look-through graph rebuilds from live disclosures.
+    Fixtures load the bundled positions, the full fund universe (``fund_universe`` + ``etf_scale``),
+    the fund holdings, each ETF's daily trading activity (turnover + traded value), and US (EDGAR)
+    holdings. Live keeps the local positions file as the held seed but pulls the whole fund universe
+    + ETF scale, then refreshes every on-exchange ETF's holdings and trading activity (so the
+    look-through graph and the crowding surface rebuild from the universe's live disclosures) and
+    each configured EDGAR filer.
     """
 
     def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
-        book = positions.load_fixture(
-            config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
+        readings: list[Reading] = list(
+            positions.load_fixture(
+                config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
+            )
         )
-        readings: list[Reading] = list(book)
         if config.source == "fixtures":
+            readings += fund_universe.load_fixture(
+                config.fixtures_dir / fund_universe.FIXTURE, as_of=as_of, fetched_at=fetched_at
+            )
+            readings += etf_scale.load_fixture(
+                config.fixtures_dir / etf_scale.FIXTURE, fetched_at=fetched_at
+            )
             readings += fund_holdings.load_fixture(
                 config.fixtures_dir / fund_holdings.FIXTURE, fetched_at=fetched_at
+            )
+            readings += trading_activity.load_fixture(
+                config.fixtures_dir / trading_activity.FIXTURE, fetched_at=fetched_at
             )
             readings += edgar.load_fixture(
                 config.fixtures_dir / edgar.FIXTURE, fetched_at=fetched_at
             )
             return readings
-        for pos in book:  # pragma: no cover - opt-in live path
-            readings += fund_holdings.fetch_live(pos.key, fetched_at=fetched_at)
+        universe = fund_universe.fetch_live(as_of=as_of, fetched_at=fetched_at)  # pragma: no cover
+        readings += universe  # pragma: no cover - opt-in live path
+        readings += etf_scale.fetch_live(fetched_at=fetched_at)  # pragma: no cover
+        for fund in universe:  # pragma: no cover - opt-in live path
+            if fund.payload["on_exchange"]:  # ETFs disclose holdings → the look-through graph edges
+                readings += fund_holdings.fetch_live(fund.key, fetched_at=fetched_at)
+                readings += trading_activity.fetch_live(fund.key, fetched_at=fetched_at)
         for cik in config.edgar_ciks:  # pragma: no cover - opt-in live path
             readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
         return readings

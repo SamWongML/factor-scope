@@ -1,9 +1,10 @@
-"""The live ingest path refreshes holdings, not just prices + the macro dial.
+"""The live ingest path pulls the full fund universe + refreshes its holdings, not just prices.
 
 These stay offline by stubbing each adapter's heavy ``fetch_live`` (the real bodies hit the
 network and live behind ``FACTOR_SCOPE_LIVE=1`` in ``test_adapters_live.py``). They pin the wiring
-of the A-share market's live gather: every held fund's holdings are refreshed (so the connection
-graph rebuilds from live disclosures) and each configured EDGAR filer is pulled.
+of the A-share market's live gather: the whole fund universe + ETF scale are pulled, every
+on-exchange ETF's holdings are refreshed (so the connection graph rebuilds from live disclosures),
+and each configured EDGAR filer is pulled.
 """
 
 import logging
@@ -16,16 +17,23 @@ from factor_scope.config import Config
 from factor_scope.ingest import (
     baostock,
     edgar,
+    etf_scale,
     fred,
     fund_holdings,
+    fund_universe,
     mootdx,
     prices,
+    trading_activity,
 )
 from factor_scope.ingest.base import IngestError
 from factor_scope.markets.ashare import AShareMarket
 from factor_scope.store import Reading
 
 pytestmark = pytest.mark.integration
+
+# A small live universe stand-in: two on-exchange ETFs (whose holdings the graph needs) + one
+# off-exchange fund (no holdings refresh). The held positions fixture is priced independently.
+_UNIVERSE = (("561010", True), ("588200", True), ("000001", False))
 
 
 def _stub_adapters(monkeypatch) -> None:
@@ -70,17 +78,56 @@ def _stub_adapters(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(fred, "fetch_live", lambda series_id, *, fetched_at: [])
+    monkeypatch.setattr(
+        fund_universe,
+        "fetch_live",
+        lambda *, as_of, fetched_at: [
+            Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
+                    payload={"name": code, "type": "ETF", "on_exchange": on_exchange,
+                             "inception": "2021-01-20", "delisting": "", "fee": None,
+                             "tracking_error": None, "top10_weight": None, "valid": False})
+            for code, on_exchange in _UNIVERSE
+        ],
+    )
+    monkeypatch.setattr(
+        etf_scale,
+        "fetch_live",
+        lambda *, fetched_at: [
+            Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
+                    payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})
+        ],
+    )
+    monkeypatch.setattr(
+        trading_activity,
+        "fetch_live",
+        lambda code, *, fetched_at: [
+            Reading(series="trading_activity", key=code, as_of="2026-06-05", fetched_at=fetched_at,
+                    payload={"turnover": 3.1, "amount": 2.8})
+        ],
+    )
 
 
-def test_gather_live_refreshes_fund_holdings_per_held_fund(monkeypatch) -> None:
+def test_gather_live_pulls_the_full_universe_and_etf_scale(monkeypatch) -> None:
+    _stub_adapters(monkeypatch)
+    readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+    universe = {r.key for r in readings if r.series == "fund_universe"}
+    scale = [r for r in readings if r.series == "etf_scale"]
+    assert universe == {code for code, _ in _UNIVERSE}  # the whole fund universe, not just the book
+    assert scale and scale[0].payload["aum"] == 68.0
+
+
+def test_gather_live_refreshes_holdings_for_each_on_exchange_etf(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
 
-    held = [r for r in readings if r.series == "positions"]
-    refreshed = [r for r in readings if r.series == "fund_holdings"]
-    assert held  # the offline positions fixture is the universe
-    # one live holdings refresh per held fund — so the graph rebuilds from live disclosures
-    assert {r.payload["fund"] for r in refreshed} == {r.key for r in held}
+    on_exchange = {code for code, on_exchange in _UNIVERSE if on_exchange}
+    refreshed = {r.payload["fund"] for r in readings if r.series == "fund_holdings"}
+    # one live holdings refresh per on-exchange ETF (the off-exchange fund discloses none) — so the
+    # graph rebuilds from the universe's live disclosures, not just the held book.
+    assert refreshed == on_exchange
+    # the crowding surface (turnover + traded value) is pulled for the same on-exchange ETFs
+    activity = {r.key for r in readings if r.series == "trading_activity"}
+    assert activity == on_exchange
 
 
 def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:
