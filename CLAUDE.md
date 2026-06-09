@@ -34,6 +34,11 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
 - Keep `make test` and `make system` green at every boundary; the entrypoint stays runnable.
 - mypy is **strict**, ruff line-length 100, and deprecation warnings are errors in the suite — don't
   restate these, just run `make check`.
+- **Name for the domain, not the process.** Keep workflow/scaffolding terms — `issue`, `phase`,
+  `step`/`stepN`, `task`, `ticket`, `TODO`, `tag`, `WIP`, `v2`/`new`/`old`, AI/agent artifacts — out
+  of identifiers, filenames, comments, and docstrings. Names describe what the code *is* in
+  factor-scope's vocabulary (factors, readings, gates, the artifact), not how or when it was built.
+  This stays a production codebase with no traces of its implementation history.
 
 ## Hard rules (costly to rediscover)
 
