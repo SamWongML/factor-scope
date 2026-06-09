@@ -53,7 +53,7 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
 - **Online by default; offline is the test mode.** `run`/`nightly` default to live data sources +
   the real provider; **offline** — fixtures + the **`fake`** provider — is opted into with `--offline`
   or `FACTOR_SCOPE_OFFLINE=1`. The whole suite + CI force offline (`tests/conftest.py`) and stay
-  byte-for-byte deterministic — preserved by the snapshot boundary (U03) + mocks, not by avoiding
+  byte-for-byte deterministic — preserved by the snapshot boundary + mocks, not by avoiding
   the network. `live`/`store` deps are **pinned** extras imported **lazily inside the call** (see
   `digest/claude_code.py`) so the offline path never shells out.
 - **Providers:** `claude_code` (default — real bull/bear→synthesis via headless `claude -p`, agents

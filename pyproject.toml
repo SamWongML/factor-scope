@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Online-by-default (U05): live data + real providers are the normal path, so these are first-class
+# Online-by-default: live data + real providers are the normal path, so these are first-class
 # and pinned with compatible bounds (lower = the locked floor, upper = next major) for a
 # reproducible nightly. The whole suite still runs offline on fixtures (see tests/conftest.py).
 live = [

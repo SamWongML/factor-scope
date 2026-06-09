@@ -14,10 +14,10 @@ from pathlib import Path
 # Repo-root-relative default location of the committed sample data.
 DEFAULT_FIXTURES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures"
 
-# Online-by-default (U05): live sources + the real provider are the normal path. Offline — fixtures
+# Online-by-default: live sources + the real provider are the normal path. Offline — fixtures
 # + the deterministic ``fake`` provider — is the explicit test/ops mode, opted into by this env var
 # (the suite sets it; see tests/conftest.py) or the CLI ``--offline`` flag. Determinism is preserved
-# by the snapshot boundary (U03) + mocks, not by avoiding the network.
+# by the snapshot boundary + mocks, not by avoiding the network.
 OFFLINE_ENV = "FACTOR_SCOPE_OFFLINE"
 
 

@@ -1,4 +1,4 @@
-"""U05 — online-by-default.
+"""Online-by-default.
 
 Live sources + the real ``claude_code`` provider are the normal path; offline (fixtures + the
 deterministic ``fake`` provider) is an explicit mode, selected by the ``FACTOR_SCOPE_OFFLINE`` env

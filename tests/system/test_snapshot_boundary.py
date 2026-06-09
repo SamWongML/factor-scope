@@ -1,4 +1,4 @@
-"""System tests for the U03 snapshot boundary.
+"""System tests for the snapshot boundary.
 
 Two halves of the same seam: research/ingest *fetches* and writes dated Readings, while ``run``
 reasons over a **frozen snapshot** — deterministically and with no network. These tests pin that

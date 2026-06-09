@@ -1,4 +1,4 @@
-"""Force the suite into offline mode (U05).
+"""Force the suite into offline mode.
 
 Online-by-default: live sources + the real ``claude_code`` provider are the normal path, so the
 defaults that ``Config`` and the CLI resolve are *live*. The test suite is the explicit offline

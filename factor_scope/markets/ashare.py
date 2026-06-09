@@ -110,7 +110,7 @@ class AShareThemes:
 
     def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
         if config.source != "fixtures":
-            return []  # pragma: no cover - opt-in live path (theme discovery, U09)
+            return []  # pragma: no cover - opt-in live path (theme discovery)
         readings: list[Reading] = []
         themes_path = config.fixtures_dir / themes.FIXTURE
         if themes_path.exists():

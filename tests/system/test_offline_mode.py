@@ -1,7 +1,7 @@
-"""U05 — the CLI flip, end to end.
+"""The CLI online/offline flip, end to end.
 
 ``run`` defaults to live sources + the real provider; ``--offline`` selects the deterministic
-fixtures path. With offline off, the snapshot boundary (U03) refuses to fetch over an empty store —
+fixtures path. With offline off, the snapshot boundary refuses to fetch over an empty store —
 which is exactly how we pin that the default is online and never silently falls back to fixtures.
 """
 

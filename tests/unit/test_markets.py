@@ -1,6 +1,6 @@
 """The market seam — config-selected adapters behind source protocols.
 
-U02 introduces ``Market`` / ``UniverseSource`` / ``ThemeSource`` / ``PriceSource`` so the engine is
+The ``Market`` / ``UniverseSource`` / ``ThemeSource`` / ``PriceSource`` seams keep the engine
 no longer hard-wired to A-share. A-share is the first concrete adapter; these pin the seam: the
 market is selected by name, a fake market made of fake sources drives the whole pipeline, and the
 A-share fixture gather still produces every series the artifact reads (no behaviour change).
