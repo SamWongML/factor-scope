@@ -27,6 +27,16 @@ store = [
     "pyarrow>=15,<25",
     "ladybug>=0.17,<0.18",
 ]
+# Theme discovery (the opt-in, host-only research service). BERTopic-online drives the quantitative
+# trajectory; pydantic-ai-slim[openai] populates the LLM judgment fields — one extra covers
+# DeepSeek/Qwen/GLM/Kimi via OpenAI-compatible endpoints. Imported lazily inside the real impls only,
+# so CI (which installs just .[dev,store]) never loads them and the offline path stays deterministic.
+discovery = [
+    "bertopic>=0.16,<0.17",
+    "sentence-transformers>=3,<6",
+    "scikit-learn>=1.4,<2",
+    "pydantic-ai-slim[openai]>=0.0.40,<1",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.4",

@@ -16,6 +16,8 @@ is :func:`factor_scope.pipeline.nightly`.
 from __future__ import annotations
 
 from factor_scope.schedule.deploy import (
+    DEFAULT_PROGRAM,
+    DISCOVER_PROGRAM,
     ScheduleSpec,
     render_cron_line,
     render_launchd_plist,
@@ -29,6 +31,8 @@ from factor_scope.schedule.runlog import (
 )
 
 __all__ = [
+    "DEFAULT_PROGRAM",
+    "DISCOVER_PROGRAM",
     "DigestFailure",
     "RunRecord",
     "ScheduleSpec",

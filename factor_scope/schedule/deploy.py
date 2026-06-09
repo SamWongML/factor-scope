@@ -16,8 +16,10 @@ from typing import Any
 # The engine stamps ``generated_at`` at 22:00; the nightly job fires after the close, so
 # 22:00 local is the sensible default. These are defaults only — every field is overridable.
 DEFAULT_LABEL = "com.factor-scope.nightly"
-# The scheduled production job is online by default — no flag (offline is the opt-in test mode).
+# The scheduled production jobs are online by default — no flag (offline is the opt-in test mode).
 DEFAULT_PROGRAM = ("factor-scope", "nightly")
+# Theme discovery is its own, lighter-cadence job (weekly by convention); the same renderers run it.
+DISCOVER_PROGRAM = ("factor-scope", "discover")
 
 
 @dataclass(frozen=True)

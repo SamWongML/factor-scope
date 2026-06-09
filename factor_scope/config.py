@@ -61,3 +61,18 @@ class Config:
     provider: str = field(default_factory=lambda: "fake" if offline_mode() else "claude_code")
     # Where the nightly job appends its append-only ops run log (one JSON record per run).
     log_path: Path = field(default=Path("out") / "nightly.jsonl")
+    # Theme-discovery (the separate, user/cron-triggered service) knobs. The LLM that populates the
+    # durability/corroboration fields is the *lighter* job → DeepSeek V4 by default. A built-in
+    # provider prefix (``deepseek:`` / ``openai:`` / ``anthropic:`` / ``moonshotai:``) passes
+    # straight through; set ``discovery_base_url`` (+ api-key env) to point at *any*
+    # OpenAI-compatible endpoint — Qwen / GLM / Kimi — with no code change. The heavy bull/bear
+    # debate stays on ``claude_code`` (``provider``). Offline selects the fakes via ``source``.
+    discovery_model: str = "deepseek:deepseek-v4-pro"
+    discovery_base_url: str | None = None
+    discovery_api_key_env: str | None = None
+    # The rolling text corpus the live discovery clusters. Offline reads the bundled
+    # ``textstream.csv``; online pulls this feed (same ``doc_id,as_of,source,text`` shape).
+    textstream_feed_url: str | None = None
+    # The multilingual sentence-embedding model BERTopic-online uses; the light, MPS-friendly
+    # default suits a Mac-mini-scale Chinese corpus (swap to a heavier one like BAAI/bge-m3 later).
+    discovery_embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
