@@ -53,6 +53,7 @@ class Theme:
     lead_chain: bool  # the US relay corroborates real end-demand
     wrapper_exists: bool  # an investable fund/ETF (or a fund heavily exposed) exists
     as_of: str  # the research date this read was true as of (point-in-time)
+    constituents: tuple[str, ...] = ()  # the theme's reference names — the mapping's overlap seed
 
 
 @dataclass(frozen=True)

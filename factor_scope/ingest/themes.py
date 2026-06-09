@@ -1,10 +1,12 @@
 """Themes adapter — candidate industries for the emerging funnel's Stage A.
 
 `themes.csv → {theme, as_of, acceleration, base_level, breadth, crowding, broad_adoption,
-path_to_profit, fad_resistant, lead_chain, wrapper_exists}`. Each row is one industry's dated
-weak-signal read; keyed by theme name and stamped with its own research ``as_of`` so reads stay
-point-in-time. Live theme discovery is a clustering/tagging pass (BERTopic / an LLM tag) over a text
-stream — opt-in, never wired into CI; only the fixture backend runs offline.
+path_to_profit, fad_resistant, lead_chain, wrapper_exists, constituents}`. Each row is one
+industry's dated weak-signal read plus its reference constituents (the ``;``-separated names of its
+index, the seed the theme→fund mapping infers candidate funds from). Keyed by theme name and
+stamped with its own research ``as_of`` so reads stay point-in-time. Live theme discovery is a
+clustering/tagging pass (BERTopic / an LLM tag) over a text stream — opt-in, never wired into CI;
+only the fixture backend runs offline.
 """
 
 from __future__ import annotations
@@ -28,8 +30,15 @@ _REQUIRED = (
     "fad_resistant",
     "lead_chain",
     "wrapper_exists",
+    "constituents",
 )
 _BOOL_FIELDS = ("broad_adoption", "path_to_profit", "fad_resistant", "lead_chain", "wrapper_exists")
+
+
+def _constituents(row: dict[str, str]) -> list[str]:
+    """The ``;``-separated reference constituents → a clean list (blank entries dropped)."""
+
+    return [name.strip() for name in (row.get("constituents") or "").split(";") if name.strip()]
 
 
 def _as_bool(row: dict[str, str], field: str, line_no: int) -> bool:
@@ -48,6 +57,7 @@ def parse(text: str, *, fetched_at: str) -> list[Reading]:
             "base_level": as_float(row, "base_level", line_no, SERIES),
             "breadth": int(as_float(row, "breadth", line_no, SERIES)),
             "crowding": as_float(row, "crowding", line_no, SERIES),
+            "constituents": _constituents(row),
         }
         for field in _BOOL_FIELDS:
             payload[field] = _as_bool(row, field, line_no)

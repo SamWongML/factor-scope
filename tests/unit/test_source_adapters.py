@@ -12,7 +12,6 @@ from factor_scope.ingest import (
     fund_holdings,
     mootdx,
     prices,
-    theme_funds,
     themes,
 )
 from factor_scope.ingest.base import IngestError
@@ -140,8 +139,8 @@ def test_edgar_fetch_live_supports_nport(monkeypatch) -> None:
 def test_themes_keys_by_name_and_coerces_flags() -> None:
     text = (
         "theme,as_of,acceleration,base_level,breadth,crowding,"
-        "broad_adoption,path_to_profit,fad_resistant,lead_chain,wrapper_exists\n"
-        "储能,2026-05-31,0.62,0.30,6,0.35,1,1,1,1,0\n"
+        "broad_adoption,path_to_profit,fad_resistant,lead_chain,wrapper_exists,constituents\n"
+        "储能,2026-05-31,0.62,0.30,6,0.35,1,1,1,1,0,宁德时代;阳光电源\n"
     )
     readings = themes.parse(text, fetched_at="x")
     assert readings[0].series == "themes"
@@ -150,6 +149,7 @@ def test_themes_keys_by_name_and_coerces_flags() -> None:
     assert readings[0].payload["breadth"] == 6  # parsed as an int
     assert readings[0].payload["broad_adoption"] is True
     assert readings[0].payload["wrapper_exists"] is False  # 0 → False
+    assert readings[0].payload["constituents"] == ["宁德时代", "阳光电源"]  # ;-split names
 
 
 class _FakeResultSet:
@@ -307,15 +307,3 @@ def test_select_reconciled_three_agree_no_flag() -> None:
     assert "divergence" not in chosen[0].payload  # all within tolerance → clean
 
 
-def test_theme_funds_keys_by_code() -> None:
-    text = (
-        "theme,code,name,as_of,methodology,fee,aum,tracking_error,top10_weight,crowding\n"
-        "储能,561160,储能ETF,2026-05-31,0.90,0.005,82,0.010,0.55,0.30\n"
-    )
-    readings = theme_funds.parse(text, fetched_at="x")
-    assert readings[0].series == "theme_funds"
-    assert readings[0].key == "561160"
-    assert readings[0].payload["theme"] == "储能"
-    assert readings[0].payload["name"] == "储能ETF"
-    assert readings[0].payload["fee"] == 0.005
-    assert readings[0].payload["crowding"] == 0.30

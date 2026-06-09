@@ -10,13 +10,13 @@ illusion-of-diversification catch); a falling name carries a ``↓`` marker.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from factor_scope.contract import Connection
 from factor_scope.graph.store import GraphStore
 
-__all__ = ["Holding", "LookThrough", "build_connections", "look_through"]
+__all__ = ["Holding", "LookThrough", "build_connections", "look_through", "overlap_with"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,26 @@ class LookThrough:
     security: str
     funds: list[str]  # the fund codes of mine holding it, as of the date (sorted)
     lookthrough_wt: float  # my total look-through weight: Σ (weight in fund × my weight in fund)
+
+
+def overlap_with(
+    graph: GraphStore, fund_code: str, as_of: str, matches: Callable[[str], bool]
+) -> tuple[float, list[str]]:
+    """A fund's disclosed weight in the securities a predicate selects (point-in-time set math).
+
+    Walk the fund's holdings as of the date and sum the weight of every security ``matches`` takes,
+    returning ``(total weight, sorted matching names)``. The one set-arithmetic primitive behind
+    both overlap-with-core (the predicate is "a name my book already holds") and theme overlap /
+    重合度 (the predicate is "a name in the theme's reference constituents").
+    """
+
+    overlap = 0.0
+    names: list[str] = []
+    for edge in graph.securities_of(fund_code, as_of):
+        if matches(edge.security):
+            overlap += edge.weight
+            names.append(edge.security)
+    return overlap, sorted(names)
 
 
 def look_through(

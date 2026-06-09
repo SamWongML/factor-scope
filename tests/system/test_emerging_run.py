@@ -66,6 +66,18 @@ def test_capped_emerging_fund_is_never_leaned_bullish() -> None:
     assert capped.lean.action is not LeanAction.BUY_EARLY
 
 
+def test_emerging_candidates_are_data_derived_without_a_tagged_table() -> None:
+    # No hand-tagged theme_funds.csv exists: candidates are inferred from holdings overlap, so
+    # every Stage-B comparison carries a measured overlap-with-core (the look-through, not a tag).
+    assert not (Config().fixtures_dir / "theme_funds.csv").exists()
+    dash = build_dashboard(Config())
+    emerging = dash.by_list(ListName.EMERGING)
+    assert emerging  # the funnel still produces a shortlist
+    for item in emerging:
+        stage_b = next(e for e in item.evidence if e.src == "emerging:stage_b")
+        assert "overlap-with-core" in stage_b.one_line
+
+
 def test_emerging_run_is_deterministic() -> None:
     cfg = Config()
     first = build_dashboard(cfg).model_dump_json(indent=2)
