@@ -20,28 +20,30 @@ pytestmark = pytest.mark.system
 AS_OF = "2026-06-05"
 
 
-def _build(tmp_path, name: str) -> tuple[str, int, int, int]:
+def _build(tmp_path, name: str) -> tuple[str, int, int, int, int]:
     cfg = Config(store_path=tmp_path / f"{name}.duckdb", graph_path=tmp_path / f"{name}.ladybug")
     ingest(cfg)
     with DuckDBStore(cfg.store_path) as store:
         universe = store.read_as_of("fund_universe", AS_OF)
         scale = store.read_as_of("etf_scale", AS_OF)
+        activity = store.read_as_of("trading_activity", AS_OF)
         snapshot_id = store.snapshot_id(AS_OF)
     with LadybugGraphStore(cfg.graph_path) as graph:
         edges = graph.count()
-    return snapshot_id, len(universe), len(scale), edges
+    return snapshot_id, len(universe), len(scale), len(activity), edges
 
 
 def test_ingest_builds_universe_and_graph_deterministically(tmp_path) -> None:
-    snap_a, n_universe, n_scale, edges_a = _build(tmp_path, "a")
+    snap_a, n_universe, n_scale, n_activity, edges_a = _build(tmp_path, "a")
 
     # The universe is broader than the held book: it carries every fund (held, theme-candidate,
     # off-exchange, and delisted) with its scorecard inputs, plus per-exchange AUM.
     assert n_universe >= 10
     assert n_scale >= 1
+    assert n_activity >= 1  # the crowding surface (turnover + traded value) per on-exchange ETF
     assert edges_a > 0  # the holdings graph was materialised from the universe's disclosures
 
-    snap_b, _, _, edges_b = _build(tmp_path, "b")
+    snap_b, _, _, _, edges_b = _build(tmp_path, "b")
     assert snap_b == snap_a  # a fresh ingest reproduces the snapshot byte-for-byte
     assert edges_b == edges_a
 

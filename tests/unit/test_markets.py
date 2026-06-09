@@ -46,6 +46,7 @@ def test_ashare_fixture_gather_keeps_every_series() -> None:
         "etf_scale",
         "prices",
         "fund_holdings",
+        "trading_activity",
         "fred",
         "edgar",
         "calls",

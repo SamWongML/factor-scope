@@ -32,6 +32,7 @@ from factor_scope.ingest import (
     prices,
     theme_funds,
     themes,
+    trading_activity,
 )
 from factor_scope.ingest.base import fetched_at_for
 from factor_scope.markets.base import ComposedMarket
@@ -42,10 +43,11 @@ class AShareUniverse:
     """The book — the local ``positions.csv`` plus the full fund universe behind it.
 
     Fixtures load the bundled positions, the full fund universe (``fund_universe`` + ``etf_scale``),
-    the fund holdings, and US (EDGAR) holdings. Live keeps the local positions file as the held seed
-    but pulls the whole fund universe + ETF scale, then refreshes every on-exchange ETF's holdings
-    (so the look-through graph rebuilds from the universe's live disclosures) and each configured
-    EDGAR filer.
+    the fund holdings, each ETF's daily trading activity (turnover + traded value), and US (EDGAR)
+    holdings. Live keeps the local positions file as the held seed but pulls the whole fund universe
+    + ETF scale, then refreshes every on-exchange ETF's holdings and trading activity (so the
+    look-through graph and the crowding surface rebuild from the universe's live disclosures) and
+    each configured EDGAR filer.
     """
 
     def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
@@ -64,6 +66,9 @@ class AShareUniverse:
             readings += fund_holdings.load_fixture(
                 config.fixtures_dir / fund_holdings.FIXTURE, fetched_at=fetched_at
             )
+            readings += trading_activity.load_fixture(
+                config.fixtures_dir / trading_activity.FIXTURE, fetched_at=fetched_at
+            )
             readings += edgar.load_fixture(
                 config.fixtures_dir / edgar.FIXTURE, fetched_at=fetched_at
             )
@@ -74,6 +79,7 @@ class AShareUniverse:
         for fund in universe:  # pragma: no cover - opt-in live path
             if fund.payload["on_exchange"]:  # ETFs disclose holdings → the look-through graph edges
                 readings += fund_holdings.fetch_live(fund.key, fetched_at=fetched_at)
+                readings += trading_activity.fetch_live(fund.key, fetched_at=fetched_at)
         for cik in config.edgar_ciks:  # pragma: no cover - opt-in live path
             readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
         return readings

@@ -17,6 +17,7 @@ from factor_scope.ingest import (
     fund_universe,
     mootdx,
     prices,
+    trading_activity,
 )
 
 pytestmark = pytest.mark.integration
@@ -65,6 +66,12 @@ def test_fund_universe_live_smoke() -> None:
 def test_etf_scale_live_smoke() -> None:
     readings = etf_scale.fetch_live(fetched_at="t")
     assert readings and readings[0].payload["aum"] > 0
+
+
+@skip_unless_live
+def test_trading_activity_live_smoke() -> None:
+    readings = trading_activity.fetch_live("561010", fetched_at="t")
+    assert readings and readings[0].payload["turnover"] >= 0 and readings[0].payload["amount"] >= 0
 
 
 @skip_unless_live
