@@ -30,6 +30,48 @@ def fred_values(store: PointInTimeStore, series_id: str, as_of: str) -> list[flo
     return [float(r.payload["value"]) for r in _series_asc(store, "fred", series_id, as_of)]
 
 
+def turnovers(store: PointInTimeStore, code: str, as_of: str) -> list[float]:
+    """The point-in-time daily turnover (换手率) history for ``code``, oldest-first."""
+
+    rows = _series_asc(store, "trading_activity", code, as_of)
+    return [float(r.payload["turnover"]) for r in rows]
+
+
+def traded_values(store: PointInTimeStore, code: str, as_of: str) -> list[float]:
+    """The point-in-time daily traded value (成交额, the Amihud input), oldest-first."""
+
+    rows = _series_asc(store, "trading_activity", code, as_of)
+    return [float(r.payload["amount"]) for r in rows]
+
+
+def valuation_pes(store: PointInTimeStore, code: str, as_of: str) -> list[float]:
+    """The point-in-time PE (市盈率) history for a fund's basket, oldest-first."""
+
+    return [float(r.payload["pe"]) for r in _series_asc(store, "fundamentals", code, as_of)]
+
+
+def demand_revisions(store: PointInTimeStore, as_of: str) -> list[float]:
+    """The book-wide end-demand revision history (one series, all keys), oldest-first."""
+
+    rows = [r for r in store.history("demand") if r.as_of <= as_of]
+    rows.sort(key=lambda r: (r.as_of, r.fetched_at))
+    return [float(r.payload["revision"]) for r in rows]
+
+
+def lead_chain(store: PointInTimeStore, as_of: str) -> list[float]:
+    """The US lead-chain: total 13F-disclosed shares of the leaders per as_of, oldest-first.
+
+    Aggregates every point-in-time ``edgar`` 13F row (the ``shares`` disclosures, not the weighted
+    N-PORT graph edges) into one book-wide accumulation series the cross-market factor ranks.
+    """
+
+    by_date: dict[str, float] = {}
+    for r in store.history("edgar"):
+        if "shares" in r.payload and r.as_of <= as_of:
+            by_date[r.as_of] = by_date.get(r.as_of, 0.0) + float(r.payload["shares"])
+    return [by_date[d] for d in sorted(by_date)]
+
+
 def fred_latest(store: PointInTimeStore, series_id: str, as_of: str) -> float | None:
     """The most recent value for a FRED series as of the run date, or ``None`` if absent."""
 
@@ -64,11 +106,16 @@ def moving_average(navs: list[float], window: int) -> float:
 
 
 __all__ = [
+    "demand_revisions",
     "drawdown",
     "fred_latest",
     "fred_values",
     "horizon_returns",
+    "lead_chain",
     "moving_average",
     "price_navs",
     "rolling_vol",
+    "traded_values",
+    "turnovers",
+    "valuation_pes",
 ]

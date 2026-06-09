@@ -7,9 +7,10 @@ reversal-DOWN risk), a dated ``evidence`` line, and a ``valid`` flag. **No weigh
 ever formed.** A factor whose inputs are missing or too short returns ``valid=False`` and is
 ignored downstream — missing is not the same as bad, and a factor never raises.
 
-Four states are data-backed from the point-in-time store today (trend gate, reversal,
-low-vol/drawdown, the macro dial); the other four (cross-market lead, crowding, demand, valuation)
-need inputs not yet ingested, so they are emitted present-but-invalid until their sources land.
+All eight states are data-backed from the point-in-time store: trend gate, reversal, low-vol and
+crowding/valuation read a single item's own price/turnover/PE history, while the macro dial,
+cross-market lead and demand are one book-wide regime each. An item with too little (or no) history
+for a given factor degrades that one state to ``valid=False`` and keeps the rest.
 """
 
 from __future__ import annotations
@@ -27,6 +28,19 @@ _MIN_TREND = 200  # the gate is a 200-day MA — below this we cannot judge the 
 _REVERSAL_LOOKBACK = 20
 _VOL_WINDOW = 20
 _MIN_MACRO = 12  # ~a year of monthly real-yield observations
+_MIN_CROWDING = 12  # ~a fortnight of sessions before turnover ranks against its own history
+_MIN_VALUATION = 12  # enough PE prints to rank the current multiple against its own range
+_MIN_DEMAND = 8  # ~two years of quarterly end-demand revisions
+_MIN_LEAD = 6  # ~6 quarters of 13F disclosures → 5 lead-chain changes to rank against
+_HEAVY_TURNOVER = 0.75  # a run/sell-off on top-quartile turnover confirms the reversal read
+
+# Which way a short-horizon return extreme points in *risk* terms (A-shares mean-revert).
+_REVERSAL_DIR = {
+    Band.EXTREME_HIGH: "ran up hard → reversal-DOWN risk",
+    Band.HIGH: "stretched up → reversal-DOWN risk",
+    Band.LOW: "soft recent run → reversal-UP potential",
+    Band.EXTREME_LOW: "sold off hard → reversal-UP potential",
+}
 
 
 @dataclass(frozen=True)
@@ -46,14 +60,31 @@ def _unavailable(factor: str, note: str) -> FactorState:
     )
 
 
-# --- 1. Cross-market lead (US leader → A-share chain). Needs US prices/revisions (not yet here).
+# --- 1. Cross-market lead: US leaders' 13F accumulation vs its own history. A book-wide lead chain.
 def cross_market(ctx: FactorContext) -> FactorState:
-    return _unavailable(
-        "cross-market lead", "US leader prices/revisions not ingested"
+    levels = window.lead_chain(ctx.store, ctx.as_of)
+    if len(levels) < _MIN_LEAD:
+        return _unavailable("cross-market lead", "US lead-chain history too short for a read")
+    changes = [levels[i] - levels[i - 1] for i in range(1, len(levels))]
+    current = changes[-1]
+    pct = percentile_rank(current, changes)
+    band = rank_to_band(pct)
+    if band in (Band.HIGH, Band.EXTREME_HIGH):
+        direction = "US leaders accumulated (lead-chain confirms demand)"
+    elif band in (Band.LOW, Band.EXTREME_LOW):
+        direction = "US leaders distributed (lead-chain rolling over → chain risk)"
+    else:
+        direction = "lead-chain steady"
+    return FactorState(
+        factor="cross-market lead",
+        level=band,
+        direction=direction,
+        evidence=f"US lead 13F Δshares {current:+,.0f} (pctile {pct:.0%})",
+        valid=True,
     )
 
 
-# --- 2. Reversal: short-horizon return vs own history. Up-stretch → reversal-DOWN risk.
+# --- 2. Reversal: short-horizon return vs own history, confirmed by turnover / Amihud illiquidity.
 def reversal(ctx: FactorContext) -> FactorState:
     navs = window.price_navs(ctx.store, ctx.code, ctx.as_of)
     if len(navs) < _REVERSAL_LOOKBACK * 2:
@@ -62,37 +93,92 @@ def reversal(ctx: FactorContext) -> FactorState:
     current = rets[-1]
     pct = percentile_rank(current, rets)
     band = rank_to_band(pct)
-    _reversal_dir = {
-        Band.EXTREME_HIGH: "ran up hard → reversal-DOWN risk",
-        Band.HIGH: "stretched up → reversal-DOWN risk",
-        Band.LOW: "soft recent run → reversal-UP potential",
-        Band.EXTREME_LOW: "sold off hard → reversal-UP potential",
-    }
-    direction = _reversal_dir.get(band, "no short-horizon extreme")
+    direction = _REVERSAL_DIR.get(band, "no short-horizon extreme")
+    evidence = f"{_REVERSAL_LOOKBACK}d return {current:+.1%} (pctile {pct:.0%})"
+    # The band is the return rank alone (no composite). Turnover/Amihud *qualify* it: a move on
+    # heavy turnover is a confirmed exhaustion, and the Amihud illiquidity gauges how real it is.
+    turns = window.turnovers(ctx.store, ctx.code, ctx.as_of)
+    if len(turns) >= _MIN_CROWDING:
+        turn_pct = percentile_rank(turns[-1], turns)
+        heavy = turn_pct >= _HEAVY_TURNOVER
+        if heavy and band in (Band.HIGH, Band.EXTREME_HIGH):
+            direction = "ran up hard on heavy turnover → strong reversal-DOWN risk"
+        elif heavy and band in (Band.LOW, Band.EXTREME_LOW):
+            direction = "sold off on heavy turnover → reversal-UP potential"
+        evidence += f"; turnover pctile {turn_pct:.0%}"
+        amounts = window.traded_values(ctx.store, ctx.code, ctx.as_of)
+        if amounts and amounts[-1]:
+            evidence += f", Amihud {abs(current) / amounts[-1]:.2g}"
+    return FactorState(factor="reversal", level=band, direction=direction, evidence=evidence)
+
+
+# --- 3. Crowding: daily turnover (换手率) vs its own history. A crash-risk gauge for hot products.
+def crowding(ctx: FactorContext) -> FactorState:
+    turns = window.turnovers(ctx.store, ctx.code, ctx.as_of)
+    if len(turns) < _MIN_CROWDING:
+        return _unavailable("crowding", "turnover history too short for a crowding read")
+    current = turns[-1]
+    pct = percentile_rank(current, turns)
+    band = rank_to_band(pct)
+    if band in (Band.HIGH, Band.EXTREME_HIGH):
+        direction = "crowded (turnover high vs own range → crash-risk gauge)"
+    elif band in (Band.LOW, Band.EXTREME_LOW):
+        direction = "quiet (turnover light vs own range)"
+    else:
+        direction = "normal turnover"
     return FactorState(
-        factor="reversal",
+        factor="crowding",
         level=band,
         direction=direction,
-        evidence=f"{_REVERSAL_LOOKBACK}d return {current:+.1%} (pctile {pct:.0%})",
+        evidence=f"turnover {current:.2f}% (pctile {pct:.0%})",
         valid=True,
     )
 
 
-# --- 3. Crowding: turnover + Amihud + ETF flow + theme PE premium. A risk gauge (not yet ingested).
-def crowding(ctx: FactorContext) -> FactorState:
-    return _unavailable(
-        "crowding", "turnover / Amihud / flow / PE-premium not ingested"
+# --- 4. Demand / leading driver: end-demand orders/capex revisions vs own history. Book-wide dial.
+def demand(ctx: FactorContext) -> FactorState:
+    revs = window.demand_revisions(ctx.store, ctx.as_of)
+    if len(revs) < _MIN_DEMAND:
+        return _unavailable("demand", "end-demand revision history too short for a read")
+    current = revs[-1]
+    pct = percentile_rank(current, revs)
+    band = rank_to_band(pct)
+    if band in (Band.HIGH, Band.EXTREME_HIGH):
+        direction = "accelerating (end-demand revised up → demand tailwind)"
+    elif band in (Band.LOW, Band.EXTREME_LOW):
+        direction = "fading (end-demand revised down → demand headwind)"
+    else:
+        direction = "steady demand"
+    return FactorState(
+        factor="demand",
+        level=band,
+        direction=direction,
+        evidence=f"end-demand revision {current:+.1%} (pctile {pct:.0%})",
+        valid=True,
     )
 
 
-# --- 4. Demand / leading driver: revision direction of end-demand capex/orders (not yet ingested).
-def demand(ctx: FactorContext) -> FactorState:
-    return _unavailable("demand", "end-demand capex/orders revisions not ingested")
-
-
-# --- 5. Valuation: PE/PB/PEG vs the theme's own history (fundamentals not yet ingested).
+# --- 5. Valuation: the basket's PE (市盈率) vs its own history. The anti-hype overvaluation gauge.
 def valuation(ctx: FactorContext) -> FactorState:
-    return _unavailable("valuation", "PE/PB/PEG fundamentals not ingested")
+    pes = window.valuation_pes(ctx.store, ctx.code, ctx.as_of)
+    if len(pes) < _MIN_VALUATION:
+        return _unavailable("valuation", "PE history too short for a valuation read")
+    current = pes[-1]
+    pct = percentile_rank(current, pes)
+    band = rank_to_band(pct)
+    if band in (Band.HIGH, Band.EXTREME_HIGH):
+        direction = "expensive (PE high vs own range → overvaluation risk)"
+    elif band in (Band.LOW, Band.EXTREME_LOW):
+        direction = "cheap (PE low vs own range)"
+    else:
+        direction = "fair (PE mid-range)"
+    return FactorState(
+        factor="valuation",
+        level=band,
+        direction=direction,
+        evidence=f"PE {current:.1f} (pctile {pct:.0%})",
+        valid=True,
+    )
 
 
 # --- 6. Trend gate: price vs 200-day MA + ~1y return sign. A downtrend filter — the one hard cap.
