@@ -1,9 +1,9 @@
 """Shared helpers for the ingestion adapters.
 
 Each adapter turns one source into stamped :class:`~factor_scope.store.Reading` rows. Every adapter
-has a **fixture backend** (``load_fixture``, the default, offline + deterministic) and an opt-in
-**live backend** (``fetch_live``, behind ``--live``; lazily imports its heavy dependency so the core
-installs and CI run without it). Malformed source rows raise :class:`IngestError` — missing is not
+has a **live backend** (``fetch_live``, the default; lazily imports its heavy dependency so the core
+installs and CI run without it) and a **fixture backend** (``load_fixture``, the offline test mode,
+deterministic). Malformed source rows raise :class:`IngestError` — missing is not
 the same as bad, but unparseable is a hard error.
 """
 

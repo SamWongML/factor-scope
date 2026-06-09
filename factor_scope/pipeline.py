@@ -432,8 +432,8 @@ def build_dashboard(
                 # The snapshot boundary: `run` reasons over a frozen snapshot, it never fetches.
                 # A live source must be pulled by `ingest` first; `run` then reads what it wrote.
                 raise SnapshotError(
-                    "no snapshot to reason over: run `factor-scope ingest --live` first, "
-                    "then `run --live --store-path …` reads the frozen snapshot it wrote"
+                    "no snapshot to reason over: run `factor-scope ingest` first, "
+                    "then `run --store-path …` reads the frozen snapshot it wrote"
                 )
             # Offline snapshot (fixtures, or an injected test market) → materialise it so `run`
             # works standalone. Reading committed files is not fetching; the artifact stays

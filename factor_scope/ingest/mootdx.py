@@ -8,7 +8,8 @@ With three sources, :func:`factor_scope.ingest.prices.select_reconciled` takes t
 single bad source (including the AkShare primary) can no longer poison the NAV.
 
 Like every live backend, the heavy dependency is imported lazily inside the call so the core
-installs and CI run offline; ``fetch_live`` is opt-in (behind ``--live``) and never called in CI.
+installs and CI run offline; ``fetch_live`` is the default live path and never called in CI (which
+forces offline).
 """
 
 from __future__ import annotations

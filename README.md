@@ -20,7 +20,7 @@ make test       # full offline suite (unit + integration + system)
 make check      # lint + typecheck + test — the CI bar
 ```
 
-`make run` writes `out/dashboard.json` and prints a terminal summary. Everything runs **offline on bundled fixtures** by default; live data and real LLM providers are opt-in extras.
+`make run` writes `out/dashboard.json` and prints a terminal summary. It runs **offline on bundled fixtures** (`factor-scope run --offline`). `run`/`nightly` are **online by default** — live data sources + the real provider; offline is the explicit test/demo mode (`--offline` or `FACTOR_SCOPE_OFFLINE=1`). The whole suite + CI force offline and stay byte-for-byte deterministic.
 
 ---
 
@@ -81,14 +81,14 @@ Print the full JSON schema with `factor-scope schema`.
 - **Append-only store.** Every fact is a `Reading` in DuckDB — no update/delete. A later disclosure never rewrites an earlier read. `read_as_of(series, D)` returns only what was knowable that day.
 - **Determinism.** Fixtures runs derive `generated_at` from `as_of` — no wall clock in the artifact path. `dashboard.json` reproduces byte-for-byte.
 - **Invalid inputs degrade, never raise.** Stale or missing readings produce `FactorState(valid=False)`, kept in the artifact but not acted on.
-- **Offline by default.** Core install + full test suite run offline. Live data sources and real LLM providers are opt-in; their deps are imported lazily so the fixtures path never shells out.
+- **Online by default; offline is the test mode.** `run`/`nightly` default to live sources + the real provider; offline (fixtures + the `fake` provider) is opted into with `--offline` / `FACTOR_SCOPE_OFFLINE=1`. The `live`/`store` extras are pinned (with `uv.lock`) and their deps imported lazily so the offline path never shells out. The full suite + CI force offline and stay deterministic.
 
 ---
 
 ## CLI reference
 
 ```
-factor-scope run      # build dashboard.json (--live to use live sources, --provider claude_code)
+factor-scope run      # build dashboard.json (live by default; --offline for fixtures + fake)
 factor-scope nightly  # production one-shot: ingest → compute → digest → artifact + run log
 factor-scope ingest   # fill the durable store only (separates fetch from reason)
 factor-scope schedule # emit launchd plist (macOS) or cron line (Linux) for the nightly job

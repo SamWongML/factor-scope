@@ -22,7 +22,9 @@ writes three things under `out/` (override with the flags below):
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
 
 Flags: `--output`, `--store-path`, `--graph-path`, `--log-path`, `--provider`, `--as-of`,
-`--fixtures/--live`, `--quiet`. Re-running the **same night is idempotent**: positions are stamped
+`--offline`, `--quiet`. The job is **online by default** (live sources + the real provider);
+`--offline` (or `FACTOR_SCOPE_OFFLINE=1`) selects fixtures + the deterministic `fake` provider for a
+demo or test run. Re-running the **same night is idempotent**: positions are stamped
 with the run's `as_of`, so a second run that night re-uses the night's readings — the artifact stays
 byte-for-byte and calls are never double-counted. A **new** night ingests fresh data.
 
@@ -68,16 +70,17 @@ the given hour/minute. 22:00 local is the default — after the close, matching 
 
 ```bash
 factor-scope schedule --kind cron --hour 22 --minute 0 --working-dir "$PWD"
-# → 0 22 * * * cd <dir> && factor-scope nightly --fixtures >> out/nightly.out.log 2>> out/nightly.err.log
+# → 0 22 * * * cd <dir> && factor-scope nightly >> out/nightly.out.log 2>> out/nightly.err.log
 # add that line with: crontab -e
 ```
 
-For a **live** run, swap `--fixtures` for `--live` in the generated command and supply the source
-API keys (e.g. `FRED_API_KEY`) via the launchd plist's `EnvironmentVariables` or the cron shell env.
+The scheduled job is **live** (online by default), so supply the source API keys (e.g.
+`FRED_API_KEY`) via the launchd plist's `EnvironmentVariables` or the cron shell env. For a
+fixtures-only dry run, add `--offline` to the generated command.
 
 ## Provider & budget
 
-- **`fake`** (default): offline, deterministic, free. CI and demos use only this.
+- **`fake`** (the offline mode): deterministic, free. CI and demos (`--offline`) use only this.
 - **`claude_code`**: the real judgment path — headless `claude -p` running the bull/bear subagents
   (`.claude/agents/`) then synthesis. From **2026-06-15**, `claude -p` meters against a separate
   **Agent-SDK credit**; the run log's `cost_note` flags this. Size the nightly run against that
@@ -98,4 +101,4 @@ Add only when backtesting begins — not on the nightly critical path:
   Probability of Backtest Overfitting, purged/embargoed CV (CPCV), parameter-stability, after-cost +
   point-in-time always. The self-scoring loop is the live durability mechanism until then.
 - An **optional local vector store** (e.g. LanceDB + local embeddings) for fuzzy theme/news recall —
-  the emerging funnel's live discovery swap, behind `--live`, never in CI.
+  the emerging funnel's live discovery swap — live by default, never in CI.

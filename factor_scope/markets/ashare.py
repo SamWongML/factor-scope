@@ -6,9 +6,9 @@ Mootdx (:class:`ASharePrices`), and the emerging-theme candidates (:class:`AShar
 those three seams the market adds two book-wide reads that aren't market universe/price/theme data:
 the FRED macro dial and the engine's own prior leans (seed data for the offline self-scoring loop).
 
-Each source dispatches on ``config.source``: ``fixtures`` (the offline default — bundled sample
-data) or ``live`` (opt-in; heavy deps stay lazily imported inside each adapter's ``fetch_live``, so
-selecting the market never shells out on the fixtures path).
+Each source dispatches on ``config.source``: ``live`` (the default — heavy deps stay lazily imported
+inside each adapter's ``fetch_live``) or ``fixtures`` (the offline test mode — bundled sample data,
+so selecting the market never shells out on the fixtures path).
 """
 
 from __future__ import annotations

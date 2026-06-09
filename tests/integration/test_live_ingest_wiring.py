@@ -1,4 +1,4 @@
-"""The ``--live`` ingest path refreshes holdings, not just prices + the macro dial.
+"""The live ingest path refreshes holdings, not just prices + the macro dial.
 
 These stay offline by stubbing each adapter's heavy ``fetch_live`` (the real bodies hit the
 network and live behind ``FACTOR_SCOPE_LIVE=1`` in ``test_adapters_live.py``). They pin the wiring
