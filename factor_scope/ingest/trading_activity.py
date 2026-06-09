@@ -10,7 +10,9 @@ Live pulls AkShare's on-exchange ETF daily bar (``fund_etf_hist_em``) — opt-in
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
@@ -42,21 +44,25 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
+def from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
+    """Map AkShare's ETF daily bars (日期 / 换手率 / 成交额) to Readings — the pure core of live."""
+
+    return [
+        Reading(
+            series=SERIES,
+            key=code,
+            as_of=str(bar["日期"]),
+            fetched_at=fetched_at,
+            payload={"turnover": float(bar["换手率"]), "amount": float(bar["成交额"])},
+        )
+        for bar in bars
+    ]
+
+
 def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
     """Pull a fund's daily turnover + traded value via AkShare. Requires `live` + network."""
 
     import akshare as ak
 
     frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")
-    readings: list[Reading] = []
-    for _, row in frame.iterrows():
-        readings.append(
-            Reading(
-                series=SERIES,
-                key=code,
-                as_of=str(row["日期"]),
-                fetched_at=fetched_at,
-                payload={"turnover": float(row["换手率"]), "amount": float(row["成交额"])},
-            )
-        )
-    return readings
+    return from_bars(code, (bar for _, bar in frame.iterrows()), fetched_at=fetched_at)
