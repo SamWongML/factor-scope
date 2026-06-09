@@ -52,3 +52,11 @@ def required_str(row: dict[str, str], field: str, line_no: int, source: str) -> 
     if not value:
         raise IngestError(f"{source} line {line_no}: {field} is empty")
     return value
+
+
+def optional_float(row: dict[str, str], field: str, line_no: int, source: str) -> float | None:
+    """A numeric field that may be absent — empty degrades to ``None``; non-empty must parse."""
+
+    if not (row.get(field) or "").strip():
+        return None
+    return as_float(row, field, line_no, source)

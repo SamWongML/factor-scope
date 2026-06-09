@@ -8,7 +8,16 @@ import os
 
 import pytest
 
-from factor_scope.ingest import baostock, edgar, fred, fund_holdings, mootdx, prices
+from factor_scope.ingest import (
+    baostock,
+    edgar,
+    etf_scale,
+    fred,
+    fund_holdings,
+    fund_universe,
+    mootdx,
+    prices,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -44,6 +53,18 @@ def test_fred_live_smoke() -> None:
 def test_fund_holdings_live_smoke() -> None:
     readings = fund_holdings.fetch_live("561010", fetched_at="t")
     assert readings and "weight" in readings[0].payload
+
+
+@skip_unless_live
+def test_fund_universe_live_smoke() -> None:
+    readings = fund_universe.fetch_live(as_of="2026-06-05", fetched_at="t")
+    assert readings and "on_exchange" in readings[0].payload  # all funds, ETFs marked on-exchange
+
+
+@skip_unless_live
+def test_etf_scale_live_smoke() -> None:
+    readings = etf_scale.fetch_live(fetched_at="t")
+    assert readings and readings[0].payload["aum"] > 0
 
 
 @skip_unless_live

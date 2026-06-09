@@ -42,6 +42,8 @@ def test_ashare_fixture_gather_keeps_every_series() -> None:
     series = {r.series for r in readings}
     assert series == {
         "positions",
+        "fund_universe",
+        "etf_scale",
         "prices",
         "fund_holdings",
         "fred",
