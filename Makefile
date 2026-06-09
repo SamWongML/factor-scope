@@ -26,8 +26,8 @@ typecheck: ## Type-check with mypy
 
 check: lint typecheck test ## Everything CI runs
 
-run: ## Run the engine over bundled fixtures and print the morning artifact
-	uv run factor-scope run --fixtures
+run: ## Run the engine over bundled fixtures (offline) and print the morning artifact
+	uv run factor-scope run --offline
 
 clean: ## Remove build/cache artifacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache dist build out *.egg-info

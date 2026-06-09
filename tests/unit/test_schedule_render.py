@@ -23,7 +23,7 @@ runner = CliRunner()
 def _spec(**over: object) -> ScheduleSpec:
     base = dict(
         label="com.factor-scope.nightly",
-        program_arguments=("factor-scope", "nightly", "--fixtures"),
+        program_arguments=("factor-scope", "nightly"),
         hour=22,
         minute=30,
         working_directory=Path("/srv/factor-scope"),
@@ -42,7 +42,7 @@ def test_cron_line_fires_at_the_scheduled_minute_and_hour() -> None:
 
 def test_cron_line_runs_the_command_in_the_working_directory_with_logs() -> None:
     line = render_cron_line(_spec())
-    assert "cd /srv/factor-scope && factor-scope nightly --fixtures" in line
+    assert "cd /srv/factor-scope && factor-scope nightly" in line
     assert ">> /var/log/fs.out 2>> /var/log/fs.err" in line
 
 
@@ -51,7 +51,7 @@ def test_launchd_plist_is_valid_xml_that_schedules_the_one_shot_job() -> None:
     parsed = plistlib.loads(xml.encode("utf-8"))  # round-trips → it is a valid plist
 
     assert parsed["Label"] == "com.factor-scope.nightly"
-    assert parsed["ProgramArguments"] == ["factor-scope", "nightly", "--fixtures"]
+    assert parsed["ProgramArguments"] == ["factor-scope", "nightly"]
     assert parsed["StartCalendarInterval"] == {"Hour": 22, "Minute": 0}
     assert parsed["WorkingDirectory"] == "/srv/factor-scope"
     # A nightly batch, not a service: it must not fire merely on load.

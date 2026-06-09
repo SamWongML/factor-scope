@@ -44,10 +44,10 @@ both ends; the engine never trades.
 
 ## Invariants that CHANGE (explicit decisions)
 
-- **Online-by-default, not offline-by-default.** Live data + real providers become the normal path;
-  **offline is a test mode only** (fixtures + mock provider). Determinism is preserved by the
-  *snapshot boundary* + mocks, not by avoiding the network. *(Until `U05` lands, the code remains
-  offline-by-default — this is the target state, not the current one.)*
+- **Online-by-default, not offline-by-default.** Live data + real providers are the normal path;
+  **offline is a test mode only** (fixtures + mock provider), selected by `--offline` /
+  `FACTOR_SCOPE_OFFLINE=1`. Determinism is preserved by the *snapshot boundary* + mocks, not by
+  avoiding the network. *(Landed in `U05`.)*
 - **Market-agnostic, not A-share/ETF-hardcoded.** Markets, universes, theme sources, factor sets, and
   providers sit behind config-driven interfaces. A-share is the *first* adapter (no speculative
   multi-market code — YAGNI).

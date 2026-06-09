@@ -50,13 +50,15 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
   *on top of* model output — even an overconfident model can't open the gate.
 - **Invalid inputs degrade, never raise.** A stale/short/missing reading → `FactorState(valid=False)`;
   it's kept, not dropped.
-- **Offline by default.** Core install + the whole suite + CI run offline on fixtures with the
-  **`fake`** provider. `live` (data sources) and real LLM providers are opt-in extras — import their
-  heavy/network deps **lazily inside the call** (see `digest/claude_code.py`) so selecting a provider
-  never shells out on the fixtures path.
-- **Providers:** `fake` (default, deterministic) · `claude_code` (real bull/bear→synthesis via
-  headless `claude -p`, agents in `.claude/agents/`) · DeepSeek is a **chore** model only, never a
-  `--provider` value.
+- **Online by default; offline is the test mode.** `run`/`nightly` default to live data sources +
+  the real provider; **offline** — fixtures + the **`fake`** provider — is opted into with `--offline`
+  or `FACTOR_SCOPE_OFFLINE=1`. The whole suite + CI force offline (`tests/conftest.py`) and stay
+  byte-for-byte deterministic — preserved by the snapshot boundary + mocks, not by avoiding
+  the network. `live`/`store` deps are **pinned** extras imported **lazily inside the call** (see
+  `digest/claude_code.py`) so the offline path never shells out.
+- **Providers:** `claude_code` (default — real bull/bear→synthesis via headless `claude -p`, agents
+  in `.claude/agents/`) · `fake` (the deterministic offline stub) · DeepSeek is a **chore** model
+  only, never a `--provider` value.
 
 Ops (nightly job, scheduling, provider budget): `docs/ops/RUNBOOK.md`. Direction, architecture map &
-upgrade plan (`U01`–`U17`): `docs/ROADMAP.md`.
+upgrade plan: `docs/ROADMAP.md`.

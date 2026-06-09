@@ -11,7 +11,7 @@ from pathlib import Path
 
 import typer
 
-from factor_scope.config import DEFAULT_FIXTURES_DIR, Config
+from factor_scope.config import DEFAULT_FIXTURES_DIR, Config, offline_mode
 from factor_scope.pipeline import ingest as ingest_pipeline
 from factor_scope.pipeline import nightly as nightly_pipeline
 from factor_scope.pipeline import run as run_pipeline
@@ -26,10 +26,11 @@ app = typer.Typer(
 
 @app.command()
 def run(
-    fixtures: bool = typer.Option(
-        True,
-        "--fixtures/--live",
-        help="Use bundled sample data (default) or opt in to live sources.",
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Offline test mode: bundled fixtures + the deterministic `fake` provider "
+        "(default is live sources + the real provider).",
     ),
     fixtures_dir: Path = typer.Option(
         DEFAULT_FIXTURES_DIR, help="Directory holding the committed sample data."
@@ -51,22 +52,23 @@ def run(
         help="Read from a durable connection graph (else one built in-memory from the store).",
     ),
     provider: str = typer.Option(
-        "fake",
-        help="Digestion judgment provider: fake (default, offline) | claude_code. "
+        "claude_code",
+        help="Digestion judgment provider: claude_code (default) | fake (offline stub). "
         "(DeepSeek is a chore model, off the judgment path.)",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Write the artifact without printing."),
 ) -> None:
     """Build the morning artifact and print it."""
 
+    is_offline = offline or offline_mode()
     config = Config(
-        source="fixtures" if fixtures else "live",
+        source="fixtures" if is_offline else "live",
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         output_path=output,
         store_path=store_path,
         graph_path=graph_path,
-        provider=provider,
+        provider="fake" if is_offline else provider,
     )
     dash = run_pipeline(config)
     if not quiet:
@@ -76,10 +78,10 @@ def run(
 
 @app.command()
 def ingest(
-    fixtures: bool = typer.Option(
-        True,
-        "--fixtures/--live",
-        help="Ingest bundled sample data (default) or opt in to live sources.",
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Offline test mode: ingest bundled fixtures (default is live sources).",
     ),
     fixtures_dir: Path = typer.Option(
         DEFAULT_FIXTURES_DIR, help="Directory holding the committed sample data."
@@ -99,7 +101,7 @@ def ingest(
     """Fill the point-in-time store + connection graph from a source, so `run` can read them."""
 
     config = Config(
-        source="fixtures" if fixtures else "live",
+        source="fixtures" if (offline or offline_mode()) else "live",
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         store_path=store_path,
@@ -111,10 +113,11 @@ def ingest(
 
 @app.command()
 def nightly(
-    fixtures: bool = typer.Option(
-        True,
-        "--fixtures/--live",
-        help="Use bundled sample data (default) or opt in to live sources.",
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Offline test mode: bundled fixtures + the deterministic `fake` provider "
+        "(default is live sources + the real provider).",
     ),
     fixtures_dir: Path = typer.Option(
         DEFAULT_FIXTURES_DIR, help="Directory holding the committed sample data."
@@ -137,7 +140,7 @@ def nightly(
         Path("out") / "nightly.jsonl", "--log-path", help="The append-only ops run log (JSONL)."
     ),
     provider: str = typer.Option(
-        "fake", help="Digestion judgment provider: fake (default, offline) | claude_code."
+        "claude_code", help="Digestion judgment provider: claude_code (default) | fake (offline)."
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Run without printing the artifact."),
 ) -> None:
@@ -148,15 +151,16 @@ def nightly(
     to the run log. Schedule it with ``factor-scope schedule`` (launchd on macOS, cron on Linux).
     """
 
+    is_offline = offline or offline_mode()
     config = Config(
-        source="fixtures" if fixtures else "live",
+        source="fixtures" if is_offline else "live",
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         output_path=output,
         store_path=store_path,
         graph_path=graph_path,
         log_path=log_path,
-        provider=provider,
+        provider="fake" if is_offline else provider,
     )
     dash, record = nightly_pipeline(config)
     if not quiet:
@@ -207,7 +211,7 @@ def schedule(
 
     spec = ScheduleSpec(
         label=label,
-        program_arguments=("factor-scope", "nightly", "--fixtures"),
+        program_arguments=("factor-scope", "nightly"),
         hour=hour,
         minute=minute,
         working_directory=working_dir.resolve(),

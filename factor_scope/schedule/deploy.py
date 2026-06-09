@@ -16,7 +16,8 @@ from typing import Any
 # The engine stamps ``generated_at`` at 22:00; the nightly job fires after the close, so
 # 22:00 local is the sensible default. These are defaults only — every field is overridable.
 DEFAULT_LABEL = "com.factor-scope.nightly"
-DEFAULT_PROGRAM = ("factor-scope", "nightly", "--fixtures")
+# The scheduled production job is online by default — no flag (offline is the opt-in test mode).
+DEFAULT_PROGRAM = ("factor-scope", "nightly")
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ class ScheduleSpec:
     working_directory: Path = field(default_factory=Path.cwd)
     stdout_path: Path = Path("out/nightly.out.log")
     stderr_path: Path = Path("out/nightly.err.log")
-    environment: dict[str, str] | None = None  # extra env (e.g. FRED_API_KEY) for --live runs
+    environment: dict[str, str] | None = None  # extra env (e.g. FRED_API_KEY) for live runs
 
 
 def render_cron_line(spec: ScheduleSpec) -> str:
