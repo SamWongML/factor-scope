@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 __all__ = [
     "ACCEL_MIN",
+    "BASE_MAX",
     "BREADTH_REF",
     "SIGNAL_MIN",
     "StageAResult",
@@ -36,6 +37,7 @@ __all__ = [
 ACCEL_MIN = 0.4  # acceleration is "the most important" sub-signal — it must clear this floor
 BREADTH_REF = 6  # distinct corroborating sources/companies that count as full breadth
 SIGNAL_MIN = 0.5  # the net signal (accel + breadth − crowding) floor to be more than noise
+BASE_MAX = 0.7  # absolute-attention ceiling: above it the theme is *late* (launch-at-peak trap)
 
 
 @dataclass(frozen=True)
@@ -80,14 +82,21 @@ def qualify_theme(theme: Theme) -> StageAResult:
     sig = signal_strength(theme)
     reasons: list[str] = []
 
-    # 1 — signal strength (acceleration floor + net-signal floor).
+    # 1 — signal strength (acceleration floor + base-level ceiling + net-signal floor).
     if theme.acceleration < ACCEL_MIN:
         reasons.append(f"acceleration {theme.acceleration:.2f} below floor {ACCEL_MIN:.2f}")
+        return StageAResult(theme.name, False, sig, "signal", tuple(reasons))
+    if theme.base_level > BASE_MAX:
+        reasons.append(
+            f"base {theme.base_level:.2f} above ceiling {BASE_MAX:.2f} (late: no room to run)"
+        )
         return StageAResult(theme.name, False, sig, "signal", tuple(reasons))
     if sig < SIGNAL_MIN:
         reasons.append(f"signal {sig:.2f} below floor {SIGNAL_MIN:.2f} (crowding eats the read)")
         return StageAResult(theme.name, False, sig, "signal", tuple(reasons))
-    reasons.append(f"signal {sig:.2f} ok (accel {theme.acceleration:.2f})")
+    reasons.append(
+        f"signal {sig:.2f} ok (accel {theme.acceleration:.2f}, base {theme.base_level:.2f})"
+    )
 
     # 2 — durability (the decisive filter: all three traits must hold).
     if not (theme.broad_adoption and theme.path_to_profit and theme.fad_resistant):

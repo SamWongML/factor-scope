@@ -6,7 +6,7 @@ the release's own date. ``revision`` is the period-over-period change in end-dem
 factor ranks the latest revision point-in-time against its own history — accelerating revisions are
 a demand tailwind, fading ones a headwind.
 
-Live pulls AkShare's industrial orders/capex release — opt-in, never called in CI.
+Live pulls AkShare's industrial orders/capex release — never called in CI.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def _from_bars(bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Re
     ]
 
 
-def fetch_live(*, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(*, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull the end-demand orders/capex revision via AkShare. Requires `live` + network."""
 
     import akshare as ak

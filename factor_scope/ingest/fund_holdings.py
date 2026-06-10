@@ -2,7 +2,7 @@
 
 These rows become the connection-graph edges (the exact look-through). Each ``(fund,
 holding)`` pair is its own point-in-time key so a quarter's disclosure never overwrites a prior one.
-Live is AkShare's ``fund_portfolio_hold_em`` — opt-in, never called in CI.
+Live is AkShare's ``fund_portfolio_hold_em`` — never called in CI.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def fetch_live(fund: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(fund: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull a fund's latest disclosed stock holdings via AkShare. Requires `live` + network."""
 
     import akshare as ak

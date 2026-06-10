@@ -1,7 +1,7 @@
 """Macro series adapter (FRED). Fixture: `fred.csv → {series_id, as_of, value}`.
 
 The book-wide macro/liquidity dial: rates, real rates, breakevens, the dollar,
-and Fed liquidity. Live is ``fredapi`` — opt-in, never called in CI.
+and Fed liquidity. Live is ``fredapi`` — never called in CI.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
 
 def fetch_live(
     series_id: str, *, fetched_at: str, api_key: str | None = None
-) -> list[Reading]:  # pragma: no cover - opt-in
+) -> list[Reading]:  # pragma: no cover - live path
     """Pull the latest observation of one FRED series. Requires `live` + an API key + network."""
 
     from fredapi import Fred

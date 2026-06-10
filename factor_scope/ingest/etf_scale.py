@@ -6,7 +6,7 @@ calendar). ``aum`` is the net asset value in 亿 (100M CNY), matching the scorec
 is the size half of the per-fund scorecard inputs the universe carries.
 
 Live unions AkShare's ``fund_etf_scale_sse`` (Shanghai) and ``fund_etf_scale_szse`` (Shenzhen) —
-opt-in, never called in CI.
+never called in CI.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def fetch_live(*, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(*, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Union the Shanghai + Shenzhen ETF-scale tables. Requires `live` + network."""
 
     import akshare as ak

@@ -9,7 +9,7 @@ inputs (fee, tracking error, top-10 weight) may be absent for a fund that does n
 a missing input degrades the row to ``valid=False`` rather than dropping it.
 
 Live merges AkShare's ``fund_name_em`` (all funds) with ``fund_etf_spot_em`` (the on-exchange ETF
-universe) — opt-in, never called in CI.
+universe) — never called in CI.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def load_fixture(path: Path, *, as_of: str, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), as_of=as_of, fetched_at=fetched_at)
 
 
-def fetch_live(*, as_of: str, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(*, as_of: str, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Merge AkShare's all-funds list with the on-exchange ETF universe (needs `live` + network)."""
 
     import akshare as ak

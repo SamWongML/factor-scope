@@ -5,7 +5,8 @@ a calibrated lean via a two-sided bull/bear debate then a synthesis seat. A *pro
 judgment: it argues each side from the same facts (consider-the-opposite, isolated contexts) and
 synthesises a proposal. The hard guardrails (gate, abstain-when-blind, scorecard) live in the
 :mod:`~factor_scope.digest.orchestrator`, not the provider, so even a misbehaving real model can
-never open the gate. The default provider is a deterministic **fake**; real providers are opt-in.
+never open the gate. Online by default the provider is the real ``claude_code`` model; the
+deterministic **fake** is the offline test default, so CI needs no network or keys.
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ multiple; the valuation factor ranks it point-in-time against the fund's own his
 multiple is the anti-hype overvaluation gauge).
 
 Live pulls AkShare's index valuation history (``index_value_hist_funddb``) for the fund's basket —
-opt-in, never called in CI.
+never called in CI.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str)
     ]
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull a fund basket's PE/PB history via AkShare. Requires the `live` extra + network."""
 
     import akshare as ak

@@ -1,4 +1,4 @@
-"""The real Claude Code (headless) digestion provider — opt-in, never called in CI.
+"""The real Claude Code (headless) digestion provider — the online default; CI forces the fake.
 
 Judgment stays on Claude Code: a small **bull/bear** team (isolated contexts, consider-the-opposite)
 argues both sides, then a synthesis seat nets them. Each seat is a headless ``claude -p ...
@@ -68,7 +68,7 @@ class ClaudeCodeProvider:
         )
 
     def _complete(self, system: str, prompt: str) -> dict[str, object]:
-        """Run one headless ``claude -p`` turn and parse its JSON result. Lazy, opt-in only."""
+        """Run one headless ``claude -p`` turn, parse its JSON result. Lazy; never run offline."""
 
         import json
         import subprocess
@@ -76,7 +76,7 @@ class ClaudeCodeProvider:
         cmd = ["claude", "-p", prompt, "--append-system-prompt", system, "--output-format", "json"]
         if self._model:
             cmd += ["--model", self._model]
-        completed = subprocess.run(  # noqa: S603 - opt-in, user-selected provider
+        completed = subprocess.run(  # noqa: S603 - user-selected provider
             cmd, capture_output=True, text=True, timeout=self._timeout_s, check=True
         )
         envelope = json.loads(completed.stdout)

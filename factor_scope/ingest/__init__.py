@@ -1,9 +1,10 @@
 """Ingestion — per-source adapters plus the shared resilience infra they run behind.
 
 Each adapter (a submodule here) turns one source into stamped :class:`~factor_scope.store.Reading`
-rows via a ``load_fixture`` backend (the offline default) and an opt-in ``fetch_live`` (heavy deps
-lazily imported inside the call). The :mod:`factor_scope.markets` layer composes the adapters into a
-market; the live multi-source price path reuses the resilience helpers below — bounded retries
+rows via a ``fetch_live`` backend (the online default; heavy deps lazily imported inside the call)
+and a ``load_fixture`` backend (the offline test mode). The :mod:`factor_scope.markets` layer
+composes the adapters into a market; the live multi-source price path reuses the resilience helpers
+below — bounded retries
 (:func:`_with_retries`), a per-read wall-clock deadline (:func:`_with_timeout`), a failover wrapper
 (:func:`_live_or_empty`), and the data circuit breaker (:func:`_check_price_health`).
 """
@@ -117,7 +118,7 @@ def _live_or_empty(
         return []
 
 
-def _check_price_health(  # pragma: no cover - opt-in
+def _check_price_health(  # pragma: no cover - live path
     n_funds: int, degraded: list[str]
 ) -> None:
     """Log the per-run price-source summary and trip the data circuit breaker on systemic failure.

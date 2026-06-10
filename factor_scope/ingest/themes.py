@@ -5,7 +5,7 @@ path_to_profit, fad_resistant, lead_chain, wrapper_exists, constituents}`. Each 
 industry's dated weak-signal read plus its reference constituents (the ``;``-separated names of its
 index, the seed the theme→fund mapping infers candidate funds from). Keyed by theme name and
 stamped with its own research ``as_of`` so reads stay point-in-time. Live theme discovery is a
-clustering/tagging pass (BERTopic / an LLM tag) over a text stream — opt-in, never wired into CI;
+clustering/tagging pass (BERTopic / an LLM tag) over a text stream — never wired into CI;
 only the fixture backend runs offline.
 """
 

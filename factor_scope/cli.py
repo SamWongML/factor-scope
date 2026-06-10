@@ -11,7 +11,15 @@ from pathlib import Path
 
 import typer
 
-from factor_scope.config import DEFAULT_FIXTURES_DIR, Config, offline_mode
+from factor_scope.config import (
+    DEFAULT_FIXTURES_DIR,
+    DISCOVERY_DRAFT,
+    DISCOVERY_JUDGE,
+    Config,
+    ModelSpec,
+    offline_mode,
+)
+from factor_scope.pipeline import discover as discover_pipeline
 from factor_scope.pipeline import ingest as ingest_pipeline
 from factor_scope.pipeline import nightly as nightly_pipeline
 from factor_scope.pipeline import run as run_pipeline
@@ -112,6 +120,76 @@ def ingest(
 
 
 @app.command()
+def discover(
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Offline test mode: the bundled text corpus + deterministic fakes "
+        "(default is the live feed + BERTopic + the configured LLM).",
+    ),
+    fixtures_dir: Path = typer.Option(
+        DEFAULT_FIXTURES_DIR, help="Directory holding the committed sample data."
+    ),
+    as_of: str | None = typer.Option(
+        None, help="The as-of date to stamp discovered themes with. Defaults to the manifest."
+    ),
+    store_path: Path = typer.Option(
+        Path("out") / "store.duckdb",
+        "--store-path",
+        help="The durable store to append the discovered themes (+ corpus) into.",
+    ),
+    judge_model: str = typer.Option(
+        "deepseek:deepseek-v4-pro",
+        "--judge-model",
+        help="The strong tier — the durability/lead-chain verdict. Provider-prefixed "
+        "(deepseek/openai/anthropic/moonshotai); --base-url reaches any OpenAI-compatible API.",
+    ),
+    draft_model: str = typer.Option(
+        "deepseek:deepseek-v4-flash",
+        "--draft-model",
+        help="The cheap tier — digests the raw materials before the judge. Stratified by "
+        "difficulty to cut cost; same provider-prefix / --base-url switching as --judge-model.",
+    ),
+    embedding_model: str = typer.Option(
+        "paraphrase-multilingual-MiniLM-L12-v2",
+        "--embedding-model",
+        help="The local sentence-embedding model online BERTopic uses (free; MPS/CPU on a Mac).",
+    ),
+    base_url: str | None = typer.Option(
+        None, "--base-url", help="OpenAI-compatible endpoint applied to both tiers (Qwen/GLM/Kimi)."
+    ),
+    api_key_env: str | None = typer.Option(
+        None, "--api-key-env", help="Env var holding the API key for --base-url."
+    ),
+    feed_url: str | None = typer.Option(
+        None, "--feed-url", help="Live text-corpus feed (doc_id,as_of,source,text CSV)."
+    ),
+) -> None:
+    """Discover candidate themes from the rolling text stream and append them to the store.
+
+    A separate, user/cron-triggered research service — not the nightly. It writes ``themes``
+    Readings (with cited evidence) that the next ``ingest`` maps to funds and ``run`` surfaces in
+    the emerging list. Schedule it weekly with ``factor-scope schedule --job discover``.
+    """
+
+    is_offline = offline or offline_mode()
+    config = Config(
+        source="fixtures" if is_offline else "live",
+        fixtures_dir=fixtures_dir,
+        as_of=as_of,
+        store_path=store_path,
+        discovery_models={
+            DISCOVERY_DRAFT: ModelSpec(draft_model, base_url=base_url, api_key_env=api_key_env),
+            DISCOVERY_JUDGE: ModelSpec(judge_model, base_url=base_url, api_key_env=api_key_env),
+        },
+        discovery_embedding_model=embedding_model,
+        textstream_feed_url=feed_url,
+    )
+    n = discover_pipeline(config)
+    typer.echo(f"✓ discovered {n} themes into {store_path}", err=True)
+
+
+@app.command()
 def nightly(
     offline: bool = typer.Option(
         False,
@@ -179,6 +257,10 @@ def schedule(
     kind: str = typer.Option(
         "launchd", help="launchd (macOS, the Mac-mini production path) | cron (Linux)."
     ),
+    job: str = typer.Option(
+        "nightly",
+        help="Which job to schedule: nightly (the run) | discover (the weekly theme service).",
+    ),
     label: str = typer.Option(
         "com.factor-scope.nightly", help="launchd job label (reverse-DNS)."
     ),
@@ -204,14 +286,23 @@ def schedule(
     """
 
     from factor_scope.schedule import (
+        DEFAULT_PROGRAM,
+        DISCOVER_PROGRAM,
         ScheduleSpec,
         render_cron_line,
         render_launchd_plist,
     )
 
+    if job == "nightly":
+        program = DEFAULT_PROGRAM
+    elif job == "discover":
+        program = DISCOVER_PROGRAM
+    else:
+        raise typer.BadParameter(f"unknown --job {job!r}; use 'nightly' or 'discover'")
+
     spec = ScheduleSpec(
         label=label,
-        program_arguments=("factor-scope", "nightly"),
+        program_arguments=program,
         hour=hour,
         minute=minute,
         working_directory=working_dir.resolve(),

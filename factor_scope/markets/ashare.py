@@ -78,14 +78,14 @@ class AShareUniverse:
             )
             return readings
         universe = fund_universe.fetch_live(as_of=as_of, fetched_at=fetched_at)  # pragma: no cover
-        readings += universe  # pragma: no cover - opt-in live path
+        readings += universe  # pragma: no cover - live path
         readings += etf_scale.fetch_live(fetched_at=fetched_at)  # pragma: no cover
-        for fund in universe:  # pragma: no cover - opt-in live path
+        for fund in universe:  # pragma: no cover - live path
             if fund.payload["on_exchange"]:  # ETFs disclose holdings → the look-through graph edges
                 readings += fund_holdings.fetch_live(fund.key, fetched_at=fetched_at)
                 readings += trading_activity.fetch_live(fund.key, fetched_at=fetched_at)
                 readings += fundamentals.fetch_live(fund.key, fetched_at=fetched_at)
-        for cik in config.edgar_ciks:  # pragma: no cover - opt-in live path
+        for cik in config.edgar_ciks:  # pragma: no cover - live path
             readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
         return readings
 
@@ -132,13 +132,13 @@ class AShareThemes:
 
     Fixtures load the bundled themes when present; each theme's candidate funds are *inferred* from
     its constituents downstream (holdings overlap + return correlation), not loaded from a tagged
-    table. Live theme discovery (BERTopic / an LLM tagging pass) is opt-in and not wired into CI, so
-    the live path yields none for now.
+    table. Live theme discovery (BERTopic / an LLM tagging pass) is the separate ``discover``
+    service, not wired into this market, so the live path yields none here for now.
     """
 
     def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
         if config.source != "fixtures":
-            return []  # pragma: no cover - opt-in live path (theme discovery)
+            return []  # pragma: no cover - live path (theme discovery)
         themes_path = config.fixtures_dir / themes.FIXTURE
         if not themes_path.exists():
             return []
@@ -150,7 +150,7 @@ def _gather_macro(config: Config, *, fetched_at: str) -> list[Reading]:
 
     if config.source == "fixtures":
         return fred.load_fixture(config.fixtures_dir / fred.FIXTURE, fetched_at=fetched_at)
-    return [  # pragma: no cover - opt-in live path
+    return [  # pragma: no cover - live path
         r
         for series_id in fred.DEFAULT_SERIES
         for r in fred.fetch_live(series_id, fetched_at=fetched_at)
@@ -162,7 +162,7 @@ def _gather_demand(config: Config, *, fetched_at: str) -> list[Reading]:
 
     if config.source == "fixtures":
         return demand.load_fixture(config.fixtures_dir / demand.FIXTURE, fetched_at=fetched_at)
-    return demand.fetch_live(fetched_at=fetched_at)  # pragma: no cover - opt-in live path
+    return demand.fetch_live(fetched_at=fetched_at)  # pragma: no cover - live path
 
 
 def _gather_prior_calls(config: Config, *, fetched_at: str) -> list[Reading]:
@@ -172,7 +172,7 @@ def _gather_prior_calls(config: Config, *, fetched_at: str) -> list[Reading]:
     """
 
     if config.source != "fixtures":
-        return []  # pragma: no cover - opt-in live path
+        return []  # pragma: no cover - live path
     path = config.fixtures_dir / calls.FIXTURE
     return calls.load_fixture(path, fetched_at=fetched_at) if path.exists() else []
 

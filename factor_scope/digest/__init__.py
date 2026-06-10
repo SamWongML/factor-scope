@@ -1,10 +1,11 @@
 """Digestion — bull/bear debate → a synthesis seat → a calibrated lean.
 
 The public surface is the provider interface (:class:`LLMProvider` + its structured
-:class:`DigestInput` / :class:`Case` / :class:`Proposal`), the deterministic default
-:class:`~factor_scope.digest.fake.FakeProvider`, and the :func:`digest_item` orchestrator that runs
-the debate and enforces the hard guardrails (gate, abstain-when-blind, scorecard). Real providers
-(``claude_code``) are opt-in behind :func:`get_provider` and never called in CI.
+:class:`DigestInput` / :class:`Case` / :class:`Proposal`), the
+:class:`~factor_scope.digest.fake.FakeProvider` that backs the offline test default, and the
+:func:`digest_item` orchestrator that runs the debate and enforces the hard guardrails (gate,
+abstain-when-blind, scorecard). The real ``claude_code`` provider is the online default; CI forces
+offline, so only the fake runs there.
 """
 
 from __future__ import annotations

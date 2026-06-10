@@ -29,6 +29,12 @@ from factor_scope.contract import (
     ListName,
 )
 from factor_scope.digest import DEFAULT_HORIZON_D, DigestInput, digest_item, get_provider
+from factor_scope.discovery import (
+    build_stream_docs,
+    discover_themes,
+    get_assessor,
+    get_topic_model,
+)
 from factor_scope.emerging import (
     Candidate,
     FundScore,
@@ -46,6 +52,7 @@ from factor_scope.graph import (
     build_graph_from_store,
 )
 from factor_scope.graph.lookthrough import look_through
+from factor_scope.ingest import textstream
 from factor_scope.ingest.base import fetched_at_for
 from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
@@ -106,6 +113,46 @@ def ingest(config: Config, *, market: Market | None = None) -> int:
     finally:
         store.close()
         graph.close()
+
+
+def discover(config: Config) -> int:
+    """Discover candidate themes from the text stream → append ``themes`` Readings. Returns count.
+
+    The separate, user/cron-triggered research service (not the nightly): it *fetches* the rolling
+    corpus and *writes* dated Readings on the research side of the snapshot boundary, leaving the
+    nightly's deterministic reasoning untouched — the next ``ingest`` maps the discovered themes to
+    funds and ``run`` surfaces them. In production it pulls the feed and runs online BERTopic + the
+    cost-stratified LLM (the ``discovery`` extra); the offline test mode reads the bundled corpus
+    through the deterministic fakes instead.
+    """
+
+    as_of = _resolve_as_of(config)
+    fetched_at = fetched_at_for(as_of)
+    store = _open_store(config)
+    try:
+        if config.source == "fixtures":
+            corpus = textstream.load_fixture(
+                config.fixtures_dir / textstream.FIXTURE, fetched_at=fetched_at
+            )
+        else:  # pragma: no cover - live feed, host-only
+            if config.textstream_feed_url is None:
+                raise SnapshotError(
+                    "no text corpus to discover from: set a textstream feed "
+                    "(Config.textstream_feed_url) or use --offline for the bundled corpus"
+                )
+            corpus = textstream.fetch_live(config.textstream_feed_url, fetched_at=fetched_at)
+        store.append(corpus)
+        docs = build_stream_docs(store.read_as_of(textstream.SERIES, as_of))
+        themes = discover_themes(
+            docs,
+            get_topic_model(config),
+            get_assessor(config),
+            as_of=as_of,
+            fetched_at=fetched_at,
+        )
+        return store.append(themes)
+    finally:
+        store.close()
 
 
 def _build_items(store: PointInTimeStore, as_of: str) -> list[tuple[str, DashboardItem]]:

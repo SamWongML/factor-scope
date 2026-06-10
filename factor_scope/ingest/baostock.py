@@ -29,7 +29,7 @@ def _market_code(code: str) -> str:
     return f"sh.{code}" if code.startswith("5") else f"sz.{code}"
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull the latest daily close for one ETF via Baostock. Requires the `live` extra + network."""
 
     import baostock as bs

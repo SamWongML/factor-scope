@@ -77,6 +77,22 @@ def test_low_acceleration_alone_fails_the_signal_gate() -> None:
     assert result.failed_test == "signal"
 
 
+def test_a_base_already_near_peak_fails_the_signal_gate() -> None:
+    # The launch-at-peak trap: attention already near its ceiling is a *late* signal — no room to
+    # run — so even a fast-accelerating, durable theme stops at the very first gate.
+    result = qualify_theme(_theme(base_level=0.90))
+    assert result.passed is False
+    assert result.failed_test == "signal"
+    assert any("base" in reason for reason in result.reasons)
+
+
+def test_a_low_base_leaves_room_to_run_and_clears() -> None:
+    # A low absolute base is the opposite read — room to run — and clears the gate.
+    result = qualify_theme(_theme(base_level=0.05))
+    assert result.passed is True
+    assert result.failed_test is None
+
+
 def test_signal_strength_is_acceleration_plus_breadth_minus_crowding() -> None:
     theme = _theme(acceleration=0.5, breadth=3, crowding=0.2)  # breadth 3/6 = 0.5
     assert signal_strength(theme) == pytest.approx(0.5 + 0.5 - 0.2)

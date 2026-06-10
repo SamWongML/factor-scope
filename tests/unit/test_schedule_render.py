@@ -90,3 +90,16 @@ def test_schedule_command_writes_to_a_file_when_asked(tmp_path) -> None:
     result = runner.invoke(app, ["schedule", "--output", str(out)])
     assert result.exit_code == 0, result.output
     assert plistlib.loads(out.read_bytes())["Label"] == "com.factor-scope.nightly"
+
+
+def test_schedule_can_target_the_discover_job() -> None:
+    # The discovery service is its own (weekly) job — the same renderer, a different program.
+    result = runner.invoke(app, ["schedule", "--job", "discover"])
+    assert result.exit_code == 0, result.output
+    parsed = plistlib.loads(result.stdout.encode("utf-8"))
+    assert parsed["ProgramArguments"] == ["factor-scope", "discover"]
+
+
+def test_schedule_rejects_an_unknown_job() -> None:
+    result = runner.invoke(app, ["schedule", "--job", "weekly"])
+    assert result.exit_code != 0
