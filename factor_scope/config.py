@@ -27,6 +27,38 @@ def offline_mode() -> bool:
     return os.environ.get(OFFLINE_ENV, "") not in ("", "0")
 
 
+# Discovery's LLM is split into two difficulty tiers so cost follows the work (see assess.py):
+# the cheap ``DRAFT`` model digests the bulky raw materials, the strong ``JUDGE`` model renders the
+# durability/lead-chain verdict. Roles are the registry keys; each tier is swapped on its own.
+DISCOVERY_DRAFT = "draft"
+DISCOVERY_JUDGE = "judge"
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """One swappable model definition.
+
+    ``model`` is a provider-prefixed id (``deepseek:…`` / ``openai:…`` / ``anthropic:…`` /
+    ``moonshotai:…``) that Pydantic-AI resolves directly. To reach any *other* OpenAI-compatible
+    endpoint — Qwen / GLM / Kimi on a self-hosted or vendor gateway — set ``base_url`` (and the env
+    var holding its key in ``api_key_env``). Switching a tier's model is editing this one line: no
+    per-model code, no fallback chain.
+    """
+
+    model: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+
+
+def _default_discovery_models() -> dict[str, ModelSpec]:
+    """The default two tiers — DeepSeek V4 flash (draft) + pro (judge), each swapped alone."""
+
+    return {
+        DISCOVERY_DRAFT: ModelSpec("deepseek:deepseek-v4-flash"),
+        DISCOVERY_JUDGE: ModelSpec("deepseek:deepseek-v4-pro"),
+    }
+
+
 @dataclass(frozen=True)
 class Config:
     """Everything a single run needs to be reproducible."""
@@ -61,18 +93,19 @@ class Config:
     provider: str = field(default_factory=lambda: "fake" if offline_mode() else "claude_code")
     # Where the nightly job appends its append-only ops run log (one JSON record per run).
     log_path: Path = field(default=Path("out") / "nightly.jsonl")
-    # Theme-discovery (the separate, user/cron-triggered service) knobs. The LLM that populates the
-    # durability/corroboration fields is the *lighter* job → DeepSeek V4 by default. A built-in
-    # provider prefix (``deepseek:`` / ``openai:`` / ``anthropic:`` / ``moonshotai:``) passes
-    # straight through; set ``discovery_base_url`` (+ api-key env) to point at *any*
-    # OpenAI-compatible endpoint — Qwen / GLM / Kimi — with no code change. The heavy bull/bear
-    # debate stays on ``claude_code`` (``provider``). Offline selects the fakes via ``source``.
-    discovery_model: str = "deepseek:deepseek-v4-pro"
-    discovery_base_url: str | None = None
-    discovery_api_key_env: str | None = None
-    # The rolling text corpus the live discovery clusters. Offline reads the bundled
-    # ``textstream.csv``; online pulls this feed (same ``doc_id,as_of,source,text`` shape).
+    # Theme-discovery (the separate, user/cron-triggered service) knobs. Its LLM judgment is
+    # stratified by task difficulty to cut cost — a cheap draft tier digests the raw materials, a
+    # strong judge tier renders the verdict (see ``ModelSpec`` / assess.py). Each tier is swapped
+    # independently; the heavy bull/bear debate stays on ``claude_code`` (``provider``). The offline
+    # test mode selects the deterministic fakes via ``source``.
+    discovery_models: dict[str, ModelSpec] = field(default_factory=_default_discovery_models)
+    # The rolling text corpus discovery clusters. Live pulls this feed; the offline test mode reads
+    # the bundled ``textstream.csv`` instead (same ``doc_id,as_of,source,text`` shape).
     textstream_feed_url: str | None = None
-    # The multilingual sentence-embedding model BERTopic-online uses; the light, MPS-friendly
-    # default suits a Mac-mini-scale Chinese corpus (swap to a heavier one like BAAI/bge-m3 later).
+    # The multilingual sentence-embedding model online BERTopic uses — local and free (auto-selects
+    # the Mac mini's MPS or CPU). The light default suits a Chinese A-share corpus; swap to a
+    # heavier one like BAAI/bge-m3 by editing this line.
     discovery_embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    # Clusters the online MiniBatchKMeans carves the corpus into — BERTopic needs an explicit k (the
+    # online clusterer is not density-based). Raise it for a broader stream.
+    discovery_n_topics: int = 12

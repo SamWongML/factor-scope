@@ -121,8 +121,9 @@ def discover(config: Config) -> int:
     The separate, user/cron-triggered research service (not the nightly): it *fetches* the rolling
     corpus and *writes* dated Readings on the research side of the snapshot boundary, leaving the
     nightly's deterministic reasoning untouched — the next ``ingest`` maps the discovered themes to
-    funds and ``run`` surfaces them. Offline reads the bundled corpus + the deterministic fakes;
-    online pulls the feed and runs BERTopic + the configured LLM (the opt-in ``discovery`` extra).
+    funds and ``run`` surfaces them. In production it pulls the feed and runs online BERTopic + the
+    cost-stratified LLM (the ``discovery`` extra); the offline test mode reads the bundled corpus
+    through the deterministic fakes instead.
     """
 
     as_of = _resolve_as_of(config)
@@ -133,7 +134,7 @@ def discover(config: Config) -> int:
             corpus = textstream.load_fixture(
                 config.fixtures_dir / textstream.FIXTURE, fetched_at=fetched_at
             )
-        else:  # pragma: no cover - opt-in live path
+        else:  # pragma: no cover - live feed, host-only
             if config.textstream_feed_url is None:
                 raise SnapshotError(
                     "no text corpus to discover from: set a textstream feed "

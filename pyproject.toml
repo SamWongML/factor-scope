@@ -27,14 +27,17 @@ store = [
     "pyarrow>=15,<25",
     "ladybug>=0.17,<0.18",
 ]
-# Theme discovery (the opt-in, host-only research service). BERTopic-online drives the quantitative
-# trajectory; pydantic-ai-slim[openai] populates the LLM judgment fields — one extra covers
-# DeepSeek/Qwen/GLM/Kimi via OpenAI-compatible endpoints. Imported lazily inside the real impls only,
-# so CI (which installs just .[dev,store]) never loads them and the offline path stays deterministic.
+# Theme discovery — the host-only research engine (a Mac mini, no paid API for the topic model).
+# Online BERTopic drives the quantitative trajectory (jieba segments the Chinese corpus); the LLM
+# judgment is stratified into a cheap draft + a strong judge tier over pydantic-ai-slim[openai] —
+# one extra covers DeepSeek/Qwen/GLM/Kimi via OpenAI-compatible endpoints. Imported lazily inside the
+# engines only, so the test mode (which installs just .[dev,store]) never loads them and stays
+# byte-for-byte deterministic on the fakes.
 discovery = [
     "bertopic>=0.16,<0.17",
     "sentence-transformers>=3,<6",
     "scikit-learn>=1.4,<2",
+    "jieba>=0.42,<1",
     "pydantic-ai-slim[openai]>=0.0.40,<1",
 ]
 dev = [

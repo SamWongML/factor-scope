@@ -11,7 +11,14 @@ from pathlib import Path
 
 import typer
 
-from factor_scope.config import DEFAULT_FIXTURES_DIR, Config, offline_mode
+from factor_scope.config import (
+    DEFAULT_FIXTURES_DIR,
+    DISCOVERY_DRAFT,
+    DISCOVERY_JUDGE,
+    Config,
+    ModelSpec,
+    offline_mode,
+)
 from factor_scope.pipeline import discover as discover_pipeline
 from factor_scope.pipeline import ingest as ingest_pipeline
 from factor_scope.pipeline import nightly as nightly_pipeline
@@ -131,14 +138,25 @@ def discover(
         "--store-path",
         help="The durable store to append the discovered themes (+ corpus) into.",
     ),
-    model: str = typer.Option(
+    judge_model: str = typer.Option(
         "deepseek:deepseek-v4-pro",
-        "--model",
-        help="The discovery LLM: a provider-prefixed model string (deepseek/openai/anthropic/"
-        "moonshotai). Point --base-url at any OpenAI-compatible endpoint for Qwen/GLM/Kimi.",
+        "--judge-model",
+        help="The strong tier — the durability/lead-chain verdict. Provider-prefixed "
+        "(deepseek/openai/anthropic/moonshotai); --base-url reaches any OpenAI-compatible API.",
+    ),
+    draft_model: str = typer.Option(
+        "deepseek:deepseek-v4-flash",
+        "--draft-model",
+        help="The cheap tier — digests the raw materials before the judge. Stratified by "
+        "difficulty to cut cost; same provider-prefix / --base-url switching as --judge-model.",
+    ),
+    embedding_model: str = typer.Option(
+        "paraphrase-multilingual-MiniLM-L12-v2",
+        "--embedding-model",
+        help="The local sentence-embedding model online BERTopic uses (free; MPS/CPU on a Mac).",
     ),
     base_url: str | None = typer.Option(
-        None, "--base-url", help="OpenAI-compatible endpoint for --model (Qwen/GLM/Kimi)."
+        None, "--base-url", help="OpenAI-compatible endpoint applied to both tiers (Qwen/GLM/Kimi)."
     ),
     api_key_env: str | None = typer.Option(
         None, "--api-key-env", help="Env var holding the API key for --base-url."
@@ -160,9 +178,11 @@ def discover(
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         store_path=store_path,
-        discovery_model=model,
-        discovery_base_url=base_url,
-        discovery_api_key_env=api_key_env,
+        discovery_models={
+            DISCOVERY_DRAFT: ModelSpec(draft_model, base_url=base_url, api_key_env=api_key_env),
+            DISCOVERY_JUDGE: ModelSpec(judge_model, base_url=base_url, api_key_env=api_key_env),
+        },
+        discovery_embedding_model=embedding_model,
         textstream_feed_url=feed_url,
     )
     n = discover_pipeline(config)

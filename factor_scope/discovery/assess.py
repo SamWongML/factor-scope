@@ -5,10 +5,10 @@ Stage A's decisive filters are judgments, not counts: does a theme have **broad 
 :class:`ThemeAssessor` answers each with a boolean **and a cited :class:`Evidence`** — the dated,
 sourced one-liner the user actually reads — so a populated field is never a bare claim.
 
-Two impls behind one ``Protocol``: :class:`FakeAssessor` reads deterministic cues off the corpus
-(the only impl CI runs); :class:`LLMAssessor` lazily builds a Pydantic-AI ``Agent`` whose model is a
-single config string — ``deepseek:deepseek-v4-pro`` by default, any OpenAI-compatible endpoint
-(Qwen / GLM / Kimi) by config, with no per-model code and no fallback chain.
+The production judgment is :class:`LLMAssessor` — two Pydantic-AI agents stratified by task
+difficulty so cost follows the work: a cheap draft model digests the bulky raw materials, a strong
+judge model renders the verdict. :class:`FakeAssessor` is the deterministic cue-reader the offline
+test mode swaps in — no network, no keys — so the suite stays hermetic. One ``Protocol`` over both.
 """
 
 from __future__ import annotations
@@ -17,10 +17,13 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
+from factor_scope.config import DISCOVERY_DRAFT, DISCOVERY_JUDGE, ModelSpec
 from factor_scope.contract import Evidence
 from factor_scope.discovery.topics import StreamDoc, TopicTrajectory
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from factor_scope.config import Config
 
 __all__ = [
@@ -88,11 +91,11 @@ def _cite(topic: TopicTrajectory, docs: list[StreamDoc], cues: tuple[str, ...]) 
 
 
 class FakeAssessor:
-    """Deterministic cue-reading over the corpus — the only impl CI runs.
+    """The offline test stand-in: deterministic cue-reading the suite swaps in for the LLM.
 
     Each field is True iff some document carries its cue vocabulary, and the earliest such doc is
-    the citation; ``fad_resistant`` inverts (True unless a hype marker is present). A stand-in for
-    the LLM's judgment that needs no network and no keys, so the offline suite stays hermetic.
+    the citation; ``fad_resistant`` inverts (True unless a hype marker is present). It needs no
+    network and no keys, so the offline suite stays hermetic and byte-for-byte deterministic.
     """
 
     def assess(self, topic: TopicTrajectory, evidence_docs: list[StreamDoc]) -> ThemeAssessment:
@@ -108,65 +111,77 @@ class FakeAssessor:
         )
 
 
-class LLMAssessor:
-    """The real judgment — a lazily-built Pydantic-AI ``Agent`` returning a ``ThemeAssessment``.
+# The cheap first pass: extract, do not judge — so the bulky text-reduction runs on the cheap tier.
+_DRAFT_INSTRUCTIONS = (
+    "You are the cheap first pass over an emerging A-share theme's source materials. Do not "
+    "judge — only extract. For each of the four dimensions — broad adoption, path to profit, "
+    "fad-resistance, overseas lead-chain — quote the single most relevant dated, sourced line "
+    "from the materials, or write 'none' if it is absent. Keep it terse; never invent a citation."
+)
+# The decisive call: only the small, hard reasoning over the brief runs on the strong tier.
+_JUDGE_INSTRUCTIONS = (
+    "You assess an emerging A-share theme from a pre-extracted evidence brief. Judge whether it "
+    "has broad adoption, a credible path to profit, resilience to being a one-cycle fad, and "
+    "overseas lead-chain corroboration. Populate each field with a boolean and a single dated, "
+    "sourced evidence line drawn from the brief — never invent a citation."
+)
 
-    The model is a single config string. A built-in provider prefix (``deepseek:…``, ``openai:…``,
-    ``anthropic:…``, ``moonshotai:kimi-…``) passes straight to the agent; otherwise a configured
-    ``discovery_base_url`` (+ api-key env) builds an ``OpenAIChatModel`` for **any** compatible
-    endpoint — so Qwen / GLM / Kimi are a config change, not code. Exactly one model: no fallback
-    chain, no compatibility shim. ``pydantic_ai`` is imported inside the call (the ``discovery``
-    extra), so the offline path never loads it.
+
+class LLMAssessor:
+    """The production judgment — two Pydantic-AI agents stratified by task difficulty.
+
+    Cost follows difficulty: the cheap **draft** model (``deepseek-v4-flash`` by default) digests
+    the bulky raw materials into a compact per-dimension brief; the strong **judge** model
+    (``deepseek-v4-pro``) turns that brief into the structured ``ThemeAssessment``. Each tier is a
+    :class:`ModelSpec` swapped on its own — a provider-prefixed id, or a ``base_url`` + api-key env
+    for any OpenAI-compatible endpoint (Qwen / GLM / Kimi). No fallback chain, no per-model code.
+    ``pydantic_ai`` is imported inside the call (the ``discovery`` extra), so the test mode never
+    loads it.
     """
 
-    def __init__(
-        self, model: str, *, base_url: str | None = None, api_key_env: str | None = None
-    ) -> None:
-        self._model = model
-        self._base_url = base_url
-        self._api_key_env = api_key_env
+    def __init__(self, models: Mapping[str, ModelSpec]) -> None:
+        self._models = models
 
-    def _agent(self) -> object:  # pragma: no cover - opt-in live path
+    def _agent(  # pragma: no cover - production engine, host-only deps
+        self, role: str, *, output_type: object, instructions: str
+    ) -> object:
         import os
 
         from pydantic_ai import Agent
 
-        instructions = (
-            "You assess an emerging investment theme for an A-share funnel. From the cited "
-            "materials, judge whether it has broad adoption, a credible path to profit, "
-            "resilience to being a one-cycle fad, and overseas lead-chain corroboration. Populate "
-            "each field with a boolean and a single dated, sourced evidence line — never invent a "
-            "citation."
-        )
-        if self._base_url is not None:
+        spec = self._models[role]
+        if spec.base_url is not None:
             from pydantic_ai.models.openai import OpenAIChatModel
             from pydantic_ai.providers.openai import OpenAIProvider
 
-            api_key = os.environ[self._api_key_env] if self._api_key_env else None
+            api_key = os.environ[spec.api_key_env] if spec.api_key_env else None
             model: object = OpenAIChatModel(
-                self._model, provider=OpenAIProvider(base_url=self._base_url, api_key=api_key)
+                spec.model, provider=OpenAIProvider(base_url=spec.base_url, api_key=api_key)
             )
         else:
-            model = self._model
-        return Agent(model, output_type=ThemeAssessment, instructions=instructions)
+            model = spec.model
+        return Agent(model, output_type=output_type, instructions=instructions)
 
-    def assess(  # pragma: no cover - opt-in live path
+    def assess(  # pragma: no cover - production engine, host-only deps
         self, topic: TopicTrajectory, evidence_docs: list[StreamDoc]
     ) -> ThemeAssessment:
         docs = [d for d in evidence_docs if d.doc_id in set(topic.doc_ids)] or evidence_docs
         materials = "\n".join(f"[{d.source} {d.as_of}] {d.text}" for d in docs)
         seed = f"Theme: {topic.label}\nConstituents: {', '.join(topic.constituents)}"
-        result = self._agent().run_sync(f"{seed}\n\n{materials}")  # type: ignore[attr-defined]
+
+        draft = self._agent(DISCOVERY_DRAFT, output_type=str, instructions=_DRAFT_INSTRUCTIONS)
+        brief = draft.run_sync(f"{seed}\n\n{materials}").output  # type: ignore[attr-defined]
+
+        judge = self._agent(
+            DISCOVERY_JUDGE, output_type=ThemeAssessment, instructions=_JUDGE_INSTRUCTIONS
+        )
+        result = judge.run_sync(f"{seed}\n\nEvidence brief:\n{brief}")  # type: ignore[attr-defined]
         return result.output  # type: ignore[no-any-return]
 
 
 def get_assessor(config: Config) -> ThemeAssessor:
-    """The deterministic fake offline, the lazy LLM assessor online (mirrors the source seams)."""
+    """The production two-tier LLM by default; the deterministic fake in the offline test mode."""
 
     if config.source == "fixtures":
         return FakeAssessor()
-    return LLMAssessor(  # pragma: no cover - opt-in live path
-        config.discovery_model,
-        base_url=config.discovery_base_url,
-        api_key_env=config.discovery_api_key_env,
-    )
+    return LLMAssessor(config.discovery_models)  # pragma: no cover - production engine, host-only

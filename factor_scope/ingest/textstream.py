@@ -38,13 +38,13 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def fetch_live(  # pragma: no cover - opt-in live path
+def fetch_live(  # pragma: no cover - live backend, host-only deps
     feed_url: str, *, fetched_at: str
 ) -> list[Reading]:
     """Pull the rolling corpus from a feed that serves the same ``doc_id,as_of,source,text`` CSV.
 
-    The opt-in live backend: ``httpx`` is imported lazily here so the core installs and CI run
-    without it (the offline path uses :func:`load_fixture` over the bundled corpus instead).
+    The production backend: ``httpx`` is imported lazily here so the core installs and the offline
+    test mode run without it (that mode reads :func:`load_fixture` over the bundled corpus instead).
     """
 
     import httpx

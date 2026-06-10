@@ -7,15 +7,16 @@ attention now — a low base leaves room to run), ``breadth`` (distinct corrobor
 This mirrors the BERTrend pattern (process the stream in time slices, classify each topic by a
 popularity metric over time) with a handful of economic-meaning constants — never tuned to P&L.
 
-Two impls behind one ``Protocol`` (the repo's fake + lazy-real idiom): :class:`FakeTopicModel` is a
-deterministic frequency grouping + the same trajectory classifier — the only impl CI ever runs;
-:class:`BERTopicModel` lazily imports the real online BERTopic stack and is opt-in (the pinned
-``discovery`` extra, never installed offline).
+The production engine is :class:`BERTopicModel` — online BERTopic over the live A-share text stream
+(the pinned ``discovery`` extra, host-only). :class:`FakeTopicModel` is the deterministic stand-in
+the offline test mode swaps in for speed: a no-model frequency grouping that runs the *same*
+trajectory reader, so the quantitative contract is identical on either side of one ``Protocol``.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
@@ -25,8 +26,10 @@ if TYPE_CHECKING:
 __all__ = [
     "BASE_SATURATION",
     "NOISE_MAX_TOTAL",
+    "PCA_COMPONENTS",
     "STRONG_MIN_TOTAL",
     "TOPIC_MIN_DOCS",
+    "BERTopicModel",
     "FakeTopicModel",
     "StreamDoc",
     "TopicModel",
@@ -43,6 +46,12 @@ NOISE_MAX_TOTAL = 2  # ≤ this many mentions across the window → too faint to
 STRONG_MIN_TOTAL = 5  # ≥ this many mentions → an established, strong signal (between → weak)
 BASE_SATURATION = 12  # mention count that reads as a fully-saturated (1.0) absolute attention level
 TOPIC_MIN_DOCS = 2  # a term must recur in ≥ this many docs to seed a topic (else it is a singleton)
+
+# Online-BERTopic plumbing constants (the host engine only; the fake ignores them):
+ONLINE_RANDOM_STATE = 42  # pins MiniBatchKMeans so a real run reproduces across invocations
+PCA_COMPONENTS = 5  # IncrementalPCA target dimensionality ahead of the online clustering
+VECTORIZER_DECAY = 0.01  # OnlineCountVectorizer decay — down-weight stale slices, stay current
+MIN_BATCH = 16  # floor on a partial_fit mini-batch so the online sub-models stay numerically sane
 
 # Generic / cue vocabulary kept out of topic labels and constituents so a topic is named for its
 # entity, not the verbs around it. (The assessor reads these same cues off the raw text — see
@@ -109,9 +118,16 @@ class TopicModel(Protocol):
         """Group ``docs`` into topics and read each one's trajectory (deterministic per corpus)."""
 
 
-def _trajectory(label: str, docs: list[StreamDoc]) -> TopicTrajectory:
-    """Read one topic's descriptive trajectory off its documents (shared, deterministic logic)."""
+def _trajectory(
+    label: str, docs: list[StreamDoc], *, tokenize: Callable[[str], list[str]] | None = None
+) -> TopicTrajectory:
+    """Read one topic's descriptive trajectory off its documents (shared, deterministic logic).
 
+    ``tokenize`` segments a document into constituent terms; the offline corpus is pre-segmented so
+    it defaults to whitespace, while the host engine passes a Chinese segmenter (jieba).
+    """
+
+    tokens_of = (lambda d: tokenize(d.text)) if tokenize is not None else (lambda d: d.tokens())
     by_date = Counter(d.as_of for d in docs)
     dates = sorted(by_date)
     popularity = [by_date[date] for date in dates]
@@ -132,7 +148,7 @@ def _trajectory(label: str, docs: list[StreamDoc]) -> TopicTrajectory:
     crowding = round(1.0 - len(sources) / total, 2)  # broad source set → low; few outlets → high
 
     constituents = sorted(
-        {tok for d in docs for tok in d.tokens() if tok != label and tok not in _STOPWORDS}
+        {tok for d in docs for tok in tokens_of(d) if tok != label and tok not in _STOPWORDS}
     )
     return TopicTrajectory(
         label=label,
@@ -147,12 +163,13 @@ def _trajectory(label: str, docs: list[StreamDoc]) -> TopicTrajectory:
 
 
 class FakeTopicModel:
-    """Deterministic topic modeling: a recurring term seeds a topic and greedily claims its docs.
+    """The offline test stand-in: a no-model frequency grouping the suite swaps in for speed.
 
-    A stand-in for embedding-based clustering with no model and no randomness: a term that recurs in
+    Stands in for embedding-based clustering with no model and no randomness: a term that recurs in
     at least :data:`TOPIC_MIN_DOCS` documents is a candidate label; labels are taken most-frequent
     first and each claims the still-unclaimed documents containing it, so the corpus partitions
-    deterministically and a document's dominant recurring term names its topic. The only CI impl.
+    deterministically and a document's dominant recurring term names its topic. It reuses the same
+    :func:`_trajectory` reader as the production engine, so both sides of the seam agree.
     """
 
     def discover(self, docs: list[StreamDoc], *, as_of: str) -> list[TopicTrajectory]:
@@ -175,30 +192,115 @@ class FakeTopicModel:
 
 
 class BERTopicModel:
-    """The real online BERTopic stack — lazily imported, opt-in, never run by CI.
+    """The production topic engine — online BERTopic over the live A-share text stream.
 
-    Mirrors the BERTrend pattern over the live corpus: precomputed multilingual embeddings feeding
-    an online BERTopic (``IncrementalPCA`` + ``MiniBatchKMeans`` + an ``OnlineCountVectorizer`` with
-    decay, ``random_state`` pinned), then the same :func:`classify_trajectory` over each topic's
-    popularity across time slices. The heavy dependency is imported inside :meth:`discover` so the
-    offline path never loads it.
+    Mirrors the BERTrend pattern: local, free multilingual sentence-embeddings feed an online
+    BERTopic — ``IncrementalPCA`` → ``MiniBatchKMeans`` (``random_state`` pinned) → an
+    ``OnlineCountVectorizer`` with decay, jieba-segmented for Chinese — fitted mini-batch by
+    mini-batch in publish-date order via ``partial_fit`` so recent attention is weighted up. Each
+    resulting cluster is read by the same :func:`_trajectory` / :func:`classify_trajectory` the
+    offline stand-in uses, so the quantitative contract is identical. The heavy ``discovery`` extra
+    (bertopic / sentence-transformers / scikit-learn / jieba) is imported inside :meth:`discover`;
+    it runs on the host — a Mac mini's MPS or CPU, no paid API — never in the test suite.
     """
 
-    def __init__(self, embedding_model: str) -> None:
+    def __init__(self, embedding_model: str, *, n_topics: int) -> None:
         self._embedding_model = embedding_model
+        self._n_topics = n_topics
 
-    def discover(  # pragma: no cover - opt-in live path
+    def discover(  # pragma: no cover - production engine, host-only deps
         self, docs: list[StreamDoc], *, as_of: str
     ) -> list[TopicTrajectory]:
-        raise NotImplementedError(
-            "online BERTopic discovery requires the `discovery` extra and a configured corpus; "
-            "install '.[discovery]' and run on the host, or use --offline for the fixture corpus"
+        if not docs:
+            return []
+
+        import jieba
+        from bertopic import BERTopic
+        from bertopic.vectorizers import OnlineCountVectorizer
+        from sentence_transformers import SentenceTransformer
+        from sklearn.cluster import MiniBatchKMeans
+        from sklearn.decomposition import IncrementalPCA
+
+        # Publish-date order: the online stack is input-order-sensitive, so a fixed order (with the
+        # pinned random_state) keeps a re-run over the same corpus reproducible.
+        ordered = sorted(docs, key=lambda d: (d.as_of, d.doc_id))
+        embedder = SentenceTransformer(self._embedding_model)  # auto-selects MPS/CPU, fully local
+        embeddings = embedder.encode(
+            [d.text for d in ordered], show_progress_bar=False, normalize_embeddings=True
         )
+
+        batches, n_clusters = self._minibatches(ordered)
+        n_components = max(1, min(PCA_COMPONENTS, min(len(b) for b in batches)))
+        topic_model = BERTopic(
+            umap_model=IncrementalPCA(n_components=n_components),
+            hdbscan_model=MiniBatchKMeans(n_clusters=n_clusters, random_state=ONLINE_RANDOM_STATE),
+            vectorizer_model=OnlineCountVectorizer(tokenizer=jieba.lcut, decay=VECTORIZER_DECAY),
+            calculate_probabilities=False,
+            verbose=False,
+        )
+
+        # Online fit: ``partial_fit`` over the chronological mini-batches; ``topics_`` only reflects
+        # the latest batch, so accumulate the per-document assignments as the stream advances.
+        assignments: list[int] = []
+        cursor = 0
+        for batch in batches:
+            topic_model.partial_fit(
+                [d.text for d in batch], embeddings=embeddings[cursor : cursor + len(batch)]
+            )
+            assignments.extend(topic_model.topics_)
+            cursor += len(batch)
+
+        groups: dict[int, list[StreamDoc]] = {}
+        for doc, topic_id in zip(ordered, assignments, strict=True):
+            groups.setdefault(topic_id, []).append(doc)
+
+        return [
+            _trajectory(
+                self._label(topic_model, topic_id, members), members, tokenize=jieba.lcut
+            )
+            for topic_id, members in groups.items()
+        ]
+
+    def _minibatches(  # pragma: no cover - production engine, host-only deps
+        self, ordered: list[StreamDoc]
+    ) -> tuple[list[list[StreamDoc]], int]:
+        """Chronological fixed-size mini-batches for ``partial_fit`` + the cluster count k.
+
+        BERTopic's online tutorial chunks by size (not by date) so each batch is large enough for
+        the sub-models; we keep the chunks in publish-date order so decay still favours recent. k
+        never exceeds the corpus, and a short trailing batch is merged back so no batch is smaller
+        than k (``MiniBatchKMeans`` needs ``n_samples ≥ n_clusters`` to seed centroids).
+        """
+
+        n_clusters = min(self._n_topics, len(ordered))
+        size = max(n_clusters, PCA_COMPONENTS, MIN_BATCH)
+        batches = [ordered[i : i + size] for i in range(0, len(ordered), size)]
+        if len(batches) > 1 and len(batches[-1]) < n_clusters:
+            batches[-2].extend(batches.pop())
+        return batches, n_clusters
+
+    def _label(  # pragma: no cover - production engine, host-only deps
+        self, topic_model: object, topic_id: int, members: list[StreamDoc]
+    ) -> str:
+        """The topic's name — its top c-TF-IDF entity term (cues stripped), with a freq fallback."""
+
+        import jieba
+
+        words = topic_model.get_topic(topic_id) or []  # type: ignore[attr-defined]
+        for word, _score in words:
+            if word not in _STOPWORDS:
+                return str(word)
+        freq = Counter(
+            tok for d in members for tok in jieba.lcut(d.text) if tok not in _STOPWORDS
+        )
+        return freq.most_common(1)[0][0] if freq else f"topic-{topic_id}"
 
 
 def get_topic_model(config: Config) -> TopicModel:
-    """The deterministic fake offline, the lazy real BERTopic online (mirrors the source seams)."""
+    """The production BERTopic engine by default; the deterministic stand-in in the test mode."""
 
     if config.source == "fixtures":
         return FakeTopicModel()
-    return BERTopicModel(config.discovery_embedding_model)  # pragma: no cover - opt-in live path
+    return BERTopicModel(  # pragma: no cover - production engine, host-only deps
+        config.discovery_embedding_model, n_topics=config.discovery_n_topics
+    )
