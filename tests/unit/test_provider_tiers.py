@@ -17,7 +17,7 @@ from factor_scope.config import (
     TIER_PRO,
     Config,
 )
-from factor_scope.digest.deepseek import DEFAULT_MODEL, FLASH_MODEL, PRO_MODEL
+from factor_scope.digest.deepseek import DEFAULT_MODEL
 
 pytestmark = pytest.mark.unit
 
@@ -44,10 +44,8 @@ def test_model_for_task_resolves_through_the_route() -> None:
     assert config.model_for_task(TASK_BULK) == "deepseek-v4-flash"
 
 
-def test_deepseek_uses_explicit_v4_ids_not_deprecated_aliases() -> None:
-    # The legacy `deepseek-chat` / `deepseek-reasoner` aliases deprecate 2026-07-24.
-    assert FLASH_MODEL == "deepseek-v4-flash"
-    assert PRO_MODEL == "deepseek-v4-pro"
-    assert DEFAULT_MODEL == FLASH_MODEL
-    for model in (FLASH_MODEL, PRO_MODEL, DEFAULT_MODEL):
-        assert "chat" not in model and "reasoner" not in model
+def test_deepseek_chore_default_is_an_explicit_v4_id_not_a_deprecated_alias() -> None:
+    # The legacy `deepseek-chat` / `deepseek-reasoner` aliases deprecate 2026-07-24; the chore
+    # client defaults to the Flash tier (the full tier→id registry is asserted above).
+    assert DEFAULT_MODEL == "deepseek-v4-flash"
+    assert "chat" not in DEFAULT_MODEL and "reasoner" not in DEFAULT_MODEL

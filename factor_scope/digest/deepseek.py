@@ -12,12 +12,10 @@ from __future__ import annotations
 
 import os
 
-# Explicit DeepSeek V4 model IDs — the cheap Flash tier for bulk chores, the Pro tier for heavier
-# structured work. Pinned ids, never the ``deepseek-chat`` / ``deepseek-reasoner`` aliases (they map
-# to V4-Flash modes and deprecate 2026-07-24).
-FLASH_MODEL = "deepseek-v4-flash"  # bulk extraction / summarization / coarse scoring
-PRO_MODEL = "deepseek-v4-pro"  # mid-tier structured ranking / heavier summaries
-DEFAULT_MODEL = FLASH_MODEL
+# The chore client's default is the cheap Flash tier. An explicit V4 id, never the ``deepseek-chat``
+# / ``deepseek-reasoner`` aliases (they map to V4-Flash modes and deprecate 2026-07-24). The full
+# tier→id registry (Flash + Pro) lives in ``config.reasoning_tiers``.
+DEFAULT_MODEL = "deepseek-v4-flash"  # bulk extraction / summarization / coarse scoring
 _ENDPOINT = "https://api.deepseek.com/chat/completions"
 
 
@@ -61,4 +59,4 @@ class DeepSeekChores:
         return content.strip()
 
 
-__all__ = ["DeepSeekChores", "DEFAULT_MODEL", "FLASH_MODEL", "PRO_MODEL"]
+__all__ = ["DeepSeekChores", "DEFAULT_MODEL"]

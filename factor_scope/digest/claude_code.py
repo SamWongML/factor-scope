@@ -41,7 +41,7 @@ def _load_seat_prompt(name: str) -> str:
 
 @dataclass(frozen=True)
 class CostEnvelope:
-    """One seat call's cost, parsed from the stream-json ``result`` message (consumed by U15)."""
+    """One seat call's cost from the stream-json ``result`` message (for budget telemetry)."""
 
     cost_usd: float
     input_tokens: int
@@ -57,7 +57,7 @@ class ClaudeCodeProvider:
     def __init__(self, *, model: str | None = None, timeout_s: float = 120.0) -> None:
         self._model = model
         self._timeout_s = timeout_s
-        # Per-call cost envelopes, in call order — one per seat turn (consumed by U15 budgeting).
+        # Per-call cost envelopes, in call order — one per seat turn, for budget telemetry.
         self.costs: list[CostEnvelope] = []
 
     def argue(self, side: Side, brief: DigestInput) -> Case:
