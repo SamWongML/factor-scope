@@ -3,7 +3,7 @@
 The US-side holdings that feed the cross-market lead and the connection graph. Each ``(filer,
 holding)`` pair is its own point-in-time key. The fixture and live 13F carry ``shares`` (US lead);
 live N-PORT instead carries a ``weight`` so US fund/ETF holdings become look-through ``HOLDS`` edges
-(see ``fetch_live`` / ``build_graph_from_store``). Live is EdgarTools — opt-in, never called in CI.
+(see ``fetch_live`` / ``build_graph_from_store``). Live is EdgarTools — never called in CI.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
 
 def fetch_live(
     cik: str, *, form: str = "13F-HR", fetched_at: str
-) -> list[Reading]:  # pragma: no cover - opt-in
+) -> list[Reading]:  # pragma: no cover - live path
     """Pull a filer's latest holdings via EdgarTools. Requires the `live` extra + network.
 
     ``form="13F-HR"`` reads a 13F manager's quarterly share positions (the ``infotable``) into

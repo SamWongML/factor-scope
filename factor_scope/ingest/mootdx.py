@@ -21,7 +21,7 @@ SOURCE = "mootdx"  # this adapter's provenance tag
 _DAILY = 9  # Mootdx frequency code for the daily K-line; bars are unadjusted (raw close)
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull the latest daily close for one ETF via Mootdx. Requires the `live` extra + network."""
 
     from mootdx.quotes import Quotes

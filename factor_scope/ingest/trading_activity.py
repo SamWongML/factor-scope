@@ -5,7 +5,7 @@ code and stamped with the bar's own trading date. ``turnover`` is the daily turn
 the crowding signal); ``amount`` is the daily traded value (成交额, the Amihud-illiquidity input).
 Both are read point-in-time against a fund's own history by the factor battery.
 
-Live pulls AkShare's on-exchange ETF daily bar (``fund_etf_hist_em``) — opt-in, never called in CI.
+Live pulls AkShare's on-exchange ETF daily bar (``fund_etf_hist_em``) — never called in CI.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str)
     ]
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull a fund's daily turnover + traded value via AkShare. Requires `live` + network."""
 
     import akshare as ak

@@ -1,7 +1,8 @@
 """Theme discovery — the BERTopic-online + LLM machine, exercised on its deterministic fakes.
 
 Discovery turns a rolling text stream into candidate themes for the emerging funnel. Two narrow
-seams, each a ``Protocol`` with a deterministic fake (the only impl CI runs) and a lazy real impl:
+seams, each a ``Protocol`` over a production engine, with a deterministic fake the offline suite
+swaps in (exercised here):
 
 * a :class:`TopicModel` groups the stream into topics and reads each one's *quantitative*
   trajectory — ``acceleration`` / ``base_level`` / ``breadth`` / ``crowding`` — plus a

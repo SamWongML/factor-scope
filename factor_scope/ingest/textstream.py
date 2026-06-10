@@ -3,7 +3,7 @@
 ``textstream.csv → {doc_id, as_of, source, text}``. Each row is one dated document (news / research
 note / filing) keyed by ``doc_id`` and stamped with its own publish ``as_of`` so the corpus stays
 point-in-time. The payload carries the document's ``source`` and ``text``. The live backend pulls
-the stream from its feed (opt-in, lazily imported, never wired into CI); only the fixture backend
+the stream from its feed (lazily imported, never wired into CI); only the fixture backend
 runs offline.
 """
 

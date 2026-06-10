@@ -1,7 +1,7 @@
 """Prices / fund-NAV adapter (CN). Fixture: `prices.csv → {code, as_of, nav}`.
 
 Per-item gain comes from cost basis vs the current NAV pulled here. Live is AkShare's ETF history
-(``fund_etf_hist_em``) — opt-in, never called in CI.
+(``fund_etf_hist_em``) — never called in CI (which forces offline).
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def select_reconciled(
     return [canonical]
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - opt-in
+def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
     """Pull the latest daily NAV for one ETF via AkShare. Requires the `live` extra + network."""
 
     import akshare as ak
