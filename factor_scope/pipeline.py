@@ -17,7 +17,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from factor_scope.config import Config
+from factor_scope.config import TASK_DEBATE, Config
 from factor_scope.contract import (
     Connection,
     Dashboard,
@@ -285,6 +285,7 @@ def _attach_leans(
     store: PointInTimeStore,
     as_of: str,
     provider_name: str,
+    deep_think_model: str,
     *,
     digest_failures: list[DigestFailure] | None = None,
 ) -> None:
@@ -298,7 +299,7 @@ def _attach_leans(
     next run's self-scoring loop scores *this* real call.
     """
 
-    provider = get_provider(provider_name)
+    provider = get_provider(provider_name, deep_think_model=deep_think_model)
     # Idempotent on a durable store: never log a second call for a code already called tonight, so
     # re-running the same night can't double-count in next run's score (the store is append-only).
     logged_tonight = {c.call_id for c in read_calls(store, as_of) if c.as_of == as_of}
@@ -556,7 +557,14 @@ def build_dashboard(
         emerging_pairs = _build_emerging(store, graph, as_of, book)
         pairs = core_pairs + emerging_pairs
         _attach_scorecard(pairs, store, as_of)
-        _attach_leans(pairs, store, as_of, config.provider, digest_failures=digest_failures)
+        _attach_leans(
+            pairs,
+            store,
+            as_of,
+            config.provider,
+            config.model_for_task(TASK_DEBATE),
+            digest_failures=digest_failures,
+        )
         items = [item for _, item in pairs]
     finally:
         store.close()

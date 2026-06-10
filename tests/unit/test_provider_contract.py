@@ -31,6 +31,14 @@ def test_get_provider_claude_code_satisfies_the_protocol() -> None:
     assert provider.name == "claude_code"
 
 
+def test_claude_code_runs_the_seats_on_the_deep_think_model() -> None:
+    from factor_scope.digest.claude_code import ClaudeCodeProvider
+
+    provider = get_provider("claude_code", deep_think_model="opus")
+    assert isinstance(provider, ClaudeCodeProvider)
+    assert provider._model == "opus"
+
+
 def test_deepseek_is_not_a_judgment_provider() -> None:
     with pytest.raises(ValueError, match="chore"):
         get_provider("deepseek")

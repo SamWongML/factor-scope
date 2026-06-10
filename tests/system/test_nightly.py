@@ -127,7 +127,9 @@ def test_nightly_degrades_a_failing_provider_to_abstain_and_logs_it(tmp_path, mo
     # The P0 invariant: a seat failure must not abort the night. Every item that reaches the broken
     # provider degrades to abstain, the artifact is still written, and the run log records the
     # failures (with the error) so a broken night is visible — the log write used to be skipped.
-    monkeypatch.setattr("factor_scope.pipeline.get_provider", lambda name: _BoomProvider())
+    monkeypatch.setattr(
+        "factor_scope.pipeline.get_provider", lambda name, **_: _BoomProvider()
+    )
 
     p = _paths(tmp_path)
     cfg = Config(

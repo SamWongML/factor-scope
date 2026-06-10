@@ -33,6 +33,34 @@ def offline_mode() -> bool:
 DISCOVERY_DRAFT = "draft"
 DISCOVERY_JUDGE = "judge"
 
+# Reasoning is tiered so cost follows difficulty (ROADMAP §8–§9): the cheap DeepSeek V4 tiers do the
+# bulk and mid-tier work, and the expensive deep-think seat is reserved for the one hard call — the
+# final bull/bear→synthesis debate. Explicit model IDs only (the ``deepseek-chat`` /
+# ``deepseek-reasoner`` aliases deprecate 2026-07-24).
+TIER_FLASH = "flash"  # deepseek-v4-flash: bulk extraction/summarization/coarse scoring
+TIER_PRO = "pro"  # deepseek-v4-pro: mid-tier structured ranking
+TIER_DEEP_THINK = "deep_think"  # the seats' tier — Claude Opus-class via the headless `claude` CLI
+
+# The reasoning tasks and the tier each routes to (cheap-first; the debate is the reserved call).
+TASK_DEBATE = "debate"  # the final bull/bear→synthesis seats
+TASK_BULK = "bulk"  # extraction / summarization / coarse scoring
+
+
+def _default_reasoning_tiers() -> dict[str, str]:
+    """Tier → explicit model id. Flash/Pro are bare V4 ids; deep-think is a `claude` CLI alias."""
+
+    return {
+        TIER_FLASH: "deepseek-v4-flash",
+        TIER_PRO: "deepseek-v4-pro",
+        TIER_DEEP_THINK: "opus",
+    }
+
+
+def _default_task_tiers() -> dict[str, str]:
+    """Default cheap-first routes — the debate alone earns the deep-think seat."""
+
+    return {TASK_DEBATE: TIER_DEEP_THINK, TASK_BULK: TIER_FLASH}
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -109,3 +137,18 @@ class Config:
     # Clusters the online MiniBatchKMeans carves the corpus into — BERTopic needs an explicit k (the
     # online clusterer is not density-based). Raise it for a broader stream.
     discovery_n_topics: int = 12
+    # The reasoning tiers (tier → model id) and the task → tier routing. Cost follows difficulty:
+    # the final bull/bear→synthesis debate runs on the reserved deep-think seat, bulk jobs run
+    # cheap-first on DeepSeek V4 Flash. Each tier swaps on its own line (see ``model_for_task``).
+    reasoning_tiers: dict[str, str] = field(default_factory=_default_reasoning_tiers)
+    task_tiers: dict[str, str] = field(default_factory=_default_task_tiers)
+
+    def tier_for_task(self, task: str) -> str:
+        """Which difficulty tier a reasoning task routes to."""
+
+        return self.task_tiers[task]
+
+    def model_for_task(self, task: str) -> str:
+        """The concrete model id a reasoning task resolves to, through its tier."""
+
+        return self.reasoning_tiers[self.task_tiers[task]]
