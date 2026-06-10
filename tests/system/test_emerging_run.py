@@ -1,11 +1,12 @@
-"""System test — the run artifact carries the emerging funnel's top-3.
+"""System test — the run artifact carries the emerging funnel's re-ranked top-3.
 
-End-to-end over the bundled fixtures: a cleared theme (储能) produces a ranked top-3 of its
-candidate funds in the ``emerging`` list, each with the Stage-A clearance + the Stage-B one-page
-comparison (methodology / fee / AUM / tracking / top-10 / overlap-with-core). The candidate that
-heavily overlaps my core (光储龙头ETF holds 中际旭创, a name my book already owns) is dropped from
-the top 3 by the look-through. The digest then leans over the shortlist; the capped fund is
-never bullish. Deterministic, schema-valid.
+End-to-end over the bundled fixtures: a cleared theme (储能) runs the three-stage funnel —
+candidate generation + Stage-B ranking to a finalist pool, then the cheap-LLM re-rank (the offline
+deterministic stand-in) to the top 3 in the ``emerging`` list, each with the Stage-A clearance + the
+Stage-B one-page comparison (methodology / fee / AUM / tracking / top-10 / overlap-with-core). The
+candidate that heavily overlaps my core (光储龙头ETF holds 中际旭创, a name my book already owns) is
+dropped by the look-through. The digest then leans over the shortlist; the capped fund is never
+bullish. Deterministic, schema-valid.
 """
 
 import json
@@ -30,7 +31,8 @@ def test_run_emerging_list_is_a_screened_top_three(tmp_path) -> None:
 
     dash = Dashboard.model_validate(json.loads(out.read_text(encoding="utf-8")))
     emerging = dash.by_list(ListName.EMERGING)
-    assert len(emerging) == 3  # the cleared theme's ranked top 3
+    assert len(emerging) <= 3  # the re-rank emits at most a top 3 per cleared theme
+    assert len(emerging) == 3  # the cleared theme fills it
 
     # The overlapping candidate (光储龙头ETF) is dropped from the top 3 by overlap-with-core.
     names = {it.item for it in emerging}

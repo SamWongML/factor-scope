@@ -11,8 +11,10 @@ from __future__ import annotations
 import pytest
 
 from factor_scope.emerging.stage_b import (
+    AUM_FLOOR,
     WEIGHTS,
     Candidate,
+    coarse_filter,
     overlap_with_core,
     score_fund,
     screen_funds,
@@ -69,6 +71,16 @@ def test_weights_sum_to_one() -> None:
     # The fixed-weight combination is only a convex average if the weights sum to 1.0; a future
     # re-balance that breaks this would silently distort every total, so pin the invariant here.
     assert sum(WEIGHTS.values()) == pytest.approx(1.0)
+
+
+def test_coarse_filter_drops_funds_below_the_liquidity_floor() -> None:
+    # The candidate-generation gate: a fund too thin to trade (closure/illiquidity risk) is dropped
+    # before the scorecard runs, while one at the floor survives. Order is preserved.
+    thin = _candidate("THIN", aum=AUM_FLOOR - 1.0)
+    ok = _candidate("OK", aum=AUM_FLOOR)
+    big = _candidate("BIG", aum=80.0)
+    survivors = coarse_filter([thin, ok, big])
+    assert [c.code for c in survivors] == ["OK", "BIG"]
 
 
 def test_overlap_with_core_counts_only_names_my_book_already_holds() -> None:
@@ -137,9 +149,8 @@ def test_crowded_fund_ranks_below_an_otherwise_equal_uncrowded_fund() -> None:
     crowded = score_fund(_candidate("C", crowding=0.90), graph, AS_OF, book)
     assert crowded.subscores["crowding"] < uncrowded.subscores["crowding"]
     assert crowded.total < uncrowded.total
-    ranked = screen_funds(
-        [_candidate("C", crowding=0.90), _candidate("A", crowding=0.10)], graph, AS_OF, book
-    )
+    pair = [_candidate("C", crowding=0.90), _candidate("A", crowding=0.10)]
+    ranked = screen_funds(pair, graph, AS_OF, book, top_n=3)
     assert [s.candidate.code for s in ranked] == ["A", "C"]
 
 

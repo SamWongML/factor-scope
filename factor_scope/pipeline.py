@@ -38,8 +38,10 @@ from factor_scope.discovery import (
 from factor_scope.emerging import (
     Candidate,
     FundScore,
+    Reranker,
     Shortlist,
     Theme,
+    get_reranker,
     infer_links,
     run_funnel,
 )
@@ -470,15 +472,20 @@ def _emerging_connections(
 
 
 def _build_emerging(
-    store: PointInTimeStore, graph: GraphStore, as_of: str, book: list[Holding]
+    store: PointInTimeStore,
+    graph: GraphStore,
+    as_of: str,
+    book: list[Holding],
+    reranker: Reranker,
 ) -> list[tuple[str, DashboardItem]]:
-    """Run the two-stage funnel → the ``emerging`` list (top-3 funds per cleared theme).
+    """Run the three-stage funnel → the ``emerging`` list (top-3 funds per cleared theme).
 
-    Stage A qualifies each industry; Stage B screens a cleared theme's candidate funds on the fixed
-    scorecard (overlap-with-core via the look-through) to a ranked top 3. Each surviving fund
-    becomes an emerging item carrying its factor states/gate (where price history exists), the
-    Stage-A/Stage-B one-page comparison as evidence, and its overlap as connections. The digest
-    then leans over the shortlist (in ``_attach_leans``) and promotes at most one.
+    Stage A qualifies each industry; Stage B generates + ranks a cleared theme's candidate funds on
+    the fixed scorecard (overlap-with-core via the look-through) to a finalist pool; the cheap-LLM
+    re-rank narrows those to the top 3. Each surviving fund becomes an emerging item carrying its
+    factor states/gate (where price history exists), the Stage-A/Stage-B one-page comparison as
+    evidence, and its overlap as connections. The digest then leans over the shortlist (in
+    ``_attach_leans``) and promotes at most one.
     """
 
     if store.count("themes") == 0:
@@ -486,8 +493,9 @@ def _build_emerging(
     themes = [_theme_from_reading(r) for r in store.read_as_of("themes", as_of)]
     candidates = [_candidate_from_reading(r) for r in store.read_as_of("theme_map", as_of)]
     pairs: list[tuple[str, DashboardItem]] = []
-    for shortlist in run_funnel(themes, candidates, graph, as_of, book):
-        for rank, score in enumerate(shortlist.funds, start=1):
+    for shortlist in run_funnel(themes, candidates, graph, as_of, book, reranker):
+        for ranked in shortlist.funds:
+            score = ranked.score
             code = score.candidate.code
             ctx = FactorContext(code=code, as_of=as_of, store=store)
             connections = _emerging_connections(score, graph, as_of, book)
@@ -500,7 +508,7 @@ def _build_emerging(
                 connections_flag=bool(connections),
                 evidence=[
                     _stage_a_evidence(shortlist),
-                    _stage_b_evidence(score, rank, shortlist.n_candidates),
+                    _stage_b_evidence(score, ranked.rank, shortlist.n_candidates),
                 ],
             )
             pairs.append((code, item))
@@ -554,7 +562,7 @@ def build_dashboard(
         _attach_connections(core_pairs, graph, book, as_of)
         # The emerging list is the funnel's output, not a hand-placed position; it owns
         # its own overlap-with-core connections, so it is built after the core look-through.
-        emerging_pairs = _build_emerging(store, graph, as_of, book)
+        emerging_pairs = _build_emerging(store, graph, as_of, book, get_reranker(config))
         pairs = core_pairs + emerging_pairs
         _attach_scorecard(pairs, store, as_of)
         _attach_leans(
