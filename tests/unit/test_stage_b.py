@@ -149,9 +149,8 @@ def test_crowded_fund_ranks_below_an_otherwise_equal_uncrowded_fund() -> None:
     crowded = score_fund(_candidate("C", crowding=0.90), graph, AS_OF, book)
     assert crowded.subscores["crowding"] < uncrowded.subscores["crowding"]
     assert crowded.total < uncrowded.total
-    ranked = screen_funds(
-        [_candidate("C", crowding=0.90), _candidate("A", crowding=0.10)], graph, AS_OF, book
-    )
+    pair = [_candidate("C", crowding=0.90), _candidate("A", crowding=0.10)]
+    ranked = screen_funds(pair, graph, AS_OF, book, top_n=3)
     assert [s.candidate.code for s in ranked] == ["A", "C"]
 
 

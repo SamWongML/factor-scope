@@ -158,7 +158,7 @@ def screen_funds(
     graph: GraphStore,
     as_of: str,
     book: list[Holding],
-    top_n: int = FINALISTS,
+    top_n: int,
 ) -> list[FundScore]:
     """Score every candidate and return the top ``n`` — by total desc, then code (deterministic)."""
 

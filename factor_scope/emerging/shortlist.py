@@ -46,7 +46,7 @@ __all__ = [
 # Economic-meaning constants (never tuned to P&L):
 FRESHNESS_WINDOW_DAYS = 120  # a finalist read older than this vs the run date is stale → dropped
 TIE_BAND = 0.02  # Stage-B totals within this are a near-tie the cheap-LLM read decides
-TOP_N = 3  # only three finalists reach the U12 seats
+TOP_N = 3  # only three finalists reach the bull/bear seats
 
 # The default cheap re-rank tier — DeepSeek V4 Flash, an explicit V4 id (never the deprecating
 # ``deepseek-chat`` / ``deepseek-reasoner`` aliases). Swap to ``-pro`` by editing this one line.
@@ -55,10 +55,9 @@ RERANK_MODEL = ModelSpec("deepseek:deepseek-v4-flash")
 
 @dataclass(frozen=True)
 class RankedFund:
-    """A finalist's Stage-B score, the cheap-LLM preference that re-ranked it, and its rank."""
+    """A finalist's Stage-B score and its final rank after the re-rank narrows to the top 3."""
 
     score: FundScore
-    preference: float  # the cheap-LLM read ∈ [0,1] (tie-break only; the Stage-B total is the spine)
     rank: int
 
 
@@ -163,11 +162,11 @@ def rerank(
 ) -> list[RankedFund]:
     """Re-rank Stage-B finalists to the top ``n`` with the cheap-LLM read + business rules.
 
-    The Stage-B total is the spine: finalists are bucketed by total (within :data:`TIE_BAND`) and
-    only a near-tie is reordered by the cheap-LLM ``preference``. Stale reads are dropped
-    (freshness) and leveraged repeats of an already-kept fund are dropped (de-dup), then the
-    survivors are ranked ``1..n``. Deterministic given a snapshot — the offline read needs no
-    network.
+    The Stage-B total is the spine: finalists are bucketed onto a :data:`TIE_BAND`-wide grid by
+    total, so funds that separate on the disciplined score keep their order and only same-bucket
+    near-ties are reordered by the cheap-LLM ``preference``. Stale reads are dropped (freshness) and
+    leveraged repeats of an already-kept fund are dropped (de-dup), then the survivors are ranked
+    ``1..n``. Deterministic given a snapshot — the offline read needs no network.
     """
 
     preference = {s.candidate.code: reranker.read(theme, s) for s in finalists}
@@ -189,6 +188,6 @@ def rerank(
         if len(kept) == top_n:
             break
     return [
-        RankedFund(score=s, preference=preference[s.candidate.code], rank=rank)
+        RankedFund(score=s, rank=rank)
         for rank, s in enumerate(kept, start=1)
     ]
