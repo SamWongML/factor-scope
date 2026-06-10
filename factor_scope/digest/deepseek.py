@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_MODEL = "deepseek-chat"  # Flash-tier bulk model for reformat/summarise chores
+# The chore client's default is the cheap Flash tier. An explicit V4 id, never the ``deepseek-chat``
+# / ``deepseek-reasoner`` aliases (they map to V4-Flash modes and deprecate 2026-07-24). The full
+# tier→id registry (Flash + Pro) lives in ``config.reasoning_tiers``.
+DEFAULT_MODEL = "deepseek-v4-flash"  # bulk extraction / summarization / coarse scoring
 _ENDPOINT = "https://api.deepseek.com/chat/completions"
 
 

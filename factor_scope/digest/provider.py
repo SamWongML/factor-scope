@@ -93,11 +93,12 @@ class LLMProvider(Protocol):
     def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal: ...
 
 
-def get_provider(name: str) -> LLMProvider:
+def get_provider(name: str, *, deep_think_model: str | None = None) -> LLMProvider:
     """Select a judgment provider by name. ``fake`` (default) is the only one CI ever calls.
 
-    DeepSeek is a *chore* model (reformat/summarise, off the judgment path), so it is not
-    a judgment provider — selecting it is an error pointing the user at the real options.
+    ``deep_think_model`` is the reserved deep-think tier the ``claude_code`` seats run on (the fake
+    ignores it). DeepSeek is a *chore* model (reformat/summarise, off the judgment path), so it is
+    not a judgment provider — selecting it is an error pointing the user at the real options.
     """
 
     if name == "fake":
@@ -107,7 +108,7 @@ def get_provider(name: str) -> LLMProvider:
     if name == "claude_code":
         from factor_scope.digest.claude_code import ClaudeCodeProvider
 
-        return ClaudeCodeProvider()
+        return ClaudeCodeProvider(model=deep_think_model)
     if name == "deepseek":
         raise ValueError(
             "deepseek is a chore model (off the judgment path); judgment stays on a real "
