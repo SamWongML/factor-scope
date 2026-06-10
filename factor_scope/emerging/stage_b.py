@@ -1,8 +1,11 @@
-"""Emerging funnel — Stage B: screen a cleared theme's funds to a top 3.
+"""Emerging funnel — Stage B: screen a cleared theme's funds to a finalist pool.
 
-Only for a theme that cleared Stage A. Each candidate CN fund/ETF is scored on the **same fixed
-scorecard every time** — the discipline that separates selection from guessing — and ranked to a
-defensible top 3 with the numbers behind it (the one-page comparison the digest can defend).
+Only for a theme that cleared Stage A. Stage B is the funnel's **ranking** stage: a coarse
+liquidity filter first drops funds too thin to be investable (candidate generation), then each
+surviving CN fund/ETF is scored on the **same fixed scorecard every time** — the discipline that
+separates selection from guessing — and ranked to a defensible finalist pool with the numbers
+behind it (the one-page comparison). Only the finalists earn the Stage-3 cheap-LLM re-rank to the
+top 3 (see :mod:`~factor_scope.emerging.shortlist`).
 
 The criteria:
 
@@ -30,13 +33,16 @@ from factor_scope.graph.lookthrough import Holding, look_through, overlap_with
 from factor_scope.graph.store import GraphStore
 
 __all__ = [
+    "AUM_FLOOR",
     "AUM_REF",
     "FEE_CAP",
+    "FINALISTS",
     "OVERLAP_CAP",
     "TE_CAP",
     "WEIGHTS",
     "Candidate",
     "FundScore",
+    "coarse_filter",
     "overlap_with_core",
     "score_fund",
     "screen_funds",
@@ -47,6 +53,8 @@ FEE_CAP = 0.015  # a fee at/above this scores 0 on cost (1.5% total)
 AUM_REF = 60.0  # AUM (in 亿元) that earns a full liquidity score
 TE_CAP = 0.03  # tracking error at/above this scores 0 on tracking quality
 OVERLAP_CAP = 0.20  # look-through overlap at/above this scores 0 (a full leveraged repeat)
+AUM_FLOOR = 5.0  # 亿元: a fund thinner than this carries closure/illiquidity risk → not investable
+FINALISTS = 10  # the ranking stage's pool size; Stage 3 re-ranks these few to the top 3
 
 # Fixed economic-priority weights (sum to 1.0). Methodology + overlap are the decisive pair: a
 # genuine, non-redundant exposure is the whole point of a satellite. NOT tuned to returns.
@@ -134,12 +142,23 @@ def score_fund(
     )
 
 
+def coarse_filter(candidates: list[Candidate], *, aum_floor: float = AUM_FLOOR) -> list[Candidate]:
+    """Drop funds too thin to be investable before the scorecard runs (candidate generation).
+
+    A hard liquidity/tradability gate — a fund below :data:`AUM_FLOOR` carries closure and
+    illiquidity risk, so it never reaches the graded scorecard. This is the funnel's cheap first
+    prune (order preserved), distinct from the soft ``liquidity`` sub-score that grades survivors.
+    """
+
+    return [c for c in candidates if c.aum >= aum_floor]
+
+
 def screen_funds(
     candidates: list[Candidate],
     graph: GraphStore,
     as_of: str,
     book: list[Holding],
-    top_n: int = 3,
+    top_n: int = FINALISTS,
 ) -> list[FundScore]:
     """Score every candidate and return the top ``n`` — by total desc, then code (deterministic)."""
 

@@ -88,8 +88,8 @@ both ends; the engine never trades.
 - `factor_scope/digest/` — bull/bear debate → calibrated lean (`provider.py`, `fake.py`,
   `claude_code.py`, `deepseek.py`, `orchestrator.py`).
 - `factor_scope/scoring/` — rolling Brier scorecard (the self-scoring mirror).
-- `factor_scope/emerging/` — Stage-A screen → Stage-B top-3 funnel (`stage_a.py`, `stage_b.py`,
-  `funnel.py`).
+- `factor_scope/emerging/` — Stage-A screen → Stage-B ranking → cheap-LLM re-rank to top 3
+  (`stage_a.py`, `stage_b.py`, `shortlist.py`, `funnel.py`).
 - `factor_scope/schedule/` — launchd plist + cron line + run log.
 - `factor_scope/cli.py` typer app · `factor_scope/render.py` terminal view · `factor_scope/config.py`.
 - `data/fixtures/` committed sample data · `tests/{unit,integration,system}` (markers in
