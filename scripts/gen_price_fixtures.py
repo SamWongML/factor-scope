@@ -93,8 +93,9 @@ def gen_prices() -> str:
         for d, v in zip(days, vals, strict=True):
             lines.append(f"{code},{d.isoformat()},{round(v, 3)}")
     young_code, young_end, young_n = _YOUNG_SPEC
-    for i, d in enumerate(_weekdays_ending(young_end, young_n)):
-        lines.append(f"{young_code},{d.isoformat()},{1.0 + 0.6 * i / (young_n - 1):.3f}")
+    vals = _ramp(start=1.0, end=1.6, n=young_n, amp=0.0)
+    for d, v in zip(_weekdays_ending(young_end, young_n), vals, strict=True):
+        lines.append(f"{young_code},{d.isoformat()},{v:.3f}")
     return "\n".join(lines) + "\n"
 
 

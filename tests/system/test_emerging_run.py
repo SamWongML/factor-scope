@@ -146,6 +146,36 @@ def test_delisted_fund_never_becomes_a_candidate(tmp_path) -> None:
     assert any(key.endswith(":562990") for key in keys)
 
 
+def test_a_later_delisting_disclosure_removes_a_mapped_fund(tmp_path) -> None:
+    # The mapping is append-only: the 储能:561160 row was frozen while the fund was listed and is
+    # never rewritten, so when a later universe disclosure marks 561160 delisted the funnel must
+    # re-check membership at the run's as_of — a stale mapping row must not resurrect a dead fund.
+    from factor_scope.pipeline import ingest
+    from factor_scope.store import DuckDBStore, Reading
+
+    cfg = Config(store_path=tmp_path / "store.duckdb", graph_path=tmp_path / "graph.duckdb")
+    ingest(cfg)
+    store = DuckDBStore(tmp_path / "store.duckdb")
+    try:
+        row = next(r for r in store.read_as_of("fund_universe", "2026-06-05") if r.key == "561160")
+        store.append(
+            [
+                Reading(
+                    series="fund_universe",
+                    key="561160",
+                    as_of="2026-06-05",
+                    fetched_at="2026-06-05T23:00:00Z",
+                    payload={**row.payload, "delisting": "2026-06-05"},
+                )
+            ]
+        )
+    finally:
+        store.close()
+    emerging = build_dashboard(cfg).by_list(ListName.EMERGING)
+    assert emerging  # the theme still shortlists its surviving funds
+    assert "储能ETF" not in {it.item for it in emerging}
+
+
 def test_emerging_run_is_deterministic() -> None:
     cfg = Config()
     first = build_dashboard(cfg).model_dump_json(indent=2)

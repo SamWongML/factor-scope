@@ -12,6 +12,7 @@ from datetime import date
 
 import pytest
 
+from factor_scope.emerging.stage_a import CROWD_VETO
 from factor_scope.emerging.stage_b import (
     AUM_FLOOR,
     LAUNCH_SEASONING_DAYS,
@@ -21,7 +22,6 @@ from factor_scope.emerging.stage_b import (
     Candidate,
     coarse_filter,
     overlap_with_core,
-    pe_percentile,
     run_up,
     score_fund,
     screen_funds,
@@ -167,6 +167,16 @@ def test_run_up_needs_a_quarter_of_history() -> None:
     assert run_up([1.0 + 0.01 * i for i in range(59)]) is None
 
 
+def test_run_up_reads_at_exactly_the_session_floor() -> None:
+    # Exactly the floor (60 NAVs) is enough for a read — the gate is `<`, not `<=`.
+    assert run_up([1.0] * 59 + [1.5]) == pytest.approx(0.5)
+
+
+def test_run_up_degrades_on_a_non_positive_base_nav() -> None:
+    # A zero NAV print is bad data, not a return — degrade to no read, never raise.
+    assert run_up([0.0] * 61 + [1.0]) is None
+
+
 def test_run_up_reads_the_available_window_when_history_is_short() -> None:
     # 80 NAVs → the read spans all 79 sessions available (down to the floor, up to the window).
     navs = [1.0] * 79 + [1.5]
@@ -177,17 +187,6 @@ def test_run_up_reads_exactly_the_run_up_window_when_history_is_long() -> None:
     # 200 NAVs → exactly the trailing 120-session return; the older 79 sessions are ignored.
     navs = [9.9] * 79 + [1.0] + [1.0] * 119 + [1.6]
     assert run_up(navs) == pytest.approx(0.6)
-
-
-def test_pe_percentile_needs_enough_prints() -> None:
-    assert pe_percentile([float(i) for i in range(11)]) is None
-
-
-def test_pe_percentile_ranks_the_latest_print_against_its_own_history() -> None:
-    # 12 ascending PEs ending at the maximum → mid-rank (11 + 0.5) / 12 ≈ 0.958, an extreme read.
-    pctile = pe_percentile([float(i) for i in range(12)])
-    assert pctile == pytest.approx(11.5 / 12)
-    assert pctile is not None and pctile >= PE_VETO_PCTILE
 
 
 def test_overheated_fund_is_vetoed_with_an_auditable_reason() -> None:
@@ -235,6 +234,15 @@ def test_a_young_fund_on_a_quiet_theme_is_kept() -> None:
     assert vetoed == []
 
 
+def test_a_future_dated_inception_never_vetoes() -> None:
+    # A launch date after the run date is a point-in-time-impossible disclosure — bad data, not
+    # positive evidence — so it degrades to no age read, exactly like an unparseable one.
+    ghost = _candidate("G", inception="2026-12-01", crowding=0.90)
+    kept, vetoed = veto_funds([ghost], AS_OF)
+    assert [c.code for c in kept] == ["G"]
+    assert vetoed == []
+
+
 def test_missing_guardrail_data_never_vetoes() -> None:
     # Degrade, never raise: with no inception, run-up, or PE read there is no positive evidence.
     bare = _candidate("BARE", crowding=0.90)
@@ -260,6 +268,17 @@ def test_veto_thresholds_are_exact() -> None:
     at_crowd = _candidate("CR", inception="2026-03-07", crowding=0.70)
     kept, vetoed = veto_funds([at_crowd], AS_OF)
     assert kept == [] and vetoed[0].guardrail == "launch_at_peak"
+
+
+def test_just_below_every_veto_line_is_kept() -> None:
+    # The kept side of each threshold, one notch under the line — a silently loosened constant
+    # (the at-the-line tests only catch a *tightened* one) fails here.
+    near_run_up = _candidate("NR", run_up=RUN_UP_VETO - 0.01, pe_pctile=PE_VETO_PCTILE)
+    near_pe = _candidate("NP", run_up=RUN_UP_VETO, pe_pctile=PE_VETO_PCTILE - 0.01)
+    near_crowd = _candidate("NC", inception="2026-03-07", crowding=CROWD_VETO - 0.01)
+    kept, vetoed = veto_funds([near_run_up, near_pe, near_crowd], AS_OF)
+    assert [c.code for c in kept] == ["NR", "NP", "NC"]
+    assert vetoed == []
 
 
 def test_screen_orders_by_total_then_code() -> None:

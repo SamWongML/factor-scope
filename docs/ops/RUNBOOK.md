@@ -78,6 +78,16 @@ The scheduled job is **live** (online by default), so supply the source API keys
 `FRED_API_KEY`) via the launchd plist's `EnvironmentVariables` or the cron shell env. For a
 fixtures-only dry run, add `--offline` to the generated command.
 
+### Live-feed gaps
+
+AkShare's fund-universe feed does not yet disclose **inception** or **delisting** dates — live rows
+ingest both empty. The guardrails degrade safely (no positive evidence → no veto), but two reads
+are inert on live data until the feed is enriched (the U06 data-engineering item, `docs/ROADMAP.md`
+§3): the **launch-at-peak** veto never fires, and every fund reads as still listed, so the
+survivorship-aware membership test only bites on a feed that carries delisting dates. The
+**overheated** veto is unaffected — its run-up and PE-percentile inputs come from the live price
+and fundamentals feeds.
+
 ## Provider & budget
 
 - **`fake`** (the offline mode): deterministic, free. CI and demos (`--offline`) use only this.

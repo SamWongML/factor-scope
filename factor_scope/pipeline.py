@@ -58,9 +58,9 @@ from factor_scope.emerging import (
     infer_links,
     run_funnel,
 )
-from factor_scope.emerging.stage_b import pe_percentile, run_up
+from factor_scope.emerging.stage_b import run_up
 from factor_scope.factors import FactorContext, compute_gate, compute_states
-from factor_scope.factors.window import price_navs, valuation_pes
+from factor_scope.factors.window import latest_pe_percentile, price_navs, valuation_pes
 from factor_scope.graph import (
     GraphStore,
     Holding,
@@ -520,7 +520,7 @@ def _materialise_mapping(store: PointInTimeStore, graph: GraphStore, as_of: str)
     crowding = {r.key: float(r.payload["crowding"]) for r in themes}
     codes = sorted(universe.keys() & aum.keys())  # funds with both a full scorecard and a size read
     run_ups = {code: run_up(price_navs(store, code, as_of)) for code in codes}
-    pe_pctiles = {code: pe_percentile(valuation_pes(store, code, as_of)) for code in codes}
+    pe_pctiles = {code: latest_pe_percentile(valuation_pes(store, code, as_of)) for code in codes}
     fetched_at = fetched_at_for(as_of)
     rows = [
         Reading(
@@ -634,7 +634,19 @@ def _build_emerging(
     if store.count("themes") == 0:
         return [], {}
     themes = [_theme_from_reading(r) for r in store.read_as_of("themes", as_of)]
-    candidates = [_candidate_from_reading(r) for r in store.read_as_of("theme_map", as_of)]
+    # The mapping is append-only: a row frozen while its fund was listed is never rewritten, so
+    # membership is re-checked against the universe at *this* run's as_of — a stale mapping row
+    # must not resurrect a since-delisted fund.
+    listed = {
+        r.key
+        for r in store.read_as_of("fund_universe", as_of)
+        if still_listed(str(r.payload.get("delisting") or ""), as_of)
+    }
+    candidates = [
+        c
+        for c in (_candidate_from_reading(r) for r in store.read_as_of("theme_map", as_of))
+        if c.code in listed
+    ]
     pairs: list[tuple[str, DashboardItem]] = []
     near_misses: dict[str, tuple[str, ...]] = {}
     for shortlist in run_funnel(themes, candidates, graph, as_of, book, reranker):

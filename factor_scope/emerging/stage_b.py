@@ -40,7 +40,6 @@ from dataclasses import dataclass
 from datetime import date
 
 from factor_scope.emerging.stage_a import CROWD_VETO
-from factor_scope.factors.bands import percentile_rank
 from factor_scope.graph.lookthrough import Holding, look_through, overlap_with
 from factor_scope.graph.store import GraphStore
 
@@ -51,7 +50,6 @@ __all__ = [
     "FINALISTS",
     "LAUNCH_SEASONING_DAYS",
     "OVERLAP_CAP",
-    "PE_HISTORY_MIN",
     "PE_VETO_PCTILE",
     "RUN_UP_MIN_SESSIONS",
     "RUN_UP_VETO",
@@ -63,7 +61,6 @@ __all__ = [
     "FundVeto",
     "coarse_filter",
     "overlap_with_core",
-    "pe_percentile",
     "run_up",
     "score_fund",
     "screen_funds",
@@ -83,7 +80,6 @@ RUN_UP_WINDOW = 120  # sessions (~6 months) the run-up reads — long-horizon, n
 RUN_UP_MIN_SESSIONS = 60  # under a quarter of NAVs there is no run-up read at all
 RUN_UP_VETO = 0.50  # ≥50% in ~6 months is the run-up that precedes thematic underperformance
 PE_VETO_PCTILE = 0.95  # the EXTREME_HIGH band cut: the basket's own top-5% valuation
-PE_HISTORY_MIN = 12  # the valuation factor's floor — fewer PE prints → no read
 LAUNCH_SEASONING_DAYS = 180  # two disclosure quarters; younger + a crowded theme = launch-at-peak
 
 # Fixed economic-priority weights (sum to 1.0). Methodology + overlap are the decisive pair: a
@@ -197,24 +193,20 @@ def run_up(navs: list[float]) -> float | None:
     if len(navs) < RUN_UP_MIN_SESSIONS:
         return None
     window = min(len(navs) - 1, RUN_UP_WINDOW)
-    return navs[-1] / navs[-1 - window] - 1.0
-
-
-def pe_percentile(pes: list[float]) -> float | None:
-    """The latest PE print ranked against the basket's own history, or ``None`` when too few."""
-
-    if len(pes) < PE_HISTORY_MIN:
-        return None
-    return percentile_rank(pes[-1], pes)
+    base = navs[-1 - window]
+    if base <= 0:
+        return None  # a non-positive NAV print is bad data, not a return — degrade, never raise
+    return navs[-1] / base - 1.0
 
 
 def _fund_age_days(inception: str | None, as_of: str) -> int | None:
     if not inception:
         return None
     try:
-        return (date.fromisoformat(as_of) - date.fromisoformat(inception)).days
+        age = (date.fromisoformat(as_of) - date.fromisoformat(inception)).days
     except ValueError:
         return None  # an unparseable disclosure is no evidence — degrade, never raise
+    return age if age >= 0 else None  # a launch date after the run date is equally no evidence
 
 
 @dataclass(frozen=True)
@@ -236,20 +228,24 @@ def veto_funds(candidates: list[Candidate], as_of: str) -> tuple[list[Candidate]
     kept: list[Candidate] = []
     vetoed: list[FundVeto] = []
     for c in candidates:
-        if c.run_up is not None and c.pe_pctile is not None:
-            if c.run_up >= RUN_UP_VETO and c.pe_pctile >= PE_VETO_PCTILE:
-                vetoed.append(
-                    FundVeto(
-                        candidate=c,
-                        guardrail="overheated",
-                        reason=(
-                            f"overheated as of {as_of}: run-up {c.run_up:.2f} at/above "
-                            f"{RUN_UP_VETO:.2f} and PE percentile {c.pe_pctile:.2f} at/above "
-                            f"{PE_VETO_PCTILE:.2f} — the launch-at-peak basket"
-                        ),
-                    )
+        if (
+            c.run_up is not None
+            and c.pe_pctile is not None
+            and c.run_up >= RUN_UP_VETO
+            and c.pe_pctile >= PE_VETO_PCTILE
+        ):
+            vetoed.append(
+                FundVeto(
+                    candidate=c,
+                    guardrail="overheated",
+                    reason=(
+                        f"overheated as of {as_of}: run-up {c.run_up:.2f} at/above "
+                        f"{RUN_UP_VETO:.2f} and PE percentile {c.pe_pctile:.2f} at/above "
+                        f"{PE_VETO_PCTILE:.2f} — the launch-at-peak basket"
+                    ),
                 )
-                continue
+            )
+            continue
         age = _fund_age_days(c.inception, as_of)
         if age is not None and age < LAUNCH_SEASONING_DAYS and c.crowding >= CROWD_VETO:
             vetoed.append(
