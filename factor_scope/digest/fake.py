@@ -96,8 +96,19 @@ class FakeProvider:
             points=tuple(label for _, label in supporting),
         )
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
-        """Net the two cases into a lean + a base-rate-anchored confidence (no guardrails here)."""
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        """Both seats from one brief — pure, so a plain sequential pair (no threads offline)."""
+
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
+        """Net the two cases into a lean + a base-rate-anchored confidence (no guardrails here).
+
+        ``net = bull − bear`` is order-invariant, so the presentation order is ignored — this is
+        what keeps the swap-and-average de-bias a no-op offline (residual 0, byte-for-byte stable).
+        """
 
         net = bull.strength - bear.strength
         owned = brief.list_name is ListName.HOLDINGS

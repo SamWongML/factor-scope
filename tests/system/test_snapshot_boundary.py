@@ -41,8 +41,9 @@ def test_a_fixed_snapshot_reproduces_and_carries_its_snapshot_id(tmp_path) -> No
     assert first.model_dump_json(indent=2) == second.model_dump_json(indent=2)
 
     with DuckDBStore(cfg.store_path) as store:
-        # the run's own logged calls are excluded — they are derived output, not the read snapshot
-        expected = store.snapshot_id(first.as_of, exclude=("calls",))
+        # derived output is excluded — the run's own logged calls and any cached debates, not the
+        # read snapshot — exactly as the production fingerprint does, so neither can perturb the id
+        expected = store.snapshot_id(first.as_of, exclude=("calls", "debate_cache"))
     assert first.snapshot_id == expected
     assert first.snapshot_id  # non-empty: the artifact names the frozen snapshot it read
 

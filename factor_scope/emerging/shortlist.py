@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "FRESHNESS_WINDOW_DAYS",
+    "NEAR_MISS_N",
     "TIE_BAND",
     "TOP_N",
     "FakeReranker",
@@ -47,6 +48,7 @@ __all__ = [
 FRESHNESS_WINDOW_DAYS = 120  # a finalist read older than this vs the run date is stale → dropped
 TIE_BAND = 0.02  # Stage-B totals within this are a near-tie the cheap-LLM read decides
 TOP_N = 3  # only three finalists reach the bull/bear seats
+NEAR_MISS_N = 2  # finalists just below the cut, surfaced to the seats as veto-only context
 
 # The default cheap re-rank tier — DeepSeek V4 Flash, an explicit V4 id (never the deprecating
 # ``deepseek-chat`` / ``deepseek-reasoner`` aliases). Swap to ``-pro`` by editing this one line.
@@ -159,6 +161,7 @@ def rerank(
     run_as_of: str,
     *,
     top_n: int = TOP_N,
+    near_n: int = 0,
 ) -> list[RankedFund]:
     """Re-rank Stage-B finalists to the top ``n`` with the cheap-LLM read + business rules.
 
@@ -166,7 +169,8 @@ def rerank(
     total, so funds that separate on the disciplined score keep their order and only same-bucket
     near-ties are reordered by the cheap-LLM ``preference``. Stale reads are dropped (freshness) and
     leveraged repeats of an already-kept fund are dropped (de-dup), then the survivors are ranked
-    ``1..n``. Deterministic given a snapshot — the offline read needs no network.
+    ``1..n``. ``near_n`` keeps that many extra survivors below the cut (ranked on, ``n+1…``) as
+    veto-only near-misses for the seats. Deterministic given a snapshot — the read needs no network.
     """
 
     preference = {s.candidate.code: reranker.read(theme, s) for s in finalists}
@@ -185,7 +189,7 @@ def rerank(
         if _redundant(score, kept):
             continue
         kept.append(score)
-        if len(kept) == top_n:
+        if len(kept) == top_n + near_n:
             break
     return [
         RankedFund(score=s, rank=rank)

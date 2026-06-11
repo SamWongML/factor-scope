@@ -36,7 +36,12 @@ class _BullishStub:
         strength = 3.0 if side is Side.BULL else 0.0
         return Case(side=side, strength=strength, confidence=0.95, points=("everything is great",))
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
         return Proposal(action=LeanAction.BUY_EARLY, confidence=0.95, rationale=("buy!",))
 
 

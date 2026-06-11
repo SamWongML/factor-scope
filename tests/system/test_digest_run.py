@@ -39,6 +39,23 @@ def test_run_attaches_a_lean_to_every_item(tmp_path) -> None:
             assert item.invalidation
 
 
+def test_run_attaches_a_bull_bear_index_to_every_item() -> None:
+    # Every item carries the debate decomposition behind its lean: the two case strengths and
+    # their net tilt. Offline the fake provider is order-invariant and scores no rubric, so the
+    # residual is zero and the rubric empty — the decomposition's extra colour ships with the real
+    # provider, while the structure is present on every item regardless.
+    dash = build_dashboard(Config())
+    assert dash.items
+    for item in dash.items:
+        assert item.index is not None, f"{item.item} has no index"
+        idx = item.index
+        assert idx.bull >= 0.0
+        assert idx.bear >= 0.0
+        assert idx.net == idx.bull - idx.bear
+        assert idx.order_residual == 0.0  # the fake is order-invariant offline
+        assert idx.rubric == []  # the fake scores no rubric offline
+
+
 def test_capped_item_is_never_leaned_bullish() -> None:
     dash = build_dashboard(Config())
     capped = [it for it in dash.items if it.gate is GateState.CAPPED]

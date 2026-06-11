@@ -11,9 +11,9 @@ processed in name order and the offline re-rank read needs no network.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from factor_scope.emerging.shortlist import TOP_N, RankedFund, Reranker, rerank
+from factor_scope.emerging.shortlist import NEAR_MISS_N, TOP_N, RankedFund, Reranker, rerank
 from factor_scope.emerging.stage_a import StageAResult, Theme, qualify_theme
 from factor_scope.emerging.stage_b import FINALISTS, Candidate, coarse_filter, screen_funds
 from factor_scope.graph.lookthrough import Holding
@@ -24,13 +24,18 @@ __all__ = ["Shortlist", "group_by_theme", "run_funnel"]
 
 @dataclass(frozen=True)
 class Shortlist:
-    """A cleared theme and its re-ranked top-3 funds (the funnel's per-theme output)."""
+    """A cleared theme and its re-ranked top-3 funds (the funnel's per-theme output).
+
+    ``near_misses`` are the finalists just below the cut (ranks ``n+1…``) — veto-only context for
+    the seats, never promotable; the funnel and gate stay deterministic, so they can never surface.
+    """
 
     theme: str
     as_of: str  # the theme's research date (point-in-time)
     stage_a: StageAResult
     n_candidates: int  # how many candidate funds were screened (for "rank #k of n")
     funds: list[RankedFund]
+    near_misses: list[RankedFund] = field(default_factory=list)
 
 
 def group_by_theme(candidates: list[Candidate]) -> dict[str, list[Candidate]]:
@@ -71,8 +76,9 @@ def run_funnel(
         if not generated:
             continue  # cleared but no investable wrapper survives the coarse filter
 
-        ranked = screen_funds(generated, graph, as_of, book, top_n=finalists)
-        funds = rerank(reranker, theme.name, ranked, as_of, top_n=top_n)
+        screened = screen_funds(generated, graph, as_of, book, top_n=finalists)
+        promoted = rerank(reranker, theme.name, screened, as_of, top_n=top_n, near_n=NEAR_MISS_N)
+        funds = [r for r in promoted if r.rank <= top_n]
         if not funds:
             continue
         shortlists.append(
@@ -82,6 +88,7 @@ def run_funnel(
                 stage_a=result,
                 n_candidates=len(generated),
                 funds=funds,
+                near_misses=[r for r in promoted if r.rank > top_n],
             )
         )
     return shortlists
