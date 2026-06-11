@@ -9,8 +9,9 @@ stays byte-for-byte reproducible. Run from the repo root:
 
 It rewrites ``data/fixtures/prices.csv`` and ``data/fixtures/fred.csv``. The shapes are chosen so
 the artifact tells a clear story: three holdings/watchlist codes ride above their 200-day MA
-(gate ``open``), while the emerging energy-storage ETF sits in a drawdown below it (gate ``capped``),
-and the macro dial reads "tight" (a high real-yield percentile vs its own two-year history).
+(gate ``open``), the emerging energy-storage ETF sits in a drawdown below it (gate ``capped``),
+the young energy-storage ETF rides a 60% run-up into the overheated guardrail veto, and the macro
+dial reads "tight" (a high real-yield percentile vs its own two-year history).
 """
 
 from __future__ import annotations
@@ -77,6 +78,10 @@ _PRICE_SPECS = [
     ("561160", date(2026, 6, 4), 0.982, 1.46, 0.011, 0.0),
 ]
 
+# Young energy-storage ETF: only ~a quarter of sessions, NAV up 60% — with its basket at its own
+# top-of-history PE this is the launch-at-peak product the overheated guardrail vetoes.
+_YOUNG_SPEC = ("562990", date(2026, 6, 4), 61)
+
 
 def gen_prices() -> str:
     lines = ["code,as_of,nav"]
@@ -87,6 +92,9 @@ def gen_prices() -> str:
         )
         for d, v in zip(days, vals, strict=True):
             lines.append(f"{code},{d.isoformat()},{round(v, 3)}")
+    young_code, young_end, young_n = _YOUNG_SPEC
+    for i, d in enumerate(_weekdays_ending(young_end, young_n)):
+        lines.append(f"{young_code},{d.isoformat()},{1.0 + 0.6 * i / (young_n - 1):.3f}")
     return "\n".join(lines) + "\n"
 
 

@@ -104,6 +104,48 @@ def test_emerging_briefs_carry_funnel_near_misses(monkeypatch) -> None:
     assert all(line.startswith("#") for b in with_near for line in b.near_misses)
 
 
+def test_overheated_fund_is_vetoed_with_an_auditable_reason() -> None:
+    # 新储能ETF (562990) maps to 储能 but ran up ~60% in its first months on a basket at its own
+    # top-of-history PE — the Ben-David launch-at-peak product. The guardrail vetoes it before the
+    # scorecard, and every surviving emerging item carries the dated reason for the morning review.
+    dash = build_dashboard(Config())
+    emerging = dash.by_list(ListName.EMERGING)
+    assert "新储能ETF" not in {it.item for it in emerging}
+    for item in emerging:
+        veto = next(e for e in item.evidence if e.src == "emerging:veto")
+        assert "新储能ETF" in veto.one_line and "562990" in veto.one_line
+        assert "overheated" in veto.one_line
+
+
+def test_hype_theme_is_stopped_late_stage_before_any_fund() -> None:
+    # 固态电池 clears the raw signal gate but is crowded (0.80) with acceleration that only just
+    # cleared its floor (0.45) — a cresting wave. The late-stage veto stops the theme in Stage A,
+    # so no second shortlist appears and nothing in the artifact argues over it.
+    dash = build_dashboard(Config())
+    emerging = dash.by_list(ListName.EMERGING)
+    assert len(emerging) == 3  # still only the 储能 top-3
+    for item in emerging:
+        assert all("固态电池" not in e.one_line for e in item.evidence)
+
+
+def test_delisted_fund_never_becomes_a_candidate(tmp_path) -> None:
+    # 退市光伏ETF (159999) holds 宁德时代 and would overlap the 储能 constituents, but it delisted
+    # on 2025-12-31 — before the run date — so the survivorship-aware universe excludes it from the
+    # mapping, while the young-but-listed 562990 *is* mapped (and vetoed downstream, not here).
+    from factor_scope.pipeline import ingest
+    from factor_scope.store import DuckDBStore
+
+    cfg = Config(store_path=tmp_path / "store.duckdb", graph_path=tmp_path / "graph.duckdb")
+    ingest(cfg)
+    store = DuckDBStore(tmp_path / "store.duckdb")
+    try:
+        keys = {r.key for r in store.read_as_of("theme_map", "2026-06-05")}
+    finally:
+        store.close()
+    assert not any(key.endswith(":159999") for key in keys)
+    assert any(key.endswith(":562990") for key in keys)
+
+
 def test_emerging_run_is_deterministic() -> None:
     cfg = Config()
     first = build_dashboard(cfg).model_dump_json(indent=2)

@@ -12,6 +12,7 @@ import pytest
 
 from factor_scope.ingest import etf_scale, fund_universe
 from factor_scope.ingest.base import IngestError
+from factor_scope.ingest.fund_universe import still_listed
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +60,23 @@ def test_fund_universe_keeps_a_fund_with_missing_scorecard_inputs_but_flags_it()
 def test_fund_universe_captures_the_delisting_date_for_survivorship() -> None:
     by_code = {r.key: r for r in fund_universe.parse(_UNIVERSE, as_of=AS_OF, fetched_at=FETCHED_AT)}
     assert by_code["159999"].payload["delisting"] == "2025-12-31"
+
+
+def test_still_listed_excludes_a_fund_once_delisted() -> None:
+    # A fund whose delisting date has passed is gone — it cannot be mapped, screened, or bought.
+    assert still_listed("2025-12-31", "2026-06-05") is False
+    # On the delisting day itself the fund is already untradable.
+    assert still_listed("2026-06-05", "2026-06-05") is False
+
+
+def test_still_listed_keeps_a_since_delisted_fund_at_an_old_as_of() -> None:
+    # Survivorship-awareness cuts both ways: at a date *before* its delisting the fund was alive,
+    # and a point-in-time universe query must still include it.
+    assert still_listed("2025-12-31", "2025-12-01") is True
+
+
+def test_missing_delisting_means_listed() -> None:
+    assert still_listed("", "2026-06-05") is True
 
 
 def test_fund_universe_rejects_a_malformed_header() -> None:

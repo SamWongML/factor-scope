@@ -35,6 +35,17 @@ _REQUIRED = (
 _SCORECARD = ("fee", "tracking_error", "top10_weight")
 
 
+def still_listed(delisting: str, as_of: str) -> bool:
+    """Was the fund tradable at ``as_of``? (the survivorship-aware membership test)
+
+    Empty ``delisting`` means listed. A fund is excluded from its delisting day onward, but a
+    point-in-time query *before* that day keeps it — the universe at an old ``as_of`` must include
+    the funds that have since died, or every backward look inherits survivorship bias.
+    """
+
+    return not delisting or delisting > as_of
+
+
 def parse(text: str, *, as_of: str, fetched_at: str) -> list[Reading]:
     readings: list[Reading] = []
     for line_no, row in read_rows(text, _REQUIRED, SERIES):

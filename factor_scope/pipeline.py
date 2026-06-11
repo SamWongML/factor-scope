@@ -58,7 +58,9 @@ from factor_scope.emerging import (
     infer_links,
     run_funnel,
 )
+from factor_scope.emerging.stage_b import pe_percentile, run_up
 from factor_scope.factors import FactorContext, compute_gate, compute_states
+from factor_scope.factors.window import price_navs, valuation_pes
 from factor_scope.graph import (
     GraphStore,
     Holding,
@@ -69,6 +71,7 @@ from factor_scope.graph import (
 from factor_scope.graph.lookthrough import look_through
 from factor_scope.ingest import textstream
 from factor_scope.ingest.base import fetched_at_for
+from factor_scope.ingest.fund_universe import still_listed
 from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
@@ -479,6 +482,11 @@ def _candidate_from_reading(reading: Reading) -> Candidate:
         top10_weight=float(p["top10_weight"]),
         crowding=float(p["crowding"]),
         as_of=reading.as_of,
+        # Guardrail inputs are optional: a mapping frozen before they existed reads as None, and
+        # None never vetoes (a veto requires positive evidence).
+        inception=str(p["inception"]) if p.get("inception") else None,
+        run_up=float(p["run_up"]) if p.get("run_up") is not None else None,
+        pe_pctile=float(p["pe_pctile"]) if p.get("pe_pctile") is not None else None,
     )
 
 
@@ -490,7 +498,12 @@ def _materialise_mapping(store: PointInTimeStore, graph: GraphStore, as_of: str)
     universe (:func:`~factor_scope.emerging.infer_links`). For each inferred link the per-fund
     scorecard inputs are joined point-in-time from the universe feeds — name/fee/tracking/top-10
     from ``fund_universe``, AUM from ``etf_scale``, the theme's own crowding from ``themes`` — and
-    ``methodology`` is the *measured* pure-play (the mapping score). The result is frozen as
+    ``methodology`` is the *measured* pure-play (the mapping score). Only funds still listed at
+    ``as_of`` enter (survivorship-aware: a delisted fund is gone, but at an older ``as_of`` a
+    since-delisted fund is still a member). Each row also freezes the anti-hype guardrail inputs —
+    ``inception`` from the universe, the trailing run-up from the NAV history, and the PE
+    percentile vs the basket's own prints — so Stage B can veto the launch-at-peak products with a
+    dated, auditable reason. The result is frozen as
     ``theme_map`` Readings keyed by ``theme:code`` (so a fund can map to several themes) with a
     deterministic ``fetched_at``, so a later disclosure never rewrites a past mapping. Returns the
     number of rows appended.
@@ -498,12 +511,16 @@ def _materialise_mapping(store: PointInTimeStore, graph: GraphStore, as_of: str)
 
     themes = store.read_as_of("themes", as_of)
     universe = {
-        r.key: r for r in store.read_as_of("fund_universe", as_of) if r.payload.get("valid")
+        r.key: r
+        for r in store.read_as_of("fund_universe", as_of)
+        if r.payload.get("valid") and still_listed(str(r.payload.get("delisting") or ""), as_of)
     }
     aum = {r.key: float(r.payload["aum"]) for r in store.read_as_of("etf_scale", as_of)}
     constituents = {r.key: list(r.payload.get("constituents") or ()) for r in themes}
     crowding = {r.key: float(r.payload["crowding"]) for r in themes}
     codes = sorted(universe.keys() & aum.keys())  # funds with both a full scorecard and a size read
+    run_ups = {code: run_up(price_navs(store, code, as_of)) for code in codes}
+    pe_pctiles = {code: pe_percentile(valuation_pes(store, code, as_of)) for code in codes}
     fetched_at = fetched_at_for(as_of)
     rows = [
         Reading(
@@ -523,6 +540,9 @@ def _materialise_mapping(store: PointInTimeStore, graph: GraphStore, as_of: str)
                 "crowding": crowding[link.theme],
                 "overlap": link.overlap,
                 "correlation": link.correlation,
+                "inception": str(universe[link.code].payload.get("inception") or ""),
+                "run_up": run_ups[link.code],
+                "pe_pctile": pe_pctiles[link.code],
             },
         )
         for link in infer_links(constituents, codes, graph, store, as_of)
@@ -551,6 +571,19 @@ def _stage_b_evidence(score: FundScore, rank: int, n_candidates: int) -> Evidenc
             f"crowding {c.crowding:.0%} · overlap-with-core {score.overlap:.1%}"
         ),
     )
+
+
+def _veto_evidence(shortlist: Shortlist) -> list[Evidence]:
+    """One dated line per guardrail veto, so the morning review sees why a fund was excluded."""
+
+    return [
+        Evidence(
+            src="emerging:veto",
+            as_of=v.candidate.as_of,
+            one_line=f"vetoed {v.candidate.name} ({v.candidate.code}) — {v.reason}",
+        )
+        for v in sorted(shortlist.vetoed, key=lambda v: v.candidate.code)
+    ]
 
 
 def _emerging_connections(
@@ -621,6 +654,7 @@ def _build_emerging(
                 evidence=[
                     _stage_a_evidence(shortlist),
                     _stage_b_evidence(score, ranked.rank, shortlist.n_candidates),
+                    *_veto_evidence(shortlist),
                 ],
             )
             pairs.append((code, item))

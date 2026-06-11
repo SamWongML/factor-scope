@@ -1,9 +1,10 @@
 """Unit tests for the emerging funnel's Stage A — qualify the *industry*.
 
 Stage A is a sequence of hard gates over descriptive theme inputs (no fitted composite): signal
-strength (acceleration + breadth − crowding), durability (broad adoption + path to profit +
-fad-resistance), lead-chain corroboration, and an investable wrapper. A theme must clear *every*
-gate to advance to Stage B; the first failing gate is reported so the stop is auditable.
+strength (acceleration + breadth − crowding), the late-stage anti-hype veto (crowded + barely
+cleared acceleration), durability (broad adoption + path to profit + fad-resistance), lead-chain
+corroboration, and an investable wrapper. A theme must clear *every* gate to advance to Stage B;
+the first failing gate is reported so the stop is auditable.
 """
 
 from __future__ import annotations
@@ -91,6 +92,41 @@ def test_a_low_base_leaves_room_to_run_and_clears() -> None:
     result = qualify_theme(_theme(base_level=0.05))
     assert result.passed is True
     assert result.failed_test is None
+
+
+def test_a_crowded_just_cleared_acceleration_is_vetoed_late_stage() -> None:
+    # Ben-David: with the crowd already in, acceleration that only just cleared its floor means
+    # the attention wave is cresting — a late-stage read, vetoed outright (never down-weighted).
+    result = qualify_theme(_theme(acceleration=0.45, crowding=0.72))
+    assert result.passed is False
+    assert result.failed_test == "late_stage"
+    assert any("late-stage" in reason for reason in result.reasons)
+    assert any("crowding" in reason for reason in result.reasons)
+
+
+def test_a_crowded_theme_with_established_acceleration_clears() -> None:
+    # Established acceleration (well above its floor) is a building wave, not a cresting one —
+    # the crowd alone does not veto; it still pays the crowding penalty in the signal gate.
+    result = qualify_theme(_theme(acceleration=0.65, crowding=0.70))
+    assert result.passed is True
+    assert result.failed_test is None
+
+
+def test_a_just_cleared_acceleration_without_a_crowd_clears() -> None:
+    # Early and uncrowded is exactly the read the funnel wants — no veto.
+    result = qualify_theme(_theme(acceleration=0.45, crowding=0.35))
+    assert result.passed is True
+    assert result.failed_test is None
+
+
+def test_late_stage_veto_thresholds_are_exact() -> None:
+    # The veto is crowding >= CROWD_VETO AND acceleration < ACCEL_ESTABLISHED — exact boundaries.
+    vetoed = qualify_theme(_theme(acceleration=0.59, crowding=0.70))
+    assert vetoed.failed_test == "late_stage"
+    established = qualify_theme(_theme(acceleration=0.60, crowding=0.70))
+    assert established.passed is True
+    uncrowded = qualify_theme(_theme(acceleration=0.59, crowding=0.69))
+    assert uncrowded.passed is True
 
 
 def test_signal_strength_is_acceleration_plus_breadth_minus_crowding() -> None:

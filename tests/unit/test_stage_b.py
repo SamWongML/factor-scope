@@ -8,16 +8,24 @@ repeat, not diversification, so high overlap shrinks its score and can drop it o
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from factor_scope.emerging.stage_b import (
     AUM_FLOOR,
+    LAUNCH_SEASONING_DAYS,
+    PE_VETO_PCTILE,
+    RUN_UP_VETO,
     WEIGHTS,
     Candidate,
     coarse_filter,
     overlap_with_core,
+    pe_percentile,
+    run_up,
     score_fund,
     screen_funds,
+    veto_funds,
 )
 from factor_scope.graph import Edge, LadybugGraphStore
 from factor_scope.graph.lookthrough import Holding
@@ -152,6 +160,106 @@ def test_crowded_fund_ranks_below_an_otherwise_equal_uncrowded_fund() -> None:
     pair = [_candidate("C", crowding=0.90), _candidate("A", crowding=0.10)]
     ranked = screen_funds(pair, graph, AS_OF, book, top_n=3)
     assert [s.candidate.code for s in ranked] == ["A", "C"]
+
+
+def test_run_up_needs_a_quarter_of_history() -> None:
+    # Fewer NAVs than the session floor → no read at all (degrade, never a spurious veto).
+    assert run_up([1.0 + 0.01 * i for i in range(59)]) is None
+
+
+def test_run_up_reads_the_available_window_when_history_is_short() -> None:
+    # 80 NAVs → the read spans all 79 sessions available (down to the floor, up to the window).
+    navs = [1.0] * 79 + [1.5]
+    assert run_up(navs) == pytest.approx(0.5)
+
+
+def test_run_up_reads_exactly_the_run_up_window_when_history_is_long() -> None:
+    # 200 NAVs → exactly the trailing 120-session return; the older 79 sessions are ignored.
+    navs = [9.9] * 79 + [1.0] + [1.0] * 119 + [1.6]
+    assert run_up(navs) == pytest.approx(0.6)
+
+
+def test_pe_percentile_needs_enough_prints() -> None:
+    assert pe_percentile([float(i) for i in range(11)]) is None
+
+
+def test_pe_percentile_ranks_the_latest_print_against_its_own_history() -> None:
+    # 12 ascending PEs ending at the maximum → mid-rank (11 + 0.5) / 12 ≈ 0.958, an extreme read.
+    pctile = pe_percentile([float(i) for i in range(12)])
+    assert pctile == pytest.approx(11.5 / 12)
+    assert pctile is not None and pctile >= PE_VETO_PCTILE
+
+
+def test_overheated_fund_is_vetoed_with_an_auditable_reason() -> None:
+    # The Ben-David conjunction: the basket ran up AND is in its own top-5% valuation.
+    hot = _candidate("HOT", run_up=0.60, pe_pctile=0.96)
+    cool = _candidate("COOL", run_up=0.05, pe_pctile=0.50)
+    kept, vetoed = veto_funds([hot, cool], AS_OF)
+    assert [c.code for c in kept] == ["COOL"]
+    assert len(vetoed) == 1
+    assert vetoed[0].guardrail == "overheated"
+    assert vetoed[0].candidate.code == "HOT"
+    for fragment in ("0.60", "0.96", f"{RUN_UP_VETO:.2f}", f"{PE_VETO_PCTILE:.2f}", AS_OF):
+        assert fragment in vetoed[0].reason
+
+
+def test_a_run_up_alone_is_not_vetoed() -> None:
+    # A veto needs both positive signals — a run-up with no valuation read is kept.
+    kept, vetoed = veto_funds([_candidate("R", run_up=0.80, pe_pctile=None)], AS_OF)
+    assert [c.code for c in kept] == ["R"]
+    assert vetoed == []
+
+
+def test_extreme_valuation_alone_is_not_vetoed() -> None:
+    # Extreme PE with a *falling* price is not the launch-at-peak basket — extreme valuation
+    # already caps via the emerging gate; it never removes on its own.
+    kept, vetoed = veto_funds([_candidate("V", run_up=-0.20, pe_pctile=0.97)], AS_OF)
+    assert [c.code for c in kept] == ["V"]
+    assert vetoed == []
+
+
+def test_a_young_fund_on_a_crowded_theme_is_vetoed_launch_at_peak() -> None:
+    # Providers launch specialized products at the attention peak: a fund younger than two
+    # disclosure quarters riding an already-crowded theme is that product.
+    young = _candidate("Y", inception="2026-03-07", crowding=0.75)
+    kept, vetoed = veto_funds([young], AS_OF)
+    assert kept == []
+    assert vetoed[0].guardrail == "launch_at_peak"
+    assert "2026-03-07" in vetoed[0].reason
+    assert "0.75" in vetoed[0].reason
+
+
+def test_a_young_fund_on_a_quiet_theme_is_kept() -> None:
+    kept, vetoed = veto_funds([_candidate("Q", inception="2026-03-07", crowding=0.20)], AS_OF)
+    assert [c.code for c in kept] == ["Q"]
+    assert vetoed == []
+
+
+def test_missing_guardrail_data_never_vetoes() -> None:
+    # Degrade, never raise: with no inception, run-up, or PE read there is no positive evidence.
+    bare = _candidate("BARE", crowding=0.90)
+    odd = _candidate("ODD", inception="not-a-date", crowding=0.90)
+    kept, vetoed = veto_funds([bare, odd], AS_OF)
+    assert [c.code for c in kept] == ["BARE", "ODD"]
+    assert vetoed == []
+
+
+def test_veto_thresholds_are_exact() -> None:
+    # run_up == RUN_UP_VETO with an extreme PE → vetoed (at the threshold is in).
+    at_run_up = _candidate("RU", run_up=RUN_UP_VETO, pe_pctile=PE_VETO_PCTILE)
+    kept, vetoed = veto_funds([at_run_up], AS_OF)
+    assert kept == [] and vetoed[0].guardrail == "overheated"
+    # Age of exactly the seasoning window → kept (the veto needs a *younger* fund).
+    seasoned = _candidate("SEA", inception="2025-12-07", crowding=0.90)
+    assert (date.fromisoformat(AS_OF) - date.fromisoformat("2025-12-07")).days == (
+        LAUNCH_SEASONING_DAYS
+    )
+    kept, vetoed = veto_funds([seasoned], AS_OF)
+    assert [c.code for c in kept] == ["SEA"] and vetoed == []
+    # Theme crowding exactly at the veto line with a young fund → vetoed.
+    at_crowd = _candidate("CR", inception="2026-03-07", crowding=0.70)
+    kept, vetoed = veto_funds([at_crowd], AS_OF)
+    assert kept == [] and vetoed[0].guardrail == "launch_at_peak"
 
 
 def test_screen_orders_by_total_then_code() -> None:
