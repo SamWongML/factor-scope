@@ -153,6 +153,42 @@ def test_gather_live_refreshes_holdings_for_each_on_exchange_etf(monkeypatch) ->
     assert [r for r in readings if r.series == "demand"]
 
 
+def test_ingest_discloses_a_fund_the_live_feed_dropped(monkeypatch, tmp_path) -> None:
+    # AkShare has no fund-delisting feed: a dead fund simply vanishes from the next pull. Two
+    # nightly ingests on a durable store, with the off-exchange fund gone on night two → the store
+    # discloses it delisted as of night two, while the night-one read still shows it alive
+    # (point-in-time: a later disclosure never rewrites what was knowable earlier).
+    from factor_scope.pipeline import ingest as nightly_ingest
+    from factor_scope.store import DuckDBStore
+
+    _stub_adapters(monkeypatch)
+    paths = {"store_path": tmp_path / "store.duckdb", "graph_path": tmp_path / "graph.duckdb"}
+    nightly_ingest(Config(source="live", as_of="2026-06-05", **paths))
+    monkeypatch.setattr(
+        fund_universe,
+        "fetch_live",
+        lambda *, as_of, fetched_at: [
+            Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
+                    payload={"name": code, "type": "ETF", "on_exchange": on_exchange,
+                             "inception": "2021-01-20", "delisting": "", "fee": None,
+                             "tracking_error": None, "top10_weight": None, "valid": False})
+            for code, on_exchange in _UNIVERSE
+            if code != "000001"  # the off-exchange fund vanished from the feed overnight
+        ],
+    )
+    nightly_ingest(Config(source="live", as_of="2026-06-06", **paths))
+
+    store = DuckDBStore(tmp_path / "store.duckdb")
+    try:
+        night_two = {r.key: r for r in store.read_as_of("fund_universe", "2026-06-06")}
+        night_one = {r.key: r for r in store.read_as_of("fund_universe", "2026-06-05")}
+    finally:
+        store.close()
+    assert night_two["000001"].payload["delisting"] == "2026-06-06"
+    assert night_one["000001"].payload["delisting"] == ""  # alive at the old as_of (survivorship)
+    assert night_two["561010"].payload["delisting"] == ""  # the refreshed funds are untouched
+
+
 def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     config = Config(source="live", edgar_ciks=("0001067983", "0000102909"))

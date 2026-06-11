@@ -60,6 +60,8 @@ def test_fund_holdings_live_smoke() -> None:
 def test_fund_universe_live_smoke() -> None:
     readings = fund_universe.fetch_live(as_of="2026-06-05", fetched_at="t")
     assert readings and "on_exchange" in readings[0].payload  # all funds, ETFs marked on-exchange
+    # the launch-at-peak guardrail needs real launch dates: on-exchange funds carry one live
+    assert any(r.payload["on_exchange"] and r.payload["inception"] for r in readings)
 
 
 @skip_unless_live

@@ -202,8 +202,9 @@ Nothing is dropped: every original issue survives as a re-scoped U-issue, a merg
   universe. `fund_etf_scale_sse` / `fund_etf_scale_szse` → ETF share/AUM.
   `fund_portfolio_hold_em(symbol, date)` → **fund holdings** (the graph edges).
   `fund_individual_analysis_xq` → Xueqiu per-fund analysis → "all funds in China" is data
-  engineering, not research. Capture **inception + delisting** dates for U13. Mark missing scorecard
-  inputs `valid=False`.
+  engineering, not research. Capture **inception + delisting** dates for U13 *(landed: the
+  exchange-traded ranking carries 成立日期; a delisting is disclosed when a fund leaves the feed)*.
+  Mark missing scorecard inputs `valid=False`.
 
 ### §4 — Theme→fund mapping, the professional way (→ U08)
 

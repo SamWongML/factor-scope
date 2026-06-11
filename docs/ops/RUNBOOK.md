@@ -78,16 +78,16 @@ The scheduled job is **live** (online by default), so supply the source API keys
 `FRED_API_KEY`) via the launchd plist's `EnvironmentVariables` or the cron shell env. For a
 fixtures-only dry run, add `--offline` to the generated command.
 
-### Live-feed gaps
+### Fund lifecycle dates on live data
 
-AkShare's fund-universe feed does not yet disclose **inception** or **delisting** dates — live rows
-ingest both empty; only the fixtures carry them. The guardrails degrade safely (no positive
-evidence → no veto), but two reads are inert on live data until `fetch_live` is enriched to source
-the two dates (the capture `docs/ROADMAP.md` §3 assigns to the guardrails work): the
-**launch-at-peak** veto never fires, and every fund reads as still listed, so the
-survivorship-aware membership test only bites on a feed that carries delisting dates. The
-**overheated** veto is unaffected — its run-up and PE-percentile inputs come from the live price
-and fundamentals feeds.
+No AkShare feed announces fund lifecycle events, so the two dates the guardrails read are sourced
+indirectly. **Inception** (成立日期) comes from the exchange-traded fund ranking in the same
+universe pull — every on-exchange fund carries one; an off-exchange fund's stays empty (missing
+data never vetoes). **Delisting** is *disclosed by disappearance*: a fund the universe feed listed
+before but not tonight gets an appended row delisted as of tonight, so old `as_of` reads still see
+it alive (survivorship-aware both ways). Two consequences to know when reading the store: a feed
+that returns nothing discloses nothing (an outage is not a mass death), and a fund a flaky feed
+drops for one night reads delisted *that night only* — its fresh row the next night re-lists it.
 
 ## Provider & budget
 

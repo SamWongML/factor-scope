@@ -71,7 +71,7 @@ from factor_scope.graph import (
 from factor_scope.graph.lookthrough import look_through
 from factor_scope.ingest import textstream
 from factor_scope.ingest.base import fetched_at_for
-from factor_scope.ingest.fund_universe import still_listed
+from factor_scope.ingest.fund_universe import delisting_disclosures, still_listed
 from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
@@ -125,6 +125,15 @@ def ingest(config: Config, *, market: Market | None = None) -> int:
     graph = _open_graph(config)
     try:
         n = store.append(mkt.gather(config, as_of=as_of))
+        # A fund the universe feed stopped listing is disclosed delisted as of tonight — the only
+        # way an append-only store learns of a death no feed announces.
+        n += store.append(
+            delisting_disclosures(
+                store.read_as_of("fund_universe", as_of),
+                as_of=as_of,
+                fetched_at=fetched_at_for(as_of),
+            )
+        )
         build_graph_from_store(graph, store)
         n += _materialise_mapping(store, graph, as_of)
         return n
