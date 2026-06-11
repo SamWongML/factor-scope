@@ -85,6 +85,35 @@ class Lean(BaseModel):
     text: str  # human phrasing, e.g. "Trim / low-conviction"
 
 
+class RubricScore(BaseModel):
+    """One criterion the synthesis seat scored the call against (descriptive self-assessment)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    criterion: str  # e.g. "pure-play conviction", "valuation", "trend/gate posture"
+    score: float = Field(ge=0.0, le=1.0)
+
+
+class BullBearIndex(BaseModel):
+    """The per-product debate decomposition — the two cases and the de-biased synthesis.
+
+    Descriptive only: ``bull``/``bear`` are the summed magnitudes of each seat's supporting reads
+    (fixed economic signs, never a fitted composite or tuned to returns) and ``net`` is their
+    difference. ``order_residual`` records how much swapping the seat presentation order moved the
+    synthesized confidence — the position bias the swap removed (0 when order-invariant).
+    The ``rubric`` is the synthesis seat's score against explicit criteria; like the lean's
+    confidence, it informs but never overrides the orchestrator's hard guardrails.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    bull: float = Field(ge=0.0)  # the bull seat's case strength (magnitude of supporting reads)
+    bear: float = Field(ge=0.0)  # the bear seat's case strength
+    net: float  # bull − bear (the directional tilt before guardrails)
+    order_residual: float = 0.0  # |Δconfidence| between the two seat orders (de-biased residual)
+    rubric: list[RubricScore] = Field(default_factory=list)
+
+
 class ReliabilityBucket(BaseModel):
     """One row of the reliability-by-confidence table."""
 
@@ -142,6 +171,7 @@ class DashboardItem(BaseModel):
     scorecard: Scorecard | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     gate: GateState = GateState.UNKNOWN
+    index: BullBearIndex | None = None  # the per-product debate decomposition (set once leaned)
 
 
 class Dashboard(BaseModel):
@@ -165,6 +195,7 @@ def dashboard_json_schema() -> dict[str, Any]:
 
 __all__ = [
     "Band",
+    "BullBearIndex",
     "Connection",
     "Dashboard",
     "DashboardItem",
@@ -175,6 +206,7 @@ __all__ = [
     "LeanAction",
     "ListName",
     "ReliabilityBucket",
+    "RubricScore",
     "Scorecard",
     "dashboard_json_schema",
 ]

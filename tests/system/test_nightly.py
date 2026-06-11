@@ -14,9 +14,9 @@ from typer.testing import CliRunner
 
 from factor_scope.cli import app
 from factor_scope.config import Config
-from factor_scope.contract import Dashboard, LeanAction
+from factor_scope.contract import Dashboard, LeanAction, ListName
 from factor_scope.digest import Case, DigestInput, Proposal, Side
-from factor_scope.pipeline import nightly
+from factor_scope.pipeline import build_dashboard, nightly
 from factor_scope.scoring import read_calls
 from factor_scope.store import DuckDBStore
 
@@ -119,8 +119,82 @@ class _BoomProvider:
     def argue(self, side: Side, brief: DigestInput) -> Case:
         raise RuntimeError("claude binary missing")
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
         raise AssertionError("synthesis is unreachable once a seat has failed")
+
+
+def test_a_seat_budget_cap_abstains_the_lowest_priority_overflow(tmp_path) -> None:
+    # A safety ceiling for theme-rich nights: with a cap below the book size the core book argues
+    # by priority (holdings → watchlist → emerging) and the overflow degrades to abstain-with-error
+    # in the run log — the ceiling lives outside the model, exactly like the trend gate.
+    p = _paths(tmp_path)
+    cfg = Config(
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+        max_debate_items=2,
+    )
+    dash, record = nightly(cfg)
+
+    # Two holdings fit the budget; the watchlist + three emerging (four items) overflow it.
+    over = [f for f in record.digest_failures if "seat budget" in f.error]
+    assert len(over) == 4
+    holdings = [it for it in dash.items if it.list_name is ListName.HOLDINGS]
+    overflow = [it for it in dash.items if it.list_name is not ListName.HOLDINGS]
+    assert len(holdings) == 2 and len(overflow) == 4
+    # The budgeted core keeps its real lean; every overflow item shows an ordinary abstain.
+    assert all(it.lean is not None and it.lean.action is not LeanAction.ABSTAIN for it in holdings)
+    assert all(it.lean is not None and it.lean.action is LeanAction.ABSTAIN for it in overflow)
+
+
+class _CountingProvider:
+    """A real-shaped provider that counts how often the expensive seats are argued."""
+
+    name = "counting"
+
+    def __init__(self) -> None:
+        self.seat_calls = 0
+
+    def argue(self, side: Side, brief: DigestInput) -> Case:
+        return Case(side=side, strength=2.0 if side is Side.BULL else 1.0, confidence=0.6)
+
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        self.seat_calls += 1
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
+        return Proposal(action=LeanAction.HOLD, confidence=0.7)
+
+
+def test_a_second_night_reuses_cached_debates_on_a_durable_store(tmp_path, monkeypatch) -> None:
+    # The seats are the nightly cost. Against a durable store, a real provider argues every item the
+    # first night and *none* the second — the unchanged briefs hit the persisted debate cache. The
+    # fake-only offline path never caches, so this needs a non-fake provider to observe the reuse.
+    provider = _CountingProvider()
+    monkeypatch.setattr("factor_scope.pipeline.get_provider", lambda name, **_: provider)
+
+    p = _paths(tmp_path)
+    cfg = Config(
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+        provider="claude_code",
+    )
+    build_dashboard(cfg)
+    after_first = provider.seat_calls
+    build_dashboard(cfg)
+
+    assert after_first > 0, "the first night must actually argue the seats"
+    assert provider.seat_calls == after_first  # the second night re-argued nothing — all reused
 
 
 def test_nightly_degrades_a_failing_provider_to_abstain_and_logs_it(tmp_path, monkeypatch) -> None:

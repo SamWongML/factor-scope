@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from factor_scope.cli import app
 from factor_scope.config import Config
 from factor_scope.contract import Dashboard, LeanAction, ListName
+from factor_scope.digest import DigestInput
 from factor_scope.pipeline import build_dashboard
 
 pytestmark = pytest.mark.system
@@ -78,6 +79,29 @@ def test_emerging_candidates_are_data_derived_without_a_tagged_table() -> None:
     for item in emerging:
         stage_b = next(e for e in item.evidence if e.src == "emerging:stage_b")
         assert "overlap-with-core" in stage_b.one_line
+
+
+def test_emerging_briefs_carry_funnel_near_misses(monkeypatch) -> None:
+    # The finalists just below the funnel cut reach the seats as veto-only context. Observe the real
+    # pipeline by spying on the digest: only emerging briefs carry near-misses, and the funnel
+    # actually surfaces at least one (储能 screened 4 candidates into a top-3 → a 4th below it).
+    import factor_scope.pipeline as pipeline
+
+    real_digest = pipeline.digest_item
+    briefs: list[DigestInput] = []
+
+    def _spy(provider, brief, **kwargs):
+        briefs.append(brief)
+        return real_digest(provider, brief, **kwargs)
+
+    monkeypatch.setattr(pipeline, "digest_item", _spy)
+    build_dashboard(Config())
+
+    with_near = [b for b in briefs if b.near_misses]
+    assert with_near, "the funnel surfaced no near-misses to the seats"
+    # Near-misses are the emerging funnel's veto context — never attached to a core holding/watch.
+    assert all(b.list_name is ListName.EMERGING for b in with_near)
+    assert all(line.startswith("#") for b in with_near for line in b.near_misses)
 
 
 def test_emerging_run_is_deterministic() -> None:

@@ -1,23 +1,44 @@
 """Contract test for the LLMProvider interface.
 
-A provider is anything with ``name``, ``argue``, and ``synthesize``. The deterministic fake is the
-default; the real ``claude_code`` provider must satisfy the same shape so it can be dropped in
-without touching the orchestrator. DeepSeek is a chore model (off the judgment path), so it is not a
-judgment provider. None of these construct a network client at import or selection time.
+A provider is anything with ``name``, ``argue``, ``seats``, and ``synthesize``. The deterministic
+fake is the default; the real ``claude_code`` provider must satisfy the same shape so it can be
+dropped in without touching the orchestrator. DeepSeek is a chore model (off the judgment path), so
+it is not a judgment provider. None of these construct a network client at import or selection time.
 """
 
 import pytest
 
-from factor_scope.digest import LLMProvider, get_provider
+from factor_scope.contract import Band, FactorState, GateState, ListName
+from factor_scope.digest import DigestInput, LLMProvider, Side, get_provider
 from factor_scope.digest.fake import FakeProvider
 
 pytestmark = pytest.mark.unit
+
+
+def _brief() -> DigestInput:
+    return DigestInput(
+        code="X",
+        name="X",
+        list_name=ListName.HOLDINGS,
+        states=(
+            FactorState(factor="reversal", level=Band.EXTREME_HIGH, direction="reversal-down"),
+        ),
+        gate=GateState.OPEN,
+    )
 
 
 def test_fake_satisfies_the_provider_protocol() -> None:
     provider = FakeProvider()
     assert isinstance(provider, LLMProvider)
     assert provider.name == "fake"
+
+
+def test_seats_argues_both_sides_from_one_brief() -> None:
+    # The orchestrator drives the debate through seats(): both seats argued from the same brief,
+    # returned in fixed (bull, bear) slots.
+    bull, bear = FakeProvider().seats(_brief())
+    assert bull.side is Side.BULL
+    assert bear.side is Side.BEAR
 
 
 def test_get_provider_returns_the_fake_by_default() -> None:

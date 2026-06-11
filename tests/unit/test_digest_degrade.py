@@ -43,7 +43,12 @@ class _ArgueRaises:
     def argue(self, side: Side, brief: DigestInput) -> Case:
         raise RuntimeError("seat boom")
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
         raise AssertionError("synthesis must not run once a seat has failed")
 
 
@@ -55,7 +60,12 @@ class _SynthesizeRaises:
     def argue(self, side: Side, brief: DigestInput) -> Case:
         return Case(side=side, strength=0.0, confidence=0.5)
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
         raise ValueError("synthesis boom")
 
 

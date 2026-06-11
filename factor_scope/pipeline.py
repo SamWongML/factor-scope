@@ -16,9 +16,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 from factor_scope.config import TASK_DEBATE, Config
 from factor_scope.contract import (
+    BullBearIndex,
     Connection,
     Dashboard,
     DashboardItem,
@@ -27,8 +29,17 @@ from factor_scope.contract import (
     Lean,
     LeanAction,
     ListName,
+    RubricScore,
 )
-from factor_scope.digest import DEFAULT_HORIZON_D, DigestInput, digest_item, get_provider
+from factor_scope.digest import (
+    DEFAULT_HORIZON_D,
+    Debate,
+    DigestInput,
+    SeatBudget,
+    digest_item,
+    digest_key,
+    get_provider,
+)
 from factor_scope.discovery import (
     build_stream_docs,
     discover_themes,
@@ -38,9 +49,11 @@ from factor_scope.discovery import (
 from factor_scope.emerging import (
     Candidate,
     FundScore,
+    RankedFund,
     Reranker,
     Shortlist,
     Theme,
+    emerging_gate,
     get_reranker,
     infer_links,
     run_funnel,
@@ -282,6 +295,72 @@ def _prior_action(store: PointInTimeStore, code: str, as_of: str) -> LeanAction 
     return max(prior, key=lambda c: (c.as_of, c.call_id)).action
 
 
+_DEBATE_SERIES = "debate_cache"  # a derived series, excluded from the snapshot fingerprint
+
+
+def _debate_payload(debate: Debate) -> dict[str, object]:
+    """A canonical, JSON-round-trippable view of a debate for the append-only store."""
+
+    return {
+        "bull_strength": debate.bull_strength,
+        "bear_strength": debate.bear_strength,
+        "action": debate.action.value,
+        "confidence": debate.confidence,
+        "order_residual": debate.order_residual,
+        "rubric": [[c, s] for c, s in debate.rubric],
+    }
+
+
+def _debate_from_payload(payload: dict[str, Any]) -> Debate:
+    return Debate(
+        bull_strength=float(payload["bull_strength"]),
+        bear_strength=float(payload["bear_strength"]),
+        action=LeanAction(payload["action"]),
+        confidence=float(payload["confidence"]),
+        order_residual=float(payload["order_residual"]),
+        rubric=tuple((str(c), float(s)) for c, s in payload["rubric"]),
+    )
+
+
+class _DebateCache:
+    """Store-backed cross-night debate reuse — the seats are the cost, don't re-argue a still item.
+
+    Persists each new debate as an append-only :class:`Reading` in the ``debate_cache`` series,
+    keyed by :func:`digest_key`. A later night preloads every debate knowable as of its run date, so
+    an unchanged brief reuses last night's judgment; the guardrails still re-run on it. Stamped with
+    the run date (never the wall clock), and excluded from the snapshot id — it is derived output.
+    """
+
+    def __init__(self, store: PointInTimeStore, as_of: str) -> None:
+        self._store = store
+        self._as_of = as_of
+        self._entries = {
+            r.key: _debate_from_payload(r.payload)
+            for r in store.read_as_of(_DEBATE_SERIES, as_of)
+        }
+
+    def get(self, brief: DigestInput) -> Debate | None:
+        return self._entries.get(digest_key(brief))
+
+    def put(self, brief: DigestInput, debate: Debate) -> None:
+        key = digest_key(brief)
+        self._store.append(
+            [
+                Reading(
+                    series=_DEBATE_SERIES,
+                    key=key,
+                    as_of=self._as_of,
+                    fetched_at=self._as_of,
+                    payload=_debate_payload(debate),
+                )
+            ]
+        )
+        self._entries[key] = debate
+
+
+_LIST_PRIORITY = {ListName.HOLDINGS: 0, ListName.WATCHLIST: 1, ListName.EMERGING: 2}
+
+
 def _attach_leans(
     pairs: list[tuple[str, DashboardItem]],
     store: PointInTimeStore,
@@ -289,6 +368,8 @@ def _attach_leans(
     provider_name: str,
     deep_think_model: str,
     *,
+    near_misses: dict[str, tuple[str, ...]],
+    max_debate_items: int | None = None,
     digest_failures: list[DigestFailure] | None = None,
 ) -> None:
     """Digest each item into a calibrated lean, then log it as a falsifiable call.
@@ -299,13 +380,25 @@ def _attach_leans(
     (when a sink is given) for the ops run log. Each emitted lean is appended to the point-in-time
     store as a :class:`~factor_scope.scoring.Call` — stamped with tonight's date and immutable — so
     next run's self-scoring loop scores *this* real call.
+
+    ``max_debate_items`` caps the *fresh* debates a night argues (``None`` → unlimited): items reach
+    the seats in a deterministic priority — holdings, then watchlist, then emerging (in Stage-B
+    rank) — and once the night's slots are spent the overflow degrades to abstain-with-error, the
+    ceiling living outside the model like the gate. A reused or blind item spends no slot, so the
+    cap falls only on the costly fresh seats.
     """
 
     provider = get_provider(provider_name, deep_think_model=deep_think_model)
+    # The deterministic fake is free, so it never caches; the real seats are the nightly cost, so an
+    # unchanged item reuses a prior night's debate (the offline path writes no derived readings).
+    cache = _DebateCache(store, as_of) if provider_name != "fake" else None
+    budget = SeatBudget(max_debate_items) if max_debate_items is not None else None
     # Idempotent on a durable store: never log a second call for a code already called tonight, so
     # re-running the same night can't double-count in next run's score (the store is append-only).
     logged_tonight = {c.call_id for c in read_calls(store, as_of) if c.as_of == as_of}
-    for code, item in pairs:
+    # Debate in priority order so a budget cut falls on the least-important names; the artifact's
+    # item order is unchanged (each item is enriched in place), only *which* items argue is ranked.
+    for code, item in sorted(pairs, key=lambda p: _LIST_PRIORITY[p[1].list_name]):
         brief = DigestInput(
             code=code,
             name=item.item,
@@ -319,12 +412,20 @@ def _attach_leans(
             prior_action=_prior_action(store, code, as_of),
             evidence=tuple(item.evidence),
             as_of=as_of,
+            near_misses=near_misses.get(code, ()),
         )
-        result = digest_item(provider, brief)
+        result = digest_item(provider, brief, cache=cache, budget=budget)
         item.lean = Lean(action=result.action, confidence=result.confidence, text=result.text)
         item.evolution = result.evolution
         item.flip_trigger = result.flip_trigger
         item.invalidation = result.invalidation
+        item.index = BullBearIndex(
+            bull=result.bull_strength,
+            bear=result.bear_strength,
+            net=result.bull_strength - result.bear_strength,
+            order_residual=result.order_residual,
+            rubric=[RubricScore(criterion=c, score=s) for c, s in result.rubric],
+        )
         if result.error is not None and digest_failures is not None:
             digest_failures.append(DigestFailure(code=code, error=result.error))
         call_id = f"{code}:{as_of}"
@@ -471,13 +572,20 @@ def _emerging_connections(
     return connections
 
 
+def _near_miss_line(ranked: RankedFund) -> str:
+    """A below-the-cut finalist as one line — veto-only context for the seats, never promoted."""
+
+    c = ranked.score.candidate
+    return f"#{ranked.rank} {c.name} ({c.code}, score {ranked.score.total:.2f})"
+
+
 def _build_emerging(
     store: PointInTimeStore,
     graph: GraphStore,
     as_of: str,
     book: list[Holding],
     reranker: Reranker,
-) -> list[tuple[str, DashboardItem]]:
+) -> tuple[list[tuple[str, DashboardItem]], dict[str, tuple[str, ...]]]:
     """Run the three-stage funnel → the ``emerging`` list (top-3 funds per cleared theme).
 
     Stage A qualifies each industry; Stage B generates + ranks a cleared theme's candidate funds on
@@ -485,15 +593,19 @@ def _build_emerging(
     re-rank narrows those to the top 3. Each surviving fund becomes an emerging item carrying its
     factor states/gate (where price history exists), the Stage-A/Stage-B one-page comparison as
     evidence, and its overlap as connections. The digest then leans over the shortlist (in
-    ``_attach_leans``) and promotes at most one.
+    ``_attach_leans``) and promotes at most one. Alongside the pairs it returns, per fund, the
+    near-miss lines (the theme's finalists just below the cut) so the seats can weigh them as a
+    cheap veto the funnel never promotes.
     """
 
     if store.count("themes") == 0:
-        return []
+        return [], {}
     themes = [_theme_from_reading(r) for r in store.read_as_of("themes", as_of)]
     candidates = [_candidate_from_reading(r) for r in store.read_as_of("theme_map", as_of)]
     pairs: list[tuple[str, DashboardItem]] = []
+    near_misses: dict[str, tuple[str, ...]] = {}
     for shortlist in run_funnel(themes, candidates, graph, as_of, book, reranker):
+        lines = tuple(_near_miss_line(rf) for rf in shortlist.near_misses)
         for ranked in shortlist.funds:
             score = ranked.score
             code = score.candidate.code
@@ -503,7 +615,7 @@ def _build_emerging(
                 item=score.candidate.name,
                 list=ListName.EMERGING,
                 states=compute_states(ctx),
-                gate=compute_gate(ctx),
+                gate=emerging_gate(ctx, score.candidate),
                 connections=connections,
                 connections_flag=bool(connections),
                 evidence=[
@@ -512,7 +624,8 @@ def _build_emerging(
                 ],
             )
             pairs.append((code, item))
-    return pairs
+            near_misses[code] = lines
+    return pairs, near_misses
 
 
 def build_dashboard(
@@ -556,13 +669,15 @@ def build_dashboard(
             _materialise_mapping(store, graph, as_of)
         # Fingerprint the frozen snapshot the run reasons over — the read data, not the calls this
         # run is about to log (those are derived output, so excluding them keeps a re-run stable).
-        snapshot_id = store.snapshot_id(as_of, exclude=("calls",))
+        snapshot_id = store.snapshot_id(as_of, exclude=("calls", _DEBATE_SERIES))
         book = _build_book(store, as_of)
         core_pairs = _build_items(store, as_of)
         _attach_connections(core_pairs, graph, book, as_of)
         # The emerging list is the funnel's output, not a hand-placed position; it owns
         # its own overlap-with-core connections, so it is built after the core look-through.
-        emerging_pairs = _build_emerging(store, graph, as_of, book, get_reranker(config))
+        emerging_pairs, near_misses = _build_emerging(
+            store, graph, as_of, book, get_reranker(config)
+        )
         pairs = core_pairs + emerging_pairs
         _attach_scorecard(pairs, store, as_of)
         _attach_leans(
@@ -571,6 +686,8 @@ def build_dashboard(
             as_of,
             config.provider,
             config.model_for_task(TASK_DEBATE),
+            max_debate_items=config.max_debate_items,
+            near_misses=near_misses,
             digest_failures=digest_failures,
         )
         items = [item for _, item in pairs]

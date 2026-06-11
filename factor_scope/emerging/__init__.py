@@ -13,6 +13,7 @@ overlap (no new graph logic).
 from __future__ import annotations
 
 from factor_scope.emerging.funnel import Shortlist, group_by_theme, run_funnel
+from factor_scope.emerging.gate import emerging_gate
 from factor_scope.emerging.mapping import ThemeFundLink, infer_links, return_correlation
 from factor_scope.emerging.shortlist import (
     FakeReranker,
@@ -47,6 +48,7 @@ __all__ = [
     "Theme",
     "ThemeFundLink",
     "coarse_filter",
+    "emerging_gate",
     "get_reranker",
     "group_by_theme",
     "infer_links",

@@ -59,6 +59,22 @@ def test_rerank_emits_at_most_top_n_ranked_one_to_n() -> None:
     assert [r.score.candidate.code for r in top] == ["A", "B", "C"]
 
 
+def test_rerank_surfaces_near_misses_below_the_cut() -> None:
+    # The next finalists below the top-n cut are kept (ranked on) as near-misses — cheap veto
+    # context for the seats — never promoted into the shortlist itself.
+    finalists = [
+        _score(c, t) for c, t in [("A", 0.70), ("B", 0.60), ("C", 0.50), ("D", 0.40), ("E", 0.30)]
+    ]
+    promoted = rerank(FakeReranker(), "储能", finalists, RUN, top_n=3, near_n=2)
+    assert [(r.score.candidate.code, r.rank) for r in promoted] == [
+        ("A", 1),
+        ("B", 2),
+        ("C", 3),
+        ("D", 4),
+        ("E", 5),
+    ]
+
+
 def test_stage_b_total_is_the_spine_when_totals_separate() -> None:
     # The qualitative read favours B, but the funds are far apart on the deterministic score — the
     # re-rank must not override the scorecard, so Stage-B order stands.

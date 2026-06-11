@@ -65,22 +65,32 @@ class ClaudeCodeProvider:
         data = self._complete(system, _brief_prompt(brief))
         return Case(
             side=side,
-            strength=_as_float(data.get("strength")),
-            confidence=_as_float(data.get("confidence")),
+            strength=max(0.0, _as_float(data.get("strength"))),
+            confidence=_clamp01(_as_float(data.get("confidence"))),
             points=_as_str_tuple(data.get("points")),
         )
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal:
-        prompt = (
-            f"{_brief_prompt(brief)}\n\nBULL ({bull.strength:g}, conf {bull.confidence:g}): "
-            f"{'; '.join(bull.points)}\nBEAR ({bear.strength:g}, conf {bear.confidence:g}): "
-            f"{'; '.join(bear.points)}"
-        )
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        """Run the two seats concurrently — they share the brief but argue in isolated turns."""
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            bull = pool.submit(self.argue, Side.BULL, brief)
+            bear = pool.submit(self.argue, Side.BEAR, brief)
+            return bull.result(), bear.result()
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
+        first, second = (bear, bull) if present_bear_first else (bull, bear)
+        prompt = f"{_brief_prompt(brief)}\n\n{_case_line(first)}\n{_case_line(second)}"
         data = self._complete(_load_seat_prompt("synthesis"), prompt)
         return Proposal(
             action=LeanAction(str(data.get("action", "abstain"))),
-            confidence=_as_float(data.get("confidence")),
+            confidence=_clamp01(_as_float(data.get("confidence"))),
             rationale=_as_str_tuple(data.get("rationale")),
+            rubric=_as_rubric(data.get("rubric")),
         )
 
     def _complete(self, system: str, prompt: str) -> dict[str, object]:
@@ -152,6 +162,12 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float, str)) else 0.0
 
 
+def _clamp01(value: float) -> float:
+    """Pin an untrusted model score to the contract's [0, 1] bound — a sloppy seat degrades."""
+
+    return max(0.0, min(1.0, value))
+
+
 def _as_str_tuple(value: object) -> tuple[str, ...]:
     """Coerce a parsed JSON array to a tuple of strings; anything else → empty."""
 
@@ -160,21 +176,50 @@ def _as_str_tuple(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _as_rubric(value: object) -> tuple[tuple[str, float], ...]:
+    """Coerce a parsed ``[{"criterion","score"}]`` array into (criterion, score) pairs."""
+
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(
+        (str(item["criterion"]), _clamp01(_as_float(item.get("score"))))
+        for item in value
+        if isinstance(item, dict) and "criterion" in item
+    )
+
+
+def _case_line(case: Case) -> str:
+    """One seat's case as a labelled line for the synthesis prompt (order set by the caller)."""
+
+    return (
+        f"{case.side.value.upper()} ({case.strength:g}, conf {case.confidence:g}): "
+        f"{'; '.join(case.points)}"
+    )
+
+
 def _brief_prompt(brief: DigestInput) -> str:
     """Render the structured brief as plain text for a seat — dated reads, no recalled numbers."""
 
-    lines = [
-        f"Item: {brief.name} ({brief.code}) on the {brief.list_name.value} list.",
-        f"Trend gate: {brief.gate.value}.",
-        "Factor states:",
-    ]
+    lines = [f"Item: {brief.name} ({brief.code}) on the {brief.list_name.value} list."]
+    if brief.as_of is not None:
+        lines.append(f"As of: {brief.as_of} (reason point-in-time — nothing later is knowable).")
+    lines += [f"Trend gate: {brief.gate.value}.", "Factor states:"]
     for state in brief.states:
         if not state.valid:
             continue
         lines.append(f"  - {state.factor}: {state.level.value} ({state.direction})")
+    if brief.evidence:
+        lines.append("Evidence (dated reads — cite, don't recall):")
+        for e in brief.evidence:
+            lines.append(f"  - {e.src} ({e.as_of}): {e.one_line}")
     if brief.connections_flag and brief.connections:
         shared = ", ".join(c.shared for c in brief.connections)
         lines.append(f"Look-through overlaps (concentration risk): {shared}.")
+    if brief.near_misses:
+        lines.append(
+            "Near-misses (cannot be promoted — veto context only): "
+            + ", ".join(brief.near_misses)
+        )
     if brief.scorecard and brief.scorecard.weak_patterns:
         lines.append(f"Mirror — weak patterns: {'; '.join(brief.scorecard.weak_patterns)}.")
     return "\n".join(lines)

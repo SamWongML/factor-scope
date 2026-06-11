@@ -119,6 +119,11 @@ class Config:
     # Tracks ``offline_mode()`` like ``source``. DeepSeek is a chore model (off the judgment path),
     # not a judgment provider — see digest.get_provider.
     provider: str = field(default_factory=lambda: "fake" if offline_mode() else "claude_code")
+    # A per-night ceiling on how many items actually argue the bull/bear seats — a cost safety valve
+    # for theme-rich nights. None (default) is unlimited. Items are debated in priority order
+    # (holdings → watchlist → emerging); the overflow degrades to abstain-with-error in the run log,
+    # the ceiling living outside the model exactly like the trend gate.
+    max_debate_items: int | None = None
     # Where the nightly job appends its append-only ops run log (one JSON record per run).
     log_path: Path = field(default=Path("out") / "nightly.jsonl")
     # Theme-discovery (the separate, user/cron-triggered service) knobs. Its LLM judgment is

@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from factor_scope.digest.orchestrator import (
     DEFAULT_HORIZON_D,
+    Debate,
+    DebateCache,
     DigestResult,
+    SeatBudget,
     digest_item,
+    digest_key,
     state_tokens,
 )
 from factor_scope.digest.provider import (
@@ -28,12 +32,16 @@ from factor_scope.digest.provider import (
 __all__ = [
     "DEFAULT_HORIZON_D",
     "Case",
+    "Debate",
+    "DebateCache",
     "DigestInput",
     "DigestResult",
     "LLMProvider",
     "Proposal",
+    "SeatBudget",
     "Side",
     "digest_item",
+    "digest_key",
     "get_provider",
     "state_tokens",
 ]

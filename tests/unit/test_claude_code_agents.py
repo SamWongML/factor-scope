@@ -10,10 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from factor_scope.contract import Band, FactorState, GateState, ListName
+from factor_scope.contract import Band, Evidence, FactorState, GateState, ListName
 from factor_scope.digest.claude_code import (
     ClaudeCodeProvider,
     CostEnvelope,
+    _brief_prompt,
     _load_seat_prompt,
     _parse_stream_json,
 )
@@ -42,6 +43,63 @@ def _brief() -> DigestInput:
     )
 
 
+def test_brief_prompt_grounds_the_seats_in_dated_evidence_and_as_of() -> None:
+    # The seats reason point-in-time: the brief carries its as_of date and the dated, sourced reads
+    # behind the item (fetch, don't recall), so a seat can cite a reference instead of a memory.
+    brief = DigestInput(
+        code="600519",
+        name="X",
+        list_name=ListName.HOLDINGS,
+        states=(FactorState(factor="reversal", level=Band.HIGH, direction="stretched"),),
+        gate=GateState.OPEN,
+        as_of="2026-06-05",
+        evidence=(
+            Evidence(src="cninfo", as_of="2026-06-01", one_line="Q1 revenue +30% YoY"),
+            Evidence(src="akshare", as_of="2026-06-04", one_line="northbound net buy 3 days"),
+        ),
+    )
+    prompt = _brief_prompt(brief)
+
+    assert "2026-06-05" in prompt  # the point-in-time as_of header
+    assert "cninfo" in prompt and "2026-06-01" in prompt and "Q1 revenue +30% YoY" in prompt
+    assert "akshare" in prompt and "northbound net buy 3 days" in prompt
+
+
+def test_brief_prompt_renders_near_misses_as_veto_only_context() -> None:
+    # The finalists just below the funnel cut reach the seats as cheap veto context — the bear may
+    # cite them — but they are flagged un-promotable, since the gate and funnel stay deterministic.
+    brief = DigestInput(
+        code="516160",
+        name="储能ETF",
+        list_name=ListName.EMERGING,
+        states=(FactorState(factor="reversal", level=Band.HIGH, direction="stretched"),),
+        gate=GateState.OPEN,
+        near_misses=("#4 风光储ETF (储能, score 0.41)", "#5 新能源车ETF (储能, score 0.38)"),
+    )
+    prompt = _brief_prompt(brief)
+
+    assert "Near-misses (cannot be promoted — veto context only):" in prompt
+    assert "#4 风光储ETF" in prompt and "#5 新能源车ETF" in prompt
+
+
+# The rubric criteria the synthesis seat scores against — the committed prompt must document each,
+# so the emitted ``rubric`` (read by ``_as_rubric``) can't drift from what the prompt actually asks.
+_RUBRIC_CRITERIA = ("evidence", "conviction", "trend/gate", "crowding", "valuation")
+
+
+def test_synthesis_agent_documents_the_scoring_rubric() -> None:
+    body = _agent_body("synthesis").lower()
+    assert "rubric" in body  # the output key the provider parses
+    for criterion in _RUBRIC_CRITERIA:
+        assert criterion in body, f"synthesis rubric must score {criterion!r}"
+
+
+@pytest.mark.parametrize("name", ["bull", "bear"])
+def test_debate_seats_require_reference_grounded_points(name: str) -> None:
+    # Each point must cite the dated state/evidence it rests on (reference-grounding).
+    assert "cite" in _agent_body(name).lower()
+
+
 @pytest.mark.parametrize("name", ["bull", "bear", "synthesis"])
 def test_each_seat_has_an_agent_definition(name: str) -> None:
     # All three seats — including synthesis — have an authoritative definition file.
@@ -65,6 +123,20 @@ def test_argue_uses_the_seat_agent_files_as_system_prompt(monkeypatch: pytest.Mo
     assert seen == [_agent_body("bull"), _agent_body("bear")]
 
 
+def test_seats_runs_both_sides_and_returns_them_in_fixed_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # seats() argues bull and bear (concurrently) and always returns (bull, bear) in that order.
+    seen: list[str] = []
+    provider = ClaudeCodeProvider()
+    monkeypatch.setattr(provider, "_complete", lambda system, prompt: seen.append(system) or {})
+
+    bull, bear = provider.seats(_brief())
+
+    assert bull.side is Side.BULL and bear.side is Side.BEAR
+    assert sorted(seen) == sorted([_agent_body("bull"), _agent_body("bear")])
+
+
 def test_synthesize_uses_the_synthesis_agent_file_as_system_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -76,6 +148,77 @@ def test_synthesize_uses_the_synthesis_agent_file_as_system_prompt(
     provider.synthesize(_brief(), empty, Case(side=Side.BEAR, strength=0.0, confidence=0.0))
 
     assert seen == [_agent_body("synthesis")]
+
+
+def test_synthesis_prompt_order_flips_with_present_bear_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The swap-and-average de-bias presents the cases in both orders; the prompt must honour it.
+    prompts: list[str] = []
+    provider = ClaudeCodeProvider()
+    monkeypatch.setattr(provider, "_complete", lambda system, prompt: prompts.append(prompt) or {})
+    bull = Case(side=Side.BULL, strength=2.0, confidence=0.7, points=("up",))
+    bear = Case(side=Side.BEAR, strength=1.0, confidence=0.6, points=("down",))
+
+    provider.synthesize(_brief(), bull, bear)
+    provider.synthesize(_brief(), bull, bear, present_bear_first=True)
+
+    fwd, rev = prompts
+    assert fwd.index("BULL") < fwd.index("BEAR")
+    assert rev.index("BEAR") < rev.index("BULL")
+
+
+def test_synthesize_parses_the_optional_rubric(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The synthesis seat scores the call against explicit criteria; we parse that into the proposal.
+    provider = ClaudeCodeProvider()
+    payload = {
+        "action": "trim",
+        "confidence": 0.5,
+        "rubric": [
+            {"criterion": "valuation", "score": 0.3},
+            {"criterion": "trend/gate posture", "score": 0.6},
+        ],
+    }
+    monkeypatch.setattr(provider, "_complete", lambda system, prompt: payload)
+
+    bull = Case(side=Side.BULL, strength=0.0, confidence=0.0)
+    bear = Case(side=Side.BEAR, strength=0.0, confidence=0.0)
+    proposal = provider.synthesize(_brief(), bull, bear)
+
+    assert proposal.rubric == (("valuation", 0.3), ("trend/gate posture", 0.6))
+
+
+def test_seats_clamp_out_of_range_model_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Model output is untrusted: an out-of-range strength/confidence/score is clamped to the
+    # contract's bounds at the provider boundary, so a sloppy seat degrades rather than raising a
+    # ValidationError when the pipeline builds the bounded artifact models (invalid never raises).
+    provider = ClaudeCodeProvider()
+    monkeypatch.setattr(
+        provider, "_complete", lambda system, prompt: {"strength": -3.0, "confidence": 1.5}
+    )
+    case = provider.argue(Side.BULL, _brief())
+    assert case.strength == 0.0  # a negative case strength clamps up to the floor
+    assert case.confidence == 1.0  # an over-unit confidence clamps down to the ceiling
+
+    monkeypatch.setattr(
+        provider,
+        "_complete",
+        lambda system, prompt: {
+            "action": "trim",
+            "confidence": 9.0,
+            "rubric": [
+                {"criterion": "valuation", "score": 2.0},
+                {"criterion": "crowding", "score": -1.0},
+            ],
+        },
+    )
+    proposal = provider.synthesize(
+        _brief(),
+        Case(side=Side.BULL, strength=0.0, confidence=0.0),
+        Case(side=Side.BEAR, strength=0.0, confidence=0.0),
+    )
+    assert proposal.confidence == 1.0
+    assert proposal.rubric == (("valuation", 1.0), ("crowding", 0.0))
 
 
 # A minimal `--output-format stream-json` transcript: JSONL system/assistant lines then the final

@@ -40,7 +40,9 @@ class DigestInput:
     The scorecard is the book-wide self-scoring mirror; ``prior_action`` is the most recent prior
     lean on this code (used only to phrase the evolution line). ``evidence`` is the dated, sourced
     reads behind the item and ``as_of`` is the point-in-time date they are judged against — the
-    inputs the evidence-quality auto-downgrade reasons over. All of it is descriptive.
+    inputs the evidence-quality auto-downgrade reasons over. ``near_misses`` are one-line summaries
+    of the funnel finalists just below the cut — veto-only context for the seats, never promotable.
+    All of it is descriptive.
     """
 
     code: str
@@ -55,6 +57,7 @@ class DigestInput:
     prior_action: LeanAction | None = None
     evidence: tuple[Evidence, ...] = ()
     as_of: str | None = None
+    near_misses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,9 @@ class Proposal:
     action: LeanAction
     confidence: float
     rationale: tuple[str, ...] = field(default_factory=tuple)
+    # The synthesis seat's self-scored rubric: (criterion, score) pairs. Descriptive only — it
+    # informs the lean's confidence, never the orchestrator's hard guardrails. Empty when unscored.
+    rubric: tuple[tuple[str, float], ...] = field(default_factory=tuple)
 
 
 @runtime_checkable
@@ -90,7 +96,13 @@ class LLMProvider(Protocol):
 
     def argue(self, side: Side, brief: DigestInput) -> Case: ...
 
-    def synthesize(self, brief: DigestInput, bull: Case, bear: Case) -> Proposal: ...
+    # Both seats from one brief, returned in fixed (bull, bear) slots — the real provider runs the
+    # two argue calls concurrently; the orchestrator drives the debate through this, not argue().
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]: ...
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal: ...
 
 
 def get_provider(name: str, *, deep_think_model: str | None = None) -> LLMProvider:
