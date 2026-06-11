@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import statistics
 
+from factor_scope.factors.bands import percentile_rank
 from factor_scope.store import PointInTimeStore, Reading
+
+PE_HISTORY_MIN = 12  # enough PE prints to rank the current multiple against its own range
 
 
 def _series_asc(store: PointInTimeStore, series: str, key: str, as_of: str) -> list[Reading]:
@@ -48,6 +51,18 @@ def valuation_pes(store: PointInTimeStore, code: str, as_of: str) -> list[float]
     """The point-in-time PE (市盈率) history for a fund's basket, oldest-first."""
 
     return [float(r.payload["pe"]) for r in _series_asc(store, "fundamentals", code, as_of)]
+
+
+def latest_pe_percentile(pes: list[float]) -> float | None:
+    """The latest PE print ranked against its own history, or ``None`` when too few prints.
+
+    The one valuation read — the same floor and rank for the valuation factor and the anti-hype
+    guardrails, so the two can never silently disagree on what "expensive vs own range" means.
+    """
+
+    if len(pes) < PE_HISTORY_MIN:
+        return None
+    return percentile_rank(pes[-1], pes)
 
 
 def demand_revisions(store: PointInTimeStore, as_of: str) -> list[float]:
@@ -106,11 +121,13 @@ def moving_average(navs: list[float], window: int) -> float:
 
 
 __all__ = [
+    "PE_HISTORY_MIN",
     "demand_revisions",
     "drawdown",
     "fred_latest",
     "fred_values",
     "horizon_returns",
+    "latest_pe_percentile",
     "lead_chain",
     "moving_average",
     "price_navs",

@@ -78,6 +78,17 @@ The scheduled job is **live** (online by default), so supply the source API keys
 `FRED_API_KEY`) via the launchd plist's `EnvironmentVariables` or the cron shell env. For a
 fixtures-only dry run, add `--offline` to the generated command.
 
+### Fund lifecycle dates on live data
+
+No AkShare feed announces fund lifecycle events, so the two dates the guardrails read are sourced
+indirectly. **Inception** (成立日期) comes from the exchange-traded fund ranking in the same
+universe pull — every on-exchange fund carries one; an off-exchange fund's stays empty (missing
+data never vetoes). **Delisting** is *disclosed by disappearance*: a fund the universe feed listed
+before but not tonight gets an appended row delisted as of tonight, so old `as_of` reads still see
+it alive (survivorship-aware both ways). Two consequences to know when reading the store: a feed
+that returns nothing discloses nothing (an outage is not a mass death), and a fund a flaky feed
+drops for one night reads delisted *that night only* — its fresh row the next night re-lists it.
+
 ## Provider & budget
 
 - **`fake`** (the offline mode): deterministic, free. CI and demos (`--offline`) use only this.

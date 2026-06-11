@@ -31,16 +31,19 @@ from factor_scope.emerging.stage_a import (
 from factor_scope.emerging.stage_b import (
     Candidate,
     FundScore,
+    FundVeto,
     coarse_filter,
     overlap_with_core,
     score_fund,
     screen_funds,
+    veto_funds,
 )
 
 __all__ = [
     "Candidate",
     "FakeReranker",
     "FundScore",
+    "FundVeto",
     "RankedFund",
     "Reranker",
     "Shortlist",
@@ -60,4 +63,5 @@ __all__ = [
     "score_fund",
     "screen_funds",
     "signal_strength",
+    "veto_funds",
 ]

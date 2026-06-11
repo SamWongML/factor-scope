@@ -29,7 +29,6 @@ _REVERSAL_LOOKBACK = 20
 _VOL_WINDOW = 20
 _MIN_MACRO = 12  # ~a year of monthly real-yield observations
 _MIN_CROWDING = 12  # ~a fortnight of sessions before turnover ranks against its own history
-_MIN_VALUATION = 12  # enough PE prints to rank the current multiple against its own range
 _MIN_DEMAND = 8  # ~two years of quarterly end-demand revisions
 _MIN_LEAD = 6  # ~6 quarters of 13F disclosures → 5 lead-chain changes to rank against
 _HEAVY_TURNOVER = 0.75  # a run/sell-off on top-quartile turnover confirms the reversal read
@@ -161,10 +160,10 @@ def demand(ctx: FactorContext) -> FactorState:
 # --- 5. Valuation: the basket's PE (市盈率) vs its own history. The anti-hype overvaluation gauge.
 def valuation(ctx: FactorContext) -> FactorState:
     pes = window.valuation_pes(ctx.store, ctx.code, ctx.as_of)
-    if len(pes) < _MIN_VALUATION:
+    pct = window.latest_pe_percentile(pes)
+    if pct is None:
         return _unavailable("valuation", "PE history too short for a valuation read")
     current = pes[-1]
-    pct = percentile_rank(current, pes)
     band = rank_to_band(pct)
     if band in (Band.HIGH, Band.EXTREME_HIGH):
         direction = "expensive (PE high vs own range → overvaluation risk)"
