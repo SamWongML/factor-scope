@@ -17,8 +17,8 @@ jobs:
       - name: Pin Python 3.11
         run: uv python install 3.11
 
-      - name: Sync project (+dev, +store) from the committed uv.lock
-        run: uv sync --frozen --extra dev --extra store --python 3.11
+      - name: Sync project (+dev, +store, +serve) from the committed uv.lock
+        run: uv sync --frozen --extra dev --extra store --extra serve --python 3.11
 
       - name: Lint + type-check + test (offline — no live sources, no paid LLMs)
         env:
