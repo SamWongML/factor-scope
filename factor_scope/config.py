@@ -101,6 +101,10 @@ class Config:
     fixtures_dir: Path = field(default=DEFAULT_FIXTURES_DIR)
     as_of: str | None = None  # None → take the as-of stamped in the fixtures (deterministic)
     output_path: Path = field(default=Path("out") / "dashboard.json")
+    # Where the per-night dashboard history accumulates — one immutable ``<as_of>.json`` per run
+    # plus an ``index.json`` manifest (see factor_scope.history). None → a ``dashboards/``
+    # directory next to ``output_path``.
+    history_dir: Path | None = None
     # Where the point-in-time store lives. None → an ephemeral in-memory store that `run`
     # auto-populates from the source, so the entrypoint works standalone. A path → a durable
     # append-only store that `ingest` fills and `run` reads (point-in-time).

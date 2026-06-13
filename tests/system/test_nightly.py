@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from factor_scope.cli import app
 from factor_scope.config import Config
-from factor_scope.contract import Dashboard, LeanAction, ListName
+from factor_scope.contract import Dashboard, DashboardIndex, LeanAction, ListName
 from factor_scope.digest import Case, DigestInput, Proposal, Side
 from factor_scope.pipeline import build_dashboard, nightly
 from factor_scope.scoring import read_calls
@@ -63,6 +63,14 @@ def test_nightly_entrypoint_writes_artifact_and_run_log(tmp_path) -> None:
     assert record["output_path"] == str(p["output"])
     # The run log records the frozen snapshot the run read — the same id the artifact carries.
     assert record["snapshot_id"] and record["snapshot_id"] == dash.snapshot_id
+
+    # The night also landed in the history: an immutable dated artifact + the index manifest.
+    dated = tmp_path / "dashboards" / f"{dash.as_of}.json"
+    assert dated.read_text(encoding="utf-8") == p["output"].read_text(encoding="utf-8")
+    index = DashboardIndex.model_validate_json(
+        (tmp_path / "dashboards" / "index.json").read_text(encoding="utf-8")
+    )
+    assert [e.as_of for e in index.entries] == [dash.as_of]
 
 
 def test_nightly_persists_tonights_leans_as_calls_for_next_day_scoring(tmp_path) -> None:

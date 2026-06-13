@@ -187,6 +187,24 @@ class Dashboard(BaseModel):
         return [it for it in self.items if it.list_name is name]
 
 
+class DashboardIndexEntry(BaseModel):
+    """One night in the dashboard history — enough to list it without opening the file."""
+
+    model_config = ConfigDict(frozen=True)
+
+    as_of: str
+    generated_at: str
+    snapshot_id: str
+    n_items: int = 0
+
+
+class DashboardIndex(BaseModel):
+    """The history manifest: every recorded night, oldest first (see factor_scope.history)."""
+
+    schema_version: int = 1
+    entries: list[DashboardIndexEntry] = Field(default_factory=list)
+
+
 def dashboard_json_schema() -> dict[str, Any]:
     """The JSON schema for the artifact — useful for validation and for other tools."""
 
@@ -198,6 +216,8 @@ __all__ = [
     "BullBearIndex",
     "Connection",
     "Dashboard",
+    "DashboardIndex",
+    "DashboardIndexEntry",
     "DashboardItem",
     "Evidence",
     "FactorState",

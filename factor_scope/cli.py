@@ -49,6 +49,11 @@ def run(
     output: Path = typer.Option(
         Path("out") / "dashboard.json", "--output", "-o", help="Where to write dashboard.json."
     ),
+    history_dir: Path | None = typer.Option(
+        None,
+        "--history-dir",
+        help="Where the per-night history accumulates (default: dashboards/ next to the artifact).",
+    ),
     store_path: Path | None = typer.Option(
         None,
         "--store-path",
@@ -74,6 +79,7 @@ def run(
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         output_path=output,
+        history_dir=history_dir,
         store_path=store_path,
         graph_path=graph_path,
         provider="fake" if is_offline else provider,
@@ -206,6 +212,11 @@ def nightly(
     output: Path = typer.Option(
         Path("out") / "dashboard.json", "--output", "-o", help="Where to write dashboard.json."
     ),
+    history_dir: Path | None = typer.Option(
+        None,
+        "--history-dir",
+        help="Where the per-night history accumulates (default: dashboards/ next to the artifact).",
+    ),
     store_path: Path = typer.Option(
         Path("out") / "store.duckdb",
         "--store-path",
@@ -235,6 +246,7 @@ def nightly(
         fixtures_dir=fixtures_dir,
         as_of=as_of,
         output_path=output,
+        history_dir=history_dir,
         store_path=store_path,
         graph_path=graph_path,
         log_path=log_path,
@@ -250,6 +262,31 @@ def nightly(
         f"wrote {output}, logged to {log_path}",
         err=True,
     )
+
+
+@app.command()
+def serve(
+    history_dir: Path = typer.Option(
+        Path("out") / "dashboards",
+        "--history-dir",
+        help="The per-night dashboard history to serve (what `run`/`nightly` record).",
+    ),
+    host: str = typer.Option("127.0.0.1", help="Interface to bind — localhost by default."),
+    port: int = typer.Option(8765, help="Port to bind."),
+) -> None:
+    """Serve the dashboard history as a read-only JSON API (needs the ``serve`` extra).
+
+    The frontend seam over the recorded nights: ``/dashboards`` lists them,
+    ``/dashboards/{as_of}`` reopens one, ``/dashboards/latest`` is the newest, and
+    ``/openapi.json`` is the typed schema to generate a client from. Read-only by
+    construction — it never ingests or reasons.
+    """
+
+    import uvicorn  # lazy: the pinned serve extra is only needed when actually serving
+
+    from factor_scope.serve import create_app
+
+    uvicorn.run(create_app(history_dir), host=host, port=port)
 
 
 @app.command()

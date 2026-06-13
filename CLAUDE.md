@@ -9,7 +9,7 @@ reads/writes), reviewed each morning. **It never places orders.** Educational to
 `uv` is the package manager — don't call `pip`/`python` directly; go through `uv run` (Makefile does).
 
 ```
-make setup    # uv venv + install (.[dev,store])
+make setup    # uv venv + install (.[dev,store,serve])
 make run      # build dashboard.json from bundled fixtures and print it
 make test     # full offline suite (unit + integration + system)
 make unit     # fast pure-function tests only
@@ -17,7 +17,7 @@ make system   # end-to-end entrypoint run — the "nothing is broken" gate
 make check    # lint + typecheck + test — THE bar; a change isn't done until this is green
 ```
 
-CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
+CLI: `factor-scope run|nightly|serve|ingest|schedule|schema` (`--help` per command).
 
 ## Layout — full map in `docs/ROADMAP.md`
 
@@ -26,6 +26,8 @@ CLI: `factor-scope run|nightly|ingest|schedule|schema` (`--help` per command).
 - `ingest/ store/ factors/ graph/ scoring/ digest/` — the six layers, plus `emerging/`; each is a
   pipeline step that only **adds** to the artifact, so a partial pipeline still emits a valid one.
 - `cli.py` typer app · `render.py` terminal view · `schedule/` launchd+cron deploy.
+- `history.py` — every run also lands as immutable `out/dashboards/<as_of>.json` + an `index.json`
+  manifest · `serve.py` — the read-only history API a frontend consumes (`serve` extra).
 - `data/fixtures/` committed sample data · `tests/{unit,integration,system}`.
 
 ## How to work here

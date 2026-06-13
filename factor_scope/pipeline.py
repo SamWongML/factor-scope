@@ -18,6 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from factor_scope import history
 from factor_scope.config import TASK_DEBATE, Config
 from factor_scope.contract import (
     BullBearIndex,
@@ -761,11 +762,12 @@ def run(
     digest_failures: list[DigestFailure] | None = None,
     market: Market | None = None,
 ) -> Dashboard:
-    """Build the dashboard and persist it to ``config.output_path``."""
+    """Build the dashboard, persist it to ``config.output_path``, and record it in the history."""
 
     dash = build_dashboard(config, digest_failures=digest_failures, market=market)
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     config.output_path.write_text(dash.model_dump_json(indent=2), encoding="utf-8")
+    history.record(dash, history.resolve_history_dir(config))
     return dash
 
 

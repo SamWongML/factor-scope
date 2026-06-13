@@ -7,6 +7,8 @@ import pytest
 from factor_scope.contract import (
     BullBearIndex,
     Dashboard,
+    DashboardIndex,
+    DashboardIndexEntry,
     DashboardItem,
     FactorState,
     GateState,
@@ -101,6 +103,24 @@ def test_dashboard_roundtrips_through_json() -> None:
     assert restored == dash
     # And it is plain JSON (no exotic types leak into the artifact).
     json.loads(blob)
+
+
+def test_dashboard_index_roundtrips_through_json() -> None:
+    # The history manifest a frontend lists nights from — one entry per recorded artifact.
+    idx = DashboardIndex(
+        entries=[
+            DashboardIndexEntry(
+                as_of="2026-06-05",
+                generated_at="2026-06-05T22:00:00Z",
+                snapshot_id="snap-abc123",
+                n_items=6,
+            )
+        ]
+    )
+    restored = DashboardIndex.model_validate_json(idx.model_dump_json())
+    assert restored == idx
+    assert restored.schema_version == 1
+    json.loads(idx.model_dump_json())
 
 
 def test_json_schema_exports() -> None:

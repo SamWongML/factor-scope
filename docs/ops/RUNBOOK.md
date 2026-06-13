@@ -17,12 +17,13 @@ writes three things under `out/` (override with the flags below):
 | Artifact | Default path | What it is |
 |----------|--------------|------------|
 | `dashboard.json` | `out/dashboard.json` | the morning artifact you review (the contract) |
+| history | `out/dashboards/` | one immutable `<as_of>.json` per night + `index.json` (below) |
 | store | `out/store.duckdb` | the append-only point-in-time store (readings + logged calls) |
 | graph | `out/graph.ladybug` | the durable holdings look-through graph |
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
 
-Flags: `--output`, `--store-path`, `--graph-path`, `--log-path`, `--provider`, `--as-of`,
-`--offline`, `--quiet`. The job is **online by default** (live sources + the real provider);
+Flags: `--output`, `--history-dir`, `--store-path`, `--graph-path`, `--log-path`, `--provider`,
+`--as-of`, `--offline`, `--quiet`. The job is **online by default** (live sources + the real provider);
 `--offline` (or `FACTOR_SCOPE_OFFLINE=1`) selects fixtures + the deterministic `fake` provider for a
 demo or test run. Re-running the **same night is idempotent**: positions are stamped
 with the run's `as_of`, so a second run that night re-uses the night's readings — the artifact stays
@@ -46,6 +47,28 @@ list means a seat call raised (a missing/slow `claude`, malformed JSON) and that
 to abstain rather than crashing the run — each entry carries its `code` and `error`. On the fake
 provider it is always empty. Tail it to see whether the nightly job is running and whether any seat
 is failing.
+
+### The dashboard history
+
+Every run also records its artifact as `out/dashboards/<as_of>.json` next to a regenerated
+`index.json` manifest, so past mornings stay inspectable — a later run never rewrites an earlier
+night, and re-running the same night rewrites its file byte-for-byte. To backfill a night from
+before the history existed, rebuild it from the durable store:
+`factor-scope run --as-of YYYY-MM-DD --store-path out/store.duckdb` (point-in-time reads see only
+what was knowable that night; live-provider digests are not reproduced — cached debates are reused).
+
+Serve the history to a frontend with the read-only API (the pinned `serve` extra):
+
+```bash
+factor-scope serve                      # http://127.0.0.1:8765
+# GET /dashboards            → the index (one entry per night, oldest first)
+# GET /dashboards/2026-06-05 → that night's artifact (immutable, cacheable forever)
+# GET /dashboards/latest     → the newest night
+# GET /openapi.json          → the typed schema to generate a frontend client from
+```
+
+It never ingests or reasons — the snapshot boundary holds. At one small JSON per night
+(~365/year) the history needs no retention machinery.
 
 ## Scheduling
 
