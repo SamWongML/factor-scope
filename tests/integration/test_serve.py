@@ -4,8 +4,11 @@ import pytest
 
 pytest.importorskip("fastapi", reason="the serve extra is not installed")
 
+from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from typer.testing import CliRunner  # noqa: E402
 
+from factor_scope.cli import app as cli  # noqa: E402
 from factor_scope.contract import Dashboard  # noqa: E402
 from factor_scope.history import record  # noqa: E402
 from factor_scope.serve import create_app  # noqa: E402
@@ -66,3 +69,21 @@ def test_openapi_exposes_the_contract_models(client: TestClient) -> None:
     schemas = client.get("/openapi.json").json()["components"]["schemas"]
     assert "Dashboard" in schemas
     assert "DashboardIndex" in schemas
+
+
+def test_serve_command_binds_the_history_api(tmp_path, monkeypatch) -> None:
+    # The `serve` entrypoint builds the read-only app over the given history and hands it to
+    # uvicorn on the requested host/port — exercised without standing up a real server.
+    record(_dash("2026-06-05"), tmp_path)
+    bound: dict[str, object] = {}
+
+    def fake_run(built: FastAPI, host: str, port: int) -> None:
+        bound["host"], bound["port"] = host, port
+        listed = TestClient(built).get("/dashboards").json()["entries"]
+        bound["nights"] = [e["as_of"] for e in listed]
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    result = CliRunner().invoke(cli, ["serve", "--history-dir", str(tmp_path), "--port", "9999"])
+
+    assert result.exit_code == 0, result.output
+    assert bound == {"host": "127.0.0.1", "port": 9999, "nights": ["2026-06-05"]}

@@ -17,7 +17,7 @@ writes three things under `out/` (override with the flags below):
 | Artifact | Default path | What it is |
 |----------|--------------|------------|
 | `dashboard.json` | `out/dashboard.json` | the morning artifact you review (the contract) |
-| history | `out/dashboards/` | one immutable `<as_of>.json` per night + `index.json` (below) |
+| history | `out/dashboards/` | one immutable `<as_of>.json` per night (below) |
 | store | `out/store.duckdb` | the append-only point-in-time store (readings + logged calls) |
 | graph | `out/graph.ladybug` | the durable holdings look-through graph |
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
@@ -50,9 +50,10 @@ is failing.
 
 ### The dashboard history
 
-Every run also records its artifact as `out/dashboards/<as_of>.json` next to a regenerated
-`index.json` manifest, so past mornings stay inspectable — a later run never rewrites an earlier
-night, and re-running the same night rewrites its file byte-for-byte. To backfill a night from
+Every run also records its artifact as `out/dashboards/<as_of>.json`, so past mornings stay
+inspectable. The first recording of a night stands: a later run never rewrites an earlier night
+(mirroring the append-only store). The index a frontend lists nights from is derived live from
+these files by the API below — there is no persisted manifest to drift. To backfill a night from
 before the history existed, rebuild it from the durable store:
 `factor-scope run --as-of YYYY-MM-DD --store-path out/store.duckdb` (point-in-time reads see only
 what was knowable that night; live-provider digests are not reproduced — cached debates are reused).

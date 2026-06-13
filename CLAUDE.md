@@ -26,8 +26,9 @@ CLI: `factor-scope run|nightly|serve|ingest|schedule|schema` (`--help` per comma
 - `ingest/ store/ factors/ graph/ scoring/ digest/` — the six layers, plus `emerging/`; each is a
   pipeline step that only **adds** to the artifact, so a partial pipeline still emits a valid one.
 - `cli.py` typer app · `render.py` terminal view · `schedule/` launchd+cron deploy.
-- `history.py` — every run also lands as immutable `out/dashboards/<as_of>.json` + an `index.json`
-  manifest · `serve.py` — the read-only history API a frontend consumes (`serve` extra).
+- `history.py` — every run also lands as an immutable `out/dashboards/<as_of>.json` (first write
+  wins; a later run never rewrites a night) · `serve.py` — the read-only history API a frontend
+  consumes, deriving the night index live from those files (`serve` extra).
 - `data/fixtures/` committed sample data · `tests/{unit,integration,system}`.
 
 ## How to work here

@@ -12,7 +12,8 @@ from typer.testing import CliRunner
 
 from factor_scope.cli import app
 from factor_scope.config import Config
-from factor_scope.contract import Dashboard, DashboardIndex, ListName
+from factor_scope.contract import Dashboard, ListName
+from factor_scope.history import read_index
 from factor_scope.pipeline import build_dashboard
 
 pytestmark = pytest.mark.system
@@ -37,16 +38,14 @@ def test_run_entrypoint_emits_valid_dashboard(tmp_path) -> None:
 
 def test_run_records_the_night_in_the_history(tmp_path) -> None:
     # The artifact survives past tomorrow: every run also lands as an immutable dated file
-    # next to the artifact, plus an index manifest a frontend lists nights from.
+    # next to the artifact. The index a frontend lists nights from derives live from those files.
     out = tmp_path / "dashboard.json"
     result = runner.invoke(app, ["run", "--output", str(out), "--quiet"])
     assert result.exit_code == 0, result.output
 
     dated = tmp_path / "dashboards" / "2026-06-05.json"
     assert dated.read_text(encoding="utf-8") == out.read_text(encoding="utf-8")
-    index = DashboardIndex.model_validate_json(
-        (tmp_path / "dashboards" / "index.json").read_text(encoding="utf-8")
-    )
+    index = read_index(tmp_path / "dashboards")
     assert [e.as_of for e in index.entries] == ["2026-06-05"]
     assert index.entries[0].n_items == 6
 

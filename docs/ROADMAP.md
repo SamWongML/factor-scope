@@ -92,8 +92,9 @@ both ends; the engine never trades.
   (`stage_a.py`, `stage_b.py`, `shortlist.py`, `funnel.py`).
 - `factor_scope/schedule/` — launchd plist + cron line + run log.
 - `factor_scope/cli.py` typer app · `factor_scope/render.py` terminal view · `factor_scope/config.py`.
-- `factor_scope/history.py` — per-night artifact record (`out/dashboards/<as_of>.json` + index) ·
-  `factor_scope/serve.py` — the read-only history API a frontend consumes (the U16 viewer's seam).
+- `factor_scope/history.py` — immutable per-night artifact record (`out/dashboards/<as_of>.json`) ·
+  `factor_scope/serve.py` — the read-only history API a frontend consumes (the U16 viewer's seam),
+  deriving the night index live from those files.
 - `data/fixtures/` committed sample data · `tests/{unit,integration,system}` (markers in
   `pyproject.toml`).
 - `.claude/agents/` — the `bull` / `bear` / `synthesis` subagent "seats."

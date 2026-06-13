@@ -1,10 +1,10 @@
-"""The dashboard history — one immutable artifact per night, plus its index manifest.
+"""The dashboard history — one immutable artifact per night.
 
-``run`` records every artifact it emits as ``<history_dir>/<as_of>.json`` and regenerates
-``index.json`` beside it, so any past morning can be reopened, inspected, or served. A later run
-never rewrites an earlier night; re-running the same ``as_of`` over the same frozen snapshot
-rewrites that night byte-for-byte (the artifact path stays clock-free). The index derives only
-from the files on disk — rebuilt by scanning, so it self-heals and stays deterministic.
+``run`` records every artifact it emits as ``<history_dir>/<as_of>.json``, so any past morning
+can be reopened, inspected, or served. The first recording of an ``as_of`` stands: a later run
+never rewrites an earlier night, mirroring the append-only store (a later disclosure never
+rewrites an earlier read). The index a frontend lists nights from is derived purely from the
+files on disk by :func:`read_index` — there is no persisted manifest to drift.
 """
 
 from __future__ import annotations
@@ -16,8 +16,6 @@ from pydantic import ValidationError
 
 from factor_scope.config import Config
 from factor_scope.contract import Dashboard, DashboardIndex, DashboardIndexEntry
-
-INDEX_NAME = "index.json"
 
 
 def resolve_history_dir(config: Config) -> Path:
@@ -37,12 +35,16 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def record(dash: Dashboard, history_dir: Path) -> Path:
-    """Persist one night into the history and refresh the index. Returns the dated path."""
+    """Persist one night into the history, immutably. Returns the dated path.
+
+    The first recording of an ``as_of`` stands: if the night is already on disk it is left
+    untouched, so a later run never rewrites an earlier night.
+    """
 
     history_dir.mkdir(parents=True, exist_ok=True)
     path = history_dir / f"{dash.as_of}.json"
-    _write_atomic(path, dash.model_dump_json(indent=2))
-    _write_atomic(history_dir / INDEX_NAME, read_index(history_dir).model_dump_json(indent=2))
+    if not path.exists():
+        _write_atomic(path, dash.model_dump_json(indent=2))
     return path
 
 
@@ -56,8 +58,6 @@ def read_index(history_dir: Path) -> DashboardIndex:
     entries = []
     if history_dir.is_dir():
         for path in sorted(history_dir.glob("*.json")):
-            if path.name == INDEX_NAME:
-                continue
             dash = _read_dashboard(path)
             if dash is None:
                 continue
