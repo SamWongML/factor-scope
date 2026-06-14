@@ -16,6 +16,7 @@ from factor_scope.cli import app
 from factor_scope.config import Config
 from factor_scope.contract import Dashboard, LeanAction, ListName
 from factor_scope.digest import Case, DigestInput, Proposal, Side
+from factor_scope.history import read_index
 from factor_scope.pipeline import build_dashboard, nightly
 from factor_scope.scoring import read_calls
 from factor_scope.store import DuckDBStore
@@ -63,6 +64,13 @@ def test_nightly_entrypoint_writes_artifact_and_run_log(tmp_path) -> None:
     assert record["output_path"] == str(p["output"])
     # The run log records the frozen snapshot the run read — the same id the artifact carries.
     assert record["snapshot_id"] and record["snapshot_id"] == dash.snapshot_id
+
+    # The night also landed in the history as an immutable dated artifact; the index manifest
+    # a frontend lists nights from derives live from those files.
+    dated = tmp_path / "dashboards" / f"{dash.as_of}.json"
+    assert dated.read_text(encoding="utf-8") == p["output"].read_text(encoding="utf-8")
+    index = read_index(tmp_path / "dashboards")
+    assert [e.as_of for e in index.entries] == [dash.as_of]
 
 
 def test_nightly_persists_tonights_leans_as_calls_for_next_day_scoring(tmp_path) -> None:
