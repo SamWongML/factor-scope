@@ -1,9 +1,10 @@
 """Unit tests for the nightly ops run log.
 
 Every nightly run appends one structured :class:`RunRecord` — start/end, per-list item counts,
-abstains, the judgment provider, how many calls were logged for tomorrow's scoring, and a cost
-note — to an append-only JSONL log beside ``dashboard.json``. The log is operations history (not
-the artifact), so wall-clock timestamps are allowed here; the artifact itself stays clock-free.
+abstains, the judgment provider, how many calls were logged for tomorrow's scoring, and per-provider
+cost + budget telemetry — to an append-only JSONL log beside ``dashboard.json``. The log is
+operations history (not the artifact), so wall-clock timestamps are allowed here; the artifact
+itself stays clock-free.
 """
 
 import json
@@ -17,7 +18,8 @@ from factor_scope.contract import (
     LeanAction,
     ListName,
 )
-from factor_scope.schedule import RunRecord, append_run_log, cost_note, summarize_run
+from factor_scope.cost import ProviderCost, Usage
+from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 
 pytestmark = pytest.mark.unit
 
@@ -60,12 +62,54 @@ def test_summarize_counts_items_per_list_and_abstains() -> None:
     assert record.snapshot_id == "snap-test"  # the run log records which snapshot was read
 
 
-def test_cost_note_flags_the_agent_sdk_metering_for_claude_code() -> None:
-    # The judgment path can run on headless `claude -p`; from 2026-06-15 it meters against a
-    # separate Agent-SDK credit, which the ops log must surface for sizing.
-    assert "Agent-SDK" in cost_note("claude_code")
-    # The default fake provider is offline and free.
-    assert "no" in cost_note("fake").lower() and "cost" in cost_note("fake").lower()
+def test_summarize_rolls_usage_into_per_provider_cost_and_a_total() -> None:
+    record = summarize_run(
+        _dash(),
+        started_at="2026-06-05T22:00:01Z",
+        ended_at="2026-06-05T22:00:09Z",
+        provider="claude_code",
+        n_calls_logged=4,
+        usages=(
+            Usage("claude_code", "opus", 200, 80, 0.30),
+            Usage("claude_code", "opus", 100, 40, 0.15),
+            Usage("deepseek", "deepseek-v4-flash", 50, 10, 0.01),
+        ),
+        month_to_date_usd=5.46,
+        monthly_budget_usd=20.0,
+    )
+    # The two opus seat calls fold into one row; the re-rank's deepseek call is its own row — every
+    # spend traces to its (provider, model) source of creation.
+    assert record.costs == (
+        ProviderCost("claude_code", "opus", 2, 300, 120, pytest.approx(0.45)),
+        ProviderCost("deepseek", "deepseek-v4-flash", 1, 50, 10, pytest.approx(0.01)),
+    )
+    assert record.cost_usd == pytest.approx(0.46)
+    assert record.month_to_date_usd == 5.46 and record.monthly_budget_usd == 20.0
+    assert record.budget_exhausted is False
+
+
+def test_summarize_flags_a_budget_throttled_run() -> None:
+    record = summarize_run(
+        _dash(),
+        started_at="2026-06-05T22:00:01Z",
+        ended_at="2026-06-05T22:00:09Z",
+        provider="claude_code",
+        n_calls_logged=2,
+        digest_failures=(DigestFailure(code="512580", error="monthly budget exhausted"),),
+    )
+    assert record.budget_exhausted is True
+
+
+def test_a_fake_run_carries_no_cost_so_the_log_stays_deterministic() -> None:
+    record = summarize_run(
+        _dash(),
+        started_at="2026-06-05T22:00:01Z",
+        ended_at="2026-06-05T22:00:09Z",
+        provider="fake",
+        n_calls_logged=4,
+    )
+    assert record.costs == () and record.cost_usd == 0.0
+    assert record.monthly_budget_usd is None and record.budget_exhausted is False
 
 
 def test_append_run_log_is_append_only_jsonl(tmp_path) -> None:

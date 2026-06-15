@@ -35,18 +35,24 @@ Each run appends one JSON line to `--log-path` (operations telemetry, *not* the 
 wall-clock timestamps are fine here; only `dashboard.json` stays clock-free):
 
 ```json
-{"as_of": "2026-06-05", "started_at": "...Z", "ended_at": "...Z", "provider": "fake",
+{"as_of": "2026-06-05", "started_at": "...Z", "ended_at": "...Z", "provider": "claude_code",
  "n_items": 6, "n_holdings": 2, "n_watchlist": 1, "n_emerging": 3, "n_abstain": 2,
- "n_calls_logged": 6, "output_path": "out/dashboard.json", "cost_note": "...",
- "digest_failures": []}
+ "n_calls_logged": 6, "output_path": "out/dashboard.json",
+ "costs": [{"provider": "claude_code", "model": "opus", "calls": 12, "input_tokens": 9000,
+            "output_tokens": 2400, "cost_usd": 1.84}],
+ "cost_usd": 1.84, "month_to_date_usd": 5.46, "monthly_budget_usd": 20.0,
+ "budget_exhausted": false, "digest_failures": []}
 ```
 
 `n_calls_logged` is tomorrow's scoring fuel; `n_abstain` is how often the engine was too blind to
 call (the abstain-when-blind guardrail). `digest_failures` is empty on a clean night; a non-empty
-list means a seat call raised (a missing/slow `claude`, malformed JSON) and that item was degraded
-to abstain rather than crashing the run — each entry carries its `code` and `error`. On the fake
-provider it is always empty. Tail it to see whether the nightly job is running and whether any seat
-is failing.
+list means a seat call raised (a missing/slow `claude`, malformed JSON) **or** was throttled by the
+budget guard, and that item was degraded to abstain rather than crashing the run — each entry carries
+its `code` and `error`. `costs` is this run's spend rolled up per `(provider, model)` — the source of
+creation behind every dollar; `cost_usd` is its total, `month_to_date_usd` the calendar month's
+running total against `monthly_budget_usd`, and `budget_exhausted` flags a run the ceiling throttled.
+On the fake provider all of these are empty/zero, so the fixtures log stays byte-for-byte. Tail it to
+see whether the nightly job is running, what it cost, and whether any seat is failing.
 
 ### The dashboard history
 
@@ -115,13 +121,30 @@ drops for one night reads delisted *that night only* — its fresh row the next 
 
 ## Provider & budget
 
-- **`fake`** (the offline mode): deterministic, free. CI and demos (`--offline`) use only this.
+- **`fake`** (the offline mode): deterministic, free. CI and demos (`--offline`) use only this. It
+  meters nothing, so the spend ledger stays empty and the budget never throttles it.
 - **`claude_code`**: the real judgment path — headless `claude -p` running the bull/bear subagents
-  (`.claude/agents/`) then synthesis. From **2026-06-15**, `claude -p` meters against a separate
-  **Agent-SDK credit**; the run log's `cost_note` flags this. Size the nightly run against that
-  budget: roughly one bull + bear + synthesis per item (six items in the sample book).
-- **DeepSeek** is a *chore* model (reformat/summarise evidence), off the judgment path — never a
-  `--provider` value (`get_provider("deepseek")` errors with a pointer to the real options).
+  (`.claude/agents/`) then synthesis. Each seat call's cost (input/output tokens + USD) is read from
+  the stream-json `result` envelope and recorded as a `Usage` tagged with its provider + model.
+- **DeepSeek** drives the research job — theme discovery (draft + judge) and the emerging re-rank.
+  Its calls have no USD in the response, so they are priced from the per-model table
+  (`Config.model_prices`, USD per 1M in/out tokens); add a line per model you charge. It is **not** a
+  `--provider` value for the nightly judgment (`get_provider("deepseek")` errors with a pointer).
+
+### Cost telemetry + the monthly budget guard
+
+Every model call — the nightly seats, the re-rank, and the research job — books one `Usage`
+(`provider`, `model`, tokens, USD) into an append-only **spend ledger** (`--spend-path`, default
+`out/spend.jsonl`). This is the constant record contract: switching a model changes only the `model`
+field, so every dollar still traces to who produced it. Each nightly `RunRecord` also embeds its own
+run's rollup (see *The run log*).
+
+Set a monthly ceiling with `Config.monthly_budget_usd` (default `None` = unlimited). The guard reads
+the ledger's **month-to-date** (the calendar month of the run's `as_of`, across *all* jobs) and, once
+the running total is crossed, **gracefully throttles**: the nightly's lower-priority items degrade to
+abstain-with-error `"monthly budget exhausted"` (holdings → watchlist → emerging order) and discovery
+stops assessing further themes. The run completes on a **partial-but-valid** artifact and the record
+sets `budget_exhausted: true` — the cap lives outside the model, exactly like the trend gate.
 
 ## Morning review
 

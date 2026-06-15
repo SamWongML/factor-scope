@@ -22,6 +22,7 @@ from factor_scope.contract import (
     LeanAction,
     ListName,
 )
+from factor_scope.cost import BudgetGuard, Usage
 from factor_scope.digest import Case, Debate, DigestInput, Proposal, SeatBudget, Side, digest_item
 from factor_scope.digest.orchestrator import digest_key
 
@@ -168,3 +169,49 @@ def test_a_blind_item_does_not_spend_the_seat_budget() -> None:
     assert provider.seat_calls == 0
     assert result.action is LeanAction.ABSTAIN
     assert result.error is None  # a blind abstain, not a budget abstain
+
+
+class _PricyProvider(_CountingProvider):
+    """A counting provider that also books a USD cost on each fresh debate (for the spend guard)."""
+
+    usage: list[Usage]
+
+    def __init__(self, *, cost_per_debate: float = 1.0, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._cost = cost_per_debate
+        self.usage = []
+
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        self.usage.append(Usage("claude_code", "opus", 100, 40, self._cost))
+        return super().seats(brief)
+
+
+def test_an_exhausted_monthly_budget_abstains_without_arguing() -> None:
+    # The USD guard, seeded at its ceiling, refuses a fresh debate before it spends — the overflow
+    # degrades to abstain-with-error, the cap outside the model like the trend gate.
+    provider = _PricyProvider()
+    result = digest_item(provider, _brief(), spend=BudgetGuard(limit_usd=5.0, spent_usd=5.0))
+    assert provider.seat_calls == 0  # never paid for the seats
+    assert result.action is LeanAction.ABSTAIN
+    assert result.error is not None and "monthly budget" in result.error
+
+
+def test_a_fresh_debate_charges_its_realised_cost_to_the_budget() -> None:
+    # A debate within budget argues and books its realised USD against the month's running total.
+    provider = _PricyProvider(cost_per_debate=2.0)
+    guard = BudgetGuard(limit_usd=10.0, spent_usd=0.0)
+    result = digest_item(provider, _brief(), spend=guard)
+    assert provider.seat_calls == 1
+    assert result.error is None
+    assert guard.spent_usd == pytest.approx(2.0)  # the one seats() call's cost was charged
+
+
+def test_a_cached_item_does_not_spend_the_monthly_budget() -> None:
+    # A reused debate spends no USD, so the guard is untouched on a cache hit.
+    provider = _PricyProvider(cost_per_debate=3.0)
+    cache = _MemCache()
+    guard = BudgetGuard(limit_usd=10.0, spent_usd=0.0)
+    digest_item(provider, _brief(), cache=cache, spend=guard)
+    digest_item(provider, _brief(), cache=cache, spend=guard)
+    assert provider.seat_calls == 1  # second was a cache hit
+    assert guard.spent_usd == pytest.approx(3.0)  # charged once, not twice

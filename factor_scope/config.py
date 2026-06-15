@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from factor_scope.cost import Price
+
 # Repo-root-relative default location of the committed sample data.
 DEFAULT_FIXTURES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures"
 
@@ -87,6 +89,19 @@ def _default_discovery_models() -> dict[str, ModelSpec]:
     }
 
 
+def _default_model_prices() -> dict[str, Price]:
+    """USD per 1M in/out tokens — the table the cost meter prices token-only providers from.
+
+    DeepSeek V4 list prices (ROADMAP §9, verified 2026-06-08). ``claude_code`` reports its own USD
+    in the stream-json envelope, so the deep-think model needs no line; add one per priced model.
+    """
+
+    return {
+        "deepseek-v4-flash": Price(input_per_mtok=0.14, output_per_mtok=0.28),
+        "deepseek-v4-pro": Price(input_per_mtok=0.44, output_per_mtok=0.87),
+    }
+
+
 @dataclass(frozen=True)
 class Config:
     """Everything a single run needs to be reproducible."""
@@ -130,6 +145,19 @@ class Config:
     max_debate_items: int | None = None
     # Where the nightly job appends its append-only ops run log (one JSON record per run).
     log_path: Path = field(default=Path("out") / "nightly.jsonl")
+    # A monthly USD ceiling across *all* model spend — the nightly seats, the re-rank, and the
+    # research job all meter into one append-only ledger (``spend_path``), and once the calendar
+    # month's running total crosses this the remaining fresh work degrades to abstain-with-error /
+    # fewer themes, leaving a partial-but-valid artifact. None (default) is unlimited; the cap lives
+    # outside the model exactly like the trend gate. The deterministic fake meters nothing, so the
+    # offline suite is never throttled.
+    monthly_budget_usd: float | None = None
+    # The append-only spend ledger every job books its per-(provider, model) cost into; the monthly
+    # guard reads its month-to-date from here.
+    spend_path: Path = field(default=Path("out") / "spend.jsonl")
+    # USD-per-1M-token price table for the token-only providers (DeepSeek/Qwen/…); claude_code
+    # reports its own USD. Add a line per model you charge (see ``_default_model_prices``).
+    model_prices: dict[str, Price] = field(default_factory=_default_model_prices)
     # Theme-discovery (the separate, user/cron-triggered service) knobs. Its LLM judgment is
     # stratified by task difficulty to cut cost — a cheap draft tier digests the raw materials, a
     # strong judge tier renders the verdict (see ``ModelSpec`` / assess.py). Each tier is swapped

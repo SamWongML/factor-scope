@@ -15,9 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from factor_scope.contract import Dashboard, LeanAction, ListName
-
-# When claude -p starts metering against a separate Agent-SDK credit — used to size the run.
-_AGENT_SDK_DATE = "2026-06-15"
+from factor_scope.cost import ProviderCost, Usage, roll_up, total_usd
 
 
 @dataclass(frozen=True)
@@ -44,27 +42,18 @@ class RunRecord:
     n_abstain: int
     n_calls_logged: int  # leans logged tonight for tomorrow's self-scoring
     output_path: str
-    cost_note: str
-    # Items whose seat call failed (degraded to abstain). Empty on a clean night; on the fake
-    # provider it is always empty, so the fixtures artifact + log stay byte-for-byte deterministic.
+    # This run's spend, per ``(provider, model)`` — the source of creation behind every USD. Empty
+    # on the fake provider (it meters nothing), so the fixtures artifact + log stay byte-for-byte.
+    costs: tuple[ProviderCost, ...] = ()
+    cost_usd: float = 0.0  # this run's grand total across every model call
+    month_to_date_usd: float = 0.0  # spend so far this calendar month, incl. this run
+    monthly_budget_usd: float | None = None  # the configured ceiling (None → unlimited)
+    budget_exhausted: bool = False  # the monthly guard throttled this run's lower-priority items
+    # Items whose seat call failed or was throttled (degraded to abstain). Empty on a clean night.
     digest_failures: tuple[DigestFailure, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def cost_note(provider: str) -> str:
-    """A one-line budgeting note for the run's judgment provider."""
-
-    if provider == "claude_code":
-        return (
-            "provider=claude_code — headless `claude -p`; "
-            f"from {_AGENT_SDK_DATE} it meters against a separate Agent-SDK credit, "
-            "so size the nightly run (≈one bull+bear+synthesis per item) against that budget"
-        )
-    if provider == "fake":
-        return "provider=fake — offline deterministic stub, no API cost"
-    return f"provider={provider} — verify its cost model before scheduling"
 
 
 def summarize_run(
@@ -75,9 +64,18 @@ def summarize_run(
     provider: str,
     n_calls_logged: int,
     output_path: str = "",
+    usages: tuple[Usage, ...] = (),
+    month_to_date_usd: float = 0.0,
+    monthly_budget_usd: float | None = None,
     digest_failures: tuple[DigestFailure, ...] = (),
 ) -> RunRecord:
-    """Roll one finished :class:`Dashboard` into a :class:`RunRecord` (counts + provider + cost)."""
+    """Roll one finished :class:`Dashboard` into a :class:`RunRecord` (counts + provider + cost).
+
+    ``usages`` are this run's per-call records (across the seats and any re-rank); they roll up per
+    ``(provider, model)`` into ``costs`` + a grand total. ``month_to_date_usd`` is the calendar
+    month's spend including this run, weighed against ``monthly_budget_usd``; a run whose budget was
+    crossed (a ``"monthly budget"`` digest failure) is flagged ``budget_exhausted``.
+    """
 
     n_holdings = len(dash.by_list(ListName.HOLDINGS))
     n_watchlist = len(dash.by_list(ListName.WATCHLIST))
@@ -98,7 +96,11 @@ def summarize_run(
         n_abstain=n_abstain,
         n_calls_logged=n_calls_logged,
         output_path=output_path,
-        cost_note=cost_note(provider),
+        costs=roll_up(usages),
+        cost_usd=total_usd(usages),
+        month_to_date_usd=month_to_date_usd,
+        monthly_budget_usd=monthly_budget_usd,
+        budget_exhausted=any("monthly budget" in f.error for f in digest_failures),
         digest_failures=digest_failures,
     )
 

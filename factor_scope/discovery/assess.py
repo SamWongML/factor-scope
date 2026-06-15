@@ -13,12 +13,14 @@ test mode swaps in — no network, no keys — so the suite stays hermetic. One 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
 from factor_scope.config import DISCOVERY_DRAFT, DISCOVERY_JUDGE, ModelSpec
 from factor_scope.contract import Evidence
+from factor_scope.cost import Price, Usage, price_usd, split_model
 from factor_scope.discovery.topics import StreamDoc, TopicTrajectory
 
 if TYPE_CHECKING:
@@ -63,6 +65,14 @@ class ThemeAssessor(Protocol):
     def assess(self, topic: TopicTrajectory, evidence_docs: list[StreamDoc]) -> ThemeAssessment:
         """Fill the four durability/corroboration fields, each with a cited :class:`Evidence`."""
 
+    @property
+    def usage(self) -> Sequence[Usage]:
+        """Per-call cost records the research job meters into the spend ledger + budget.
+
+        The real LLM appends one per agent turn; the deterministic fake meters nothing (empty).
+        """
+        ...
+
 
 # Cue vocabularies — the economic markers each judgment reads off the corpus (never tuned to P&L).
 _ADOPTION_CUES = ("装机", "出货", "放量", "渗透率")  # real-economy uptake, not a niche
@@ -97,6 +107,9 @@ class FakeAssessor:
     the citation; ``fad_resistant`` inverts (True unless a hype marker is present). It needs no
     network and no keys, so the offline suite stays hermetic and byte-for-byte deterministic.
     """
+
+    # Deterministic and free — it meters nothing, so the offline ledger + budget stay empty.
+    usage: Sequence[Usage] = ()
 
     def assess(self, topic: TopicTrajectory, evidence_docs: list[StreamDoc]) -> ThemeAssessment:
         docs = [d for d in evidence_docs if d.doc_id in set(topic.doc_ids)] or evidence_docs
@@ -139,8 +152,34 @@ class LLMAssessor:
     loads it.
     """
 
-    def __init__(self, models: Mapping[str, ModelSpec]) -> None:
+    def __init__(self, models: Mapping[str, ModelSpec], prices: Mapping[str, Price]) -> None:
         self._models = models
+        self._prices = prices
+        # Per-call cost records, in call order (draft then judge per theme) — for the spend ledger.
+        self.usage: list[Usage] = []
+
+    def _meter(self, role: str, run: object) -> None:  # pragma: no cover - host-only deps
+        """Record one agent call's cost, tagged with its provider + model (the source of creation).
+
+        ``run`` is the pydantic-ai ``AgentRunResult``; its ``usage`` property carries the v1
+        ``RunUsage`` (``input_tokens`` / ``output_tokens``). Token-only providers are priced from
+        the table; an unpriced model still records its tokens at 0 USD.
+        """
+
+        spec = self._models[role]
+        used = run.usage  # type: ignore[attr-defined]  # pydantic-ai RunUsage (host-only dep)
+        provider, model = split_model(spec.model)
+        input_tokens = int(used.input_tokens or 0)
+        output_tokens = int(used.output_tokens or 0)
+        self.usage.append(
+            Usage(
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=price_usd(model, input_tokens, output_tokens, self._prices),
+            )
+        )
 
     def _agent(  # pragma: no cover - production engine, host-only deps
         self, role: str, *, output_type: object, instructions: str
@@ -170,12 +209,15 @@ class LLMAssessor:
         seed = f"Theme: {topic.label}\nConstituents: {', '.join(topic.constituents)}"
 
         draft = self._agent(DISCOVERY_DRAFT, output_type=str, instructions=_DRAFT_INSTRUCTIONS)
-        brief = draft.run_sync(f"{seed}\n\n{materials}").output  # type: ignore[attr-defined]
+        draft_run = draft.run_sync(f"{seed}\n\n{materials}")  # type: ignore[attr-defined]
+        self._meter(DISCOVERY_DRAFT, draft_run)
+        brief = draft_run.output
 
         judge = self._agent(
             DISCOVERY_JUDGE, output_type=ThemeAssessment, instructions=_JUDGE_INSTRUCTIONS
         )
         result = judge.run_sync(f"{seed}\n\nEvidence brief:\n{brief}")  # type: ignore[attr-defined]
+        self._meter(DISCOVERY_JUDGE, result)
         return result.output  # type: ignore[no-any-return]
 
 
@@ -184,4 +226,5 @@ def get_assessor(config: Config) -> ThemeAssessor:
 
     if config.source == "fixtures":
         return FakeAssessor()
-    return LLMAssessor(config.discovery_models)  # pragma: no cover - production engine, host-only
+    # pragma: no cover - production engine, host-only
+    return LLMAssessor(config.discovery_models, config.model_prices)

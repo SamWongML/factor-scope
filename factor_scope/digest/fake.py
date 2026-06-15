@@ -12,7 +12,10 @@ enforced by the orchestrator, not here.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from factor_scope.contract import Band, FactorState, LeanAction, ListName
+from factor_scope.cost import Usage
 from factor_scope.digest.provider import Case, DigestInput, Proposal, Side
 
 # Net-vote thresholds (constants, not tuned): a |net| this large is a strong, conviction-worthy
@@ -78,6 +81,8 @@ class FakeProvider:
     """A deterministic rules provider — the default :class:`LLMProvider` (no network, no RNG)."""
 
     name = "fake"
+    # Deterministic and free — it meters nothing, so the offline run log + spend ledger stay empty.
+    usage: Sequence[Usage] = ()
 
     def argue(self, side: Side, brief: DigestInput) -> Case:
         """Marshal one side's supporting reads from the shared brief (consider-the-opposite)."""

@@ -38,7 +38,7 @@ discovery = [
     "sentence-transformers>=3,<6",
     "scikit-learn>=1.4,<2",
     "jieba>=0.42,<1",
-    "pydantic-ai-slim[openai]>=0.0.40,<1",
+    "pydantic-ai-slim[openai]>=1,<2",
 ]
 # The read-only history API a frontend consumes (factor_scope/serve.py). Imported lazily inside
 # `create_app` / the `serve` command only, so the offline suite never starts a web stack.

@@ -11,6 +11,7 @@ deterministic **fake** is the offline test default, so CI needs no network or ke
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -24,6 +25,7 @@ from factor_scope.contract import (
     ListName,
     Scorecard,
 )
+from factor_scope.cost import Usage
 
 
 class Side(StrEnum):
@@ -103,6 +105,15 @@ class LLMProvider(Protocol):
     def synthesize(
         self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
     ) -> Proposal: ...
+
+    @property
+    def usage(self) -> Sequence[Usage]:
+        """Per-call cost records accumulated in call order — the constant telemetry contract.
+
+        The real providers append one :class:`~factor_scope.cost.Usage` per seat turn; the
+        deterministic fake meters nothing (empty), so the offline run log + ledger stay stable.
+        """
+        ...
 
 
 def get_provider(name: str, *, deep_think_model: str | None = None) -> LLMProvider:

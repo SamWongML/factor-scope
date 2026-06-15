@@ -170,6 +170,18 @@ def discover(
     feed_url: str | None = typer.Option(
         None, "--feed-url", help="Live text-corpus feed (doc_id,as_of,source,text CSV)."
     ),
+    spend_path: Path = typer.Option(
+        Path("out") / "spend.jsonl",
+        "--spend-path",
+        help="The append-only cross-job spend ledger the monthly budget reads (JSONL); share it "
+        "with the nightly's so the ceiling spans both.",
+    ),
+    monthly_budget: float | None = typer.Option(
+        None,
+        "--monthly-budget",
+        help="A monthly USD ceiling across all model spend; over it, discovery stops assessing "
+        "further themes (the ones done are written). Unset = unlimited.",
+    ),
 ) -> None:
     """Discover candidate themes from the rolling text stream and append them to the store.
 
@@ -190,6 +202,8 @@ def discover(
         },
         discovery_embedding_model=embedding_model,
         textstream_feed_url=feed_url,
+        spend_path=spend_path,
+        monthly_budget_usd=monthly_budget,
     )
     n = discover_pipeline(config)
     typer.echo(f"✓ discovered {n} themes into {store_path}", err=True)
@@ -228,6 +242,17 @@ def nightly(
     log_path: Path = typer.Option(
         Path("out") / "nightly.jsonl", "--log-path", help="The append-only ops run log (JSONL)."
     ),
+    spend_path: Path = typer.Option(
+        Path("out") / "spend.jsonl",
+        "--spend-path",
+        help="The append-only cross-job spend ledger the monthly budget reads (JSONL).",
+    ),
+    monthly_budget: float | None = typer.Option(
+        None,
+        "--monthly-budget",
+        help="A monthly USD ceiling across all model spend; over it, the run throttles to a "
+        "partial-but-valid artifact. Unset = unlimited.",
+    ),
     provider: str = typer.Option(
         "claude_code", help="Digestion judgment provider: claude_code (default) | fake (offline)."
     ),
@@ -250,6 +275,8 @@ def nightly(
         store_path=store_path,
         graph_path=graph_path,
         log_path=log_path,
+        spend_path=spend_path,
+        monthly_budget_usd=monthly_budget,
         provider="fake" if is_offline else provider,
     )
     dash, record = nightly_pipeline(config)
