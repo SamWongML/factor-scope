@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 
 from factor_scope.contract import Band, Evidence, FactorState, GateState, ListName
+from factor_scope.cost import Usage
 from factor_scope.digest.claude_code import (
     ClaudeCodeProvider,
-    CostEnvelope,
     _brief_prompt,
     _load_seat_prompt,
     _parse_stream_json,
@@ -222,7 +222,7 @@ def test_seats_clamp_out_of_range_model_output(monkeypatch: pytest.MonkeyPatch) 
 
 
 # A minimal `--output-format stream-json` transcript: JSONL system/assistant lines then the final
-# `result` message carrying the cost envelope and the assistant's parsed JSON under "result".
+# `result` message carrying the call cost and the assistant's parsed JSON under "result".
 _STREAM_JSON = "\n".join(
     [
         '{"type":"system","subtype":"init","session_id":"s1"}',
@@ -234,12 +234,10 @@ _STREAM_JSON = "\n".join(
 )
 
 
-def test_parse_stream_json_extracts_the_result_and_cost_envelope() -> None:
-    parsed, envelope = _parse_stream_json(_STREAM_JSON)
+def test_parse_stream_json_extracts_the_result_and_cost() -> None:
+    parsed, input_tokens, output_tokens, cost_usd = _parse_stream_json(_STREAM_JSON)
     assert parsed == {"strength": 2.0, "confidence": 0.7, "points": ["a"]}
-    assert envelope == CostEnvelope(
-        cost_usd=0.0123, input_tokens=150, output_tokens=40, duration_ms=1234
-    )
+    assert (input_tokens, output_tokens, cost_usd) == (150, 40, 0.0123)
 
 
 def test_parse_stream_json_rejects_a_transcript_with_no_result_message() -> None:
@@ -247,15 +245,24 @@ def test_parse_stream_json_rejects_a_transcript_with_no_result_message() -> None
         _parse_stream_json('{"type":"system","subtype":"init"}')
 
 
-def test_argue_records_the_cost_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
-    provider = ClaudeCodeProvider()
+def test_argue_records_a_usage_tagged_with_its_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ClaudeCodeProvider(model="opus")
     monkeypatch.setattr(provider, "_invoke", lambda cmd: _STREAM_JSON)
 
     case = provider.argue(Side.BULL, _brief())
 
     assert case.strength == 2.0 and case.points == ("a",)
-    assert provider.costs == [
-        CostEnvelope(cost_usd=0.0123, input_tokens=150, output_tokens=40, duration_ms=1234)
+    # The cost is tagged with its source of creation (provider + model) — the constant contract.
+    assert provider.usage == [
+        Usage(
+            provider="claude_code",
+            model="opus",
+            input_tokens=150,
+            output_tokens=40,
+            cost_usd=0.0123,
+        )
     ]
 
 

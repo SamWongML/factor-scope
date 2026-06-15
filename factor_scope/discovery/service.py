@@ -10,6 +10,7 @@ already ignores the extra ``evidence`` key, so the contract stays compatible.
 from __future__ import annotations
 
 from factor_scope.contract import Evidence
+from factor_scope.cost import BudgetGuard
 from factor_scope.discovery.assess import FieldVerdict, ThemeAssessor
 from factor_scope.discovery.topics import StreamDoc, TopicModel
 from factor_scope.store import Reading
@@ -45,6 +46,7 @@ def discover_themes(
     *,
     as_of: str,
     fetched_at: str,
+    budget: BudgetGuard | None = None,
 ) -> list[Reading]:
     """Discover candidate themes from the corpus → dated ``themes`` Readings (noise dropped).
 
@@ -53,6 +55,12 @@ def discover_themes(
     ``evidence`` behind them. ``wrapper_exists`` is left optimistic — whether an investable wrapper
     truly exists is settled downstream by the holdings-overlap mapping (an unmapped theme yields an
     empty Stage-B shortlist and simply drops), so discovery stays decoupled from the fund universe.
+
+    With a ``budget`` (the monthly USD ceiling), discovery stops assessing once the month's spend is
+    crossed: themes already assessed are written (the store is append-only, so the run is partial
+    but valid) and the realised cost of each assessment is charged to the guard. The deterministic
+    fake
+    meters nothing, so the offline run is never throttled.
     """
 
     by_id = {d.doc_id: d for d in docs}
@@ -60,8 +68,13 @@ def discover_themes(
     for topic in topic_model.discover(docs, as_of=as_of):
         if topic.signal == "noise":
             continue  # too faint to act on — never written
+        if budget is not None and not budget.affordable():
+            break  # the month's budget is spent — stop here; themes so far are valid
         evidence_docs = [by_id[i] for i in topic.doc_ids if i in by_id]
+        spent_before = len(assessor.usage)
         assessment = assessor.assess(topic, evidence_docs)
+        if budget is not None:
+            budget.charge(sum(u.cost_usd for u in assessor.usage[spent_before:]))
         fields = (
             ("broad-adoption", assessment.broad_adoption),
             ("path-to-profit", assessment.path_to_profit),

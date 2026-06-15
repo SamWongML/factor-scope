@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from factor_scope.cli import app
 from factor_scope.config import Config
 from factor_scope.contract import Dashboard, LeanAction, ListName
+from factor_scope.cost import Usage
 from factor_scope.digest import Case, DigestInput, Proposal, Side
 from factor_scope.history import read_index
 from factor_scope.pipeline import build_dashboard, nightly
@@ -123,6 +124,7 @@ class _BoomProvider:
     """A judgment provider whose seats always fail (stands in for a missing/broken `claude`)."""
 
     name = "boom"
+    usage = ()  # never gets far enough to spend
 
     def argue(self, side: Side, brief: DigestInput) -> Case:
         raise RuntimeError("claude binary missing")
@@ -165,6 +167,7 @@ class _CountingProvider:
     """A real-shaped provider that counts how often the expensive seats are argued."""
 
     name = "counting"
+    usage = ()  # free — this fixture exercises caching, not cost
 
     def __init__(self) -> None:
         self.seat_calls = 0
@@ -180,6 +183,68 @@ class _CountingProvider:
         self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
     ) -> Proposal:
         return Proposal(action=LeanAction.HOLD, confidence=0.7)
+
+
+class _PricyProvider:
+    """A real-shaped provider that books a fixed USD cost on each fresh debate's seat calls.
+
+    Stands in for a metered ``claude_code`` so the budget guard can be exercised end-to-end offline:
+    each ``seats`` turn appends a :class:`Usage` (the source of creation tagged provider + model).
+    """
+
+    name = "claude_code"
+
+    def __init__(self, cost_per_seat: float = 1.0) -> None:
+        self._cost = cost_per_seat
+        self.usage: list[Usage] = []
+
+    def argue(self, side: Side, brief: DigestInput) -> Case:
+        return Case(side=side, strength=2.0 if side is Side.BULL else 1.0, confidence=0.6)
+
+    def seats(self, brief: DigestInput) -> tuple[Case, Case]:
+        for _ in range(2):  # one bull + one bear call
+            self.usage.append(Usage("claude_code", "opus", 100, 40, self._cost))
+        return self.argue(Side.BULL, brief), self.argue(Side.BEAR, brief)
+
+    def synthesize(
+        self, brief: DigestInput, bull: Case, bear: Case, *, present_bear_first: bool = False
+    ) -> Proposal:
+        self.usage.append(Usage("claude_code", "opus", 80, 20, self._cost))
+        return Proposal(action=LeanAction.HOLD, confidence=0.7)
+
+
+def test_a_monthly_budget_throttles_the_overflow_and_records_cost(tmp_path, monkeypatch) -> None:
+    # The cross-provider budget guard: with a ceiling below the book's cost, the core book argues by
+    # priority (holdings first) and the overflow degrades to abstain-with-error 'monthly budget
+    # exhausted' — a partial-but-valid artifact, the cap outside the model like the trend gate.
+    provider = _PricyProvider(cost_per_seat=1.0)  # ≥ $3 per item (bull + bear + synthesis)
+    monkeypatch.setattr("factor_scope.pipeline.get_provider", lambda name, **_: provider)
+
+    p = _paths(tmp_path)
+    cfg = Config(
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+        spend_path=tmp_path / "spend.jsonl",
+        provider="claude_code",
+        monthly_budget_usd=7.0,  # room for two items (~$6); the rest is throttled
+    )
+    dash, record = nightly(cfg)
+
+    # The artifact is still valid and complete; only the leans degrade.
+    Dashboard.model_validate(json.loads(p["output"].read_text(encoding="utf-8")))
+    throttled = [f for f in record.digest_failures if "monthly budget" in f.error]
+    assert throttled, "exceeding the budget must throttle the overflow"
+    assert record.budget_exhausted is True
+
+    # The run records per-(provider, model) token/cost and the month-to-date against the ceiling.
+    assert record.costs and record.costs[0].provider == "claude_code"
+    assert record.cost_usd > 0.0
+    assert record.month_to_date_usd == pytest.approx(record.cost_usd)
+    assert record.monthly_budget_usd == 7.0
+    # The spend ledger captured it for the next run's month-to-date.
+    assert (tmp_path / "spend.jsonl").read_text(encoding="utf-8").strip()
 
 
 def test_a_second_night_reuses_cached_debates_on_a_durable_store(tmp_path, monkeypatch) -> None:

@@ -20,12 +20,13 @@ deterministic :class:`FakeReranker`, so the suite stays byte-for-byte without a 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from factor_scope.config import ModelSpec
+from factor_scope.cost import Price, Usage, price_usd, split_model
 from factor_scope.emerging.stage_b import FundScore
 
 if TYPE_CHECKING:
@@ -69,6 +70,14 @@ class Reranker(Protocol):
 
     def read(self, theme: str, score: FundScore) -> float: ...
 
+    @property
+    def usage(self) -> Sequence[Usage]:
+        """Per-call cost records the re-rank meters into the spend ledger + budget.
+
+        The real LLM appends one per finalist read; the deterministic fake meters nothing (empty).
+        """
+        ...
+
 
 class FakeReranker:
     """The offline stand-in: a deterministic pure-play read, no network and no keys.
@@ -77,6 +86,9 @@ class FakeReranker:
     fund's *measured* pure-play (the mapping-derived methodology), so a cleaner pure-play wins a
     near-tie. Deterministic given a snapshot, so the suite stays byte-for-byte.
     """
+
+    # Deterministic and free — it meters nothing, so the offline ledger + budget stay empty.
+    usage: Sequence[Usage] = ()
 
     def read(self, theme: str, score: FundScore) -> float:
         return max(0.0, min(1.0, score.candidate.methodology))
@@ -91,8 +103,11 @@ class LLMReranker:
     code — the deterministic fake covers the offline path.
     """
 
-    def __init__(self, model: ModelSpec) -> None:
+    def __init__(self, model: ModelSpec, prices: Mapping[str, Price]) -> None:
         self._model = model
+        self._prices = prices
+        # Per-call cost records, in call order (one per finalist read) — for the spend ledger.
+        self.usage: list[Usage] = []
 
     def read(self, theme: str, score: FundScore) -> float:  # pragma: no cover - host-only deps
         import os
@@ -119,7 +134,21 @@ class LLMReranker:
         agent = Agent(model, output_type=_Read, instructions=_RERANK_INSTRUCTIONS)
         c = score.candidate
         seed = f"Theme: {theme}\nFund: {c.name} ({c.code})\nMeasured pure-play: {c.methodology:.2f}"
-        read: _Read = agent.run_sync(seed).output
+        run = agent.run_sync(seed)
+        used = run.usage
+        provider, model_name = split_model(self._model.model)
+        input_tokens = int(used.input_tokens or 0)
+        output_tokens = int(used.output_tokens or 0)
+        self.usage.append(
+            Usage(
+                provider=provider,
+                model=model_name,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=price_usd(model_name, input_tokens, output_tokens, self._prices),
+            )
+        )
+        read: _Read = run.output
         return max(0.0, min(1.0, read.preference))
 
 
@@ -137,7 +166,8 @@ def get_reranker(config: Config) -> Reranker:
 
     if config.source == "fixtures":
         return FakeReranker()
-    return LLMReranker(RERANK_MODEL)  # pragma: no cover - production engine, host-only deps
+    # pragma: no cover - production engine, host-only deps
+    return LLMReranker(RERANK_MODEL, config.model_prices)
 
 
 def _fresh(candidate_as_of: str, run_as_of: str) -> bool:

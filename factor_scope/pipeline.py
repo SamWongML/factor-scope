@@ -32,6 +32,13 @@ from factor_scope.contract import (
     ListName,
     RubricScore,
 )
+from factor_scope.cost import (
+    BudgetGuard,
+    Usage,
+    append_spend,
+    month_to_date_usd,
+    total_usd,
+)
 from factor_scope.digest import (
     DEFAULT_HORIZON_D,
     Debate,
@@ -171,14 +178,25 @@ def discover(config: Config) -> int:
             corpus = textstream.fetch_live(config.textstream_feed_url, fetched_at=fetched_at)
         store.append(corpus)
         docs = build_stream_docs(store.read_as_of(textstream.SERIES, as_of))
+        assessor = get_assessor(config)
+        # The monthly USD ceiling spans every job — the research run reads its month-to-date from
+        # the same ledger the nightly seats meter into, and books its own spend. None → unlimited.
+        spend = (
+            BudgetGuard(config.monthly_budget_usd, month_to_date_usd(config.spend_path, as_of))
+            if config.monthly_budget_usd is not None
+            else None
+        )
         themes = discover_themes(
             docs,
             get_topic_model(config),
-            get_assessor(config),
+            assessor,
             as_of=as_of,
             fetched_at=fetched_at,
+            budget=spend,
         )
-        return store.append(themes)
+        n = store.append(themes)
+        append_spend(config.spend_path, as_of=as_of, job="discovery", usages=assessor.usage)
+        return n
     finally:
         store.close()
 
@@ -383,7 +401,10 @@ def _attach_leans(
     *,
     near_misses: dict[str, tuple[str, ...]],
     max_debate_items: int | None = None,
+    monthly_budget_usd: float | None = None,
+    spent_usd: float = 0.0,
     digest_failures: list[DigestFailure] | None = None,
+    usage_sink: list[Usage] | None = None,
 ) -> None:
     """Digest each item into a calibrated lean, then log it as a falsifiable call.
 
@@ -406,6 +427,9 @@ def _attach_leans(
     # unchanged item reuses a prior night's debate (the offline path writes no derived readings).
     cache = _DebateCache(store, as_of) if provider_name != "fake" else None
     budget = SeatBudget(max_debate_items) if max_debate_items is not None else None
+    # The monthly USD ceiling, seeded with the month's prior spend — once crossed the overflow
+    # degrades to abstain-with-error, exactly like the seat-count cap (both outside the model).
+    spend = BudgetGuard(monthly_budget_usd, spent_usd) if monthly_budget_usd is not None else None
     # Idempotent on a durable store: never log a second call for a code already called tonight, so
     # re-running the same night can't double-count in next run's score (the store is append-only).
     logged_tonight = {c.call_id for c in read_calls(store, as_of) if c.as_of == as_of}
@@ -427,7 +451,7 @@ def _attach_leans(
             as_of=as_of,
             near_misses=near_misses.get(code, ()),
         )
-        result = digest_item(provider, brief, cache=cache, budget=budget)
+        result = digest_item(provider, brief, cache=cache, budget=budget, spend=spend)
         item.lean = Lean(action=result.action, confidence=result.confidence, text=result.text)
         item.evolution = result.evolution
         item.flip_trigger = result.flip_trigger
@@ -459,6 +483,9 @@ def _attach_leans(
             fetched_at=as_of,
         )
         logged_tonight.add(call_id)
+    # Surface the seats' per-call cost for the ledger + run log (empty on the free fake provider).
+    if usage_sink is not None:
+        usage_sink.extend(provider.usage)
 
 
 def _theme_from_reading(reading: Reading) -> Theme:
@@ -688,6 +715,7 @@ def build_dashboard(
     config: Config,
     *,
     digest_failures: list[DigestFailure] | None = None,
+    usage_sink: list[Usage] | None = None,
     market: Market | None = None,
 ) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
@@ -696,8 +724,12 @@ def build_dashboard(
     fixtures ingest is stamped deterministically, so a fixtures run reproduces byte-for-byte.
 
     ``digest_failures`` is an optional sink the nightly job passes to collect any items whose seat
-    call raised (each degraded to abstain) for the ops run log; it never affects the artifact.
-    ``market`` overrides the config-selected adapter (used to drive the pipeline from fake sources).
+    call raised or was throttled (each degraded to abstain) for the ops run log; it never affects
+    the artifact. ``usage_sink`` collects this run's per-call cost (the re-rank + the seats) for the
+    ledger + run log. With ``config.monthly_budget_usd`` set, the seats are capped by the calendar
+    month's spend-to-date (read from ``config.spend_path``) so an over-budget run degrades its
+    lower-priority items to abstain — a partial-but-valid artifact. ``market`` overrides the
+    config-selected adapter (used to drive the pipeline from fake sources).
     """
 
     as_of = _resolve_as_of(config)
@@ -731,11 +763,20 @@ def build_dashboard(
         _attach_connections(core_pairs, graph, book, as_of)
         # The emerging list is the funnel's output, not a hand-placed position; it owns
         # its own overlap-with-core connections, so it is built after the core look-through.
-        emerging_pairs, near_misses = _build_emerging(
-            store, graph, as_of, book, get_reranker(config)
-        )
+        reranker = get_reranker(config)
+        emerging_pairs, near_misses = _build_emerging(store, graph, as_of, book, reranker)
         pairs = core_pairs + emerging_pairs
         _attach_scorecard(pairs, store, as_of)
+        # Seed the seats' monthly budget with the month's prior spend plus this run's re-rank cost
+        # (which already happened above), so the guard accounts for all of it. The re-rank usage
+        # also joins the ledger + run-log telemetry. The fake provider/reranker meter 0 → spent 0.
+        spent = (
+            month_to_date_usd(config.spend_path, as_of)
+            if config.monthly_budget_usd is not None
+            else 0.0
+        ) + total_usd(reranker.usage)
+        if usage_sink is not None:
+            usage_sink.extend(reranker.usage)
         _attach_leans(
             pairs,
             store,
@@ -743,8 +784,11 @@ def build_dashboard(
             config.provider,
             config.model_for_task(TASK_DEBATE),
             max_debate_items=config.max_debate_items,
+            monthly_budget_usd=config.monthly_budget_usd,
+            spent_usd=spent,
             near_misses=near_misses,
             digest_failures=digest_failures,
+            usage_sink=usage_sink,
         )
         items = [item for _, item in pairs]
     finally:
@@ -760,11 +804,14 @@ def run(
     config: Config,
     *,
     digest_failures: list[DigestFailure] | None = None,
+    usage_sink: list[Usage] | None = None,
     market: Market | None = None,
 ) -> Dashboard:
     """Build the dashboard, persist it to ``config.output_path``, and record it in the history."""
 
-    dash = build_dashboard(config, digest_failures=digest_failures, market=market)
+    dash = build_dashboard(
+        config, digest_failures=digest_failures, usage_sink=usage_sink, market=market
+    )
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     config.output_path.write_text(dash.model_dump_json(indent=2), encoding="utf-8")
     history.record(dash, history.resolve_history_dir(config))
@@ -822,9 +869,14 @@ def nightly(
         # append the night's readings into the durable store + materialise the graph
         ingest(config, market=market)
     digest_failures: list[DigestFailure] = []
-    # build + write; logs each lean as a call
-    dash = run(config, digest_failures=digest_failures, market=market)
+    usages: list[Usage] = []
+    # build + write; logs each lean as a call and collects this run's per-call spend
+    dash = run(config, digest_failures=digest_failures, usage_sink=usages, market=market)
     ended_at = clock()
+    # The ledger is the cross-job budget source: read the month-to-date *before* this run, then book
+    # this run's spend (append-only), so the record's month-to-date includes tonight.
+    prior_month_to_date = month_to_date_usd(config.spend_path, as_of)
+    append_spend(config.spend_path, as_of=as_of, job="nightly", usages=usages)
     record = summarize_run(
         dash,
         started_at=started_at,
@@ -832,6 +884,9 @@ def nightly(
         provider=config.provider,
         n_calls_logged=_count_calls_logged(config, as_of),
         output_path=str(config.output_path),
+        usages=tuple(usages),
+        month_to_date_usd=prior_month_to_date + total_usd(usages),
+        monthly_budget_usd=config.monthly_budget_usd,
         digest_failures=tuple(digest_failures),
     )
     append_run_log(config.log_path, record)

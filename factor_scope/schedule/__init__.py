@@ -7,7 +7,7 @@ Two thin, deterministic pieces live here:
   path) or a **cron** line (the Linux alternative) from a :class:`ScheduleSpec`. Pure string
   renders, so the scheduled job is reviewable before it is ever installed.
 - :mod:`~factor_scope.schedule.runlog` — a structured, append-only :class:`RunRecord` ops log
-  (start/end, item counts, abstains, provider, cost note) written beside ``dashboard.json``.
+  (start/end, item counts, abstains, provider, per-provider cost + budget) by ``dashboard.json``.
 
 The orchestration itself (ingest → compute → digest → write artifact → log run → persist calls)
 is :func:`factor_scope.pipeline.nightly`.
@@ -26,7 +26,6 @@ from factor_scope.schedule.runlog import (
     DigestFailure,
     RunRecord,
     append_run_log,
-    cost_note,
     summarize_run,
 )
 
@@ -37,7 +36,6 @@ __all__ = [
     "RunRecord",
     "ScheduleSpec",
     "append_run_log",
-    "cost_note",
     "render_cron_line",
     "render_launchd_plist",
     "summarize_run",

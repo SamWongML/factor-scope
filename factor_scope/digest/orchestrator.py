@@ -25,6 +25,7 @@ from datetime import date
 from typing import Protocol
 
 from factor_scope.contract import Band, GateState, LeanAction, ListName
+from factor_scope.cost import BudgetGuard
 from factor_scope.digest.fake import FLAT_EPS
 from factor_scope.digest.provider import Case, DigestInput, LLMProvider, Proposal
 from factor_scope.scoring.scorecard import confidence_nudge, dampen_for_weak_pattern
@@ -497,6 +498,7 @@ def digest_item(
     *,
     cache: DebateCache | None = None,
     budget: SeatBudget | None = None,
+    spend: BudgetGuard | None = None,
 ) -> DigestResult:
     """Run the debate and emit one item's guardrail-checked lean (the synthesis seat).
 
@@ -507,9 +509,10 @@ def digest_item(
 
     With a ``cache``, an item whose decision-relevant brief is unchanged (same :func:`digest_key`)
     reuses a prior night's debate instead of re-arguing the seats — the nightly cost — while the
-    hard guardrails still re-run on it. A ``budget`` caps how many *fresh* debates the night argues:
-    only a cache miss on a seeing item claims a slot, and once they are spent the item
-    abstains-with-error instead of arguing. Blind and reused items spend nothing.
+    hard guardrails still re-run on it. Two caps live outside the model like the trend gate: a
+    ``budget`` caps how many *fresh* debates the night argues, and a ``spend`` caps the month's
+    fresh USD — once either is spent the item abstains-with-error instead of arguing, and the
+    realised cost of any fresh debate is charged to ``spend``. Blind and reused items spend nothing.
     """
 
     tokens = state_tokens(brief)
@@ -518,16 +521,30 @@ def digest_item(
 
     debate = cache.get(brief) if cache is not None else None
     if debate is None:
+        # The pure month-to-date check comes before the seat-slot claim (which mutates), so a
+        # budget-blocked item never burns a slot.
+        if spend is not None and not spend.affordable():
+            return _abstain(brief, tokens, error="monthly budget exhausted")
         if budget is not None and not budget.claim():
             return _abstain(brief, tokens, error="seat budget exhausted")
+        spent_before = len(provider.usage) if spend is not None else 0
         try:
             debate = _run_debate(provider, brief)
         except Exception as exc:  # noqa: BLE001 - any seat failure degrades; never abort the run
+            _charge_fresh(spend, provider, spent_before)
             return _abstain(brief, tokens, error=f"{type(exc).__name__}: {exc}")
+        _charge_fresh(spend, provider, spent_before)
         if cache is not None:
             cache.put(brief, debate)
 
     return _apply_guardrails(brief, debate, tokens)
+
+
+def _charge_fresh(spend: BudgetGuard | None, provider: LLMProvider, spent_before: int) -> None:
+    """Book the USD the provider just spent (the seat calls made since ``spent_before``)."""
+
+    if spend is not None:
+        spend.charge(sum(u.cost_usd for u in provider.usage[spent_before:]))
 
 
 __all__ = [

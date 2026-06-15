@@ -7,8 +7,9 @@ loaded from the committed seat definition in ``.claude/agents/{bull,bear,synthes
 source of truth — the committed agents are what actually drive the seats); the model returns a small
 JSON object we parse into a :class:`~factor_scope.digest.provider.Case` /
 :class:`~factor_scope.digest.provider.Proposal`. The stream-json transcript's final ``result``
-message also carries a per-call **cost envelope** (tokens + USD), which the provider accumulates on
-:attr:`ClaudeCodeProvider.costs` for downstream budget telemetry.
+message also carries a per-call cost (tokens + USD), which the provider records as a
+:class:`~factor_scope.cost.Usage` on :attr:`ClaudeCodeProvider.usage` — tagged ``provider`` /
+``model`` so every spend traces to its source — for downstream budget telemetry.
 
 The seats run on the configured **deep-think** model (Claude Opus-class), passed via ``--model``.
 The hard guardrails (gate, abstain, scorecard) are still enforced by the orchestrator on top of
@@ -19,10 +20,10 @@ module) never shells out and the fake-only CI path stays offline.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from factor_scope.contract import LeanAction
+from factor_scope.cost import Usage
 from factor_scope.digest.provider import Case, DigestInput, Proposal, Side
 
 # The seat system prompts live in the committed agent definitions, never inline here — one source of
@@ -39,16 +40,6 @@ def _load_seat_prompt(name: str) -> str:
     return "\n".join(lines).strip()
 
 
-@dataclass(frozen=True)
-class CostEnvelope:
-    """One seat call's cost from the stream-json ``result`` message (for budget telemetry)."""
-
-    cost_usd: float
-    input_tokens: int
-    output_tokens: int
-    duration_ms: int
-
-
 class ClaudeCodeProvider:
     """An :class:`~factor_scope.digest.provider.LLMProvider` backed by headless Claude Code."""
 
@@ -57,8 +48,8 @@ class ClaudeCodeProvider:
     def __init__(self, *, model: str | None = None, timeout_s: float = 120.0) -> None:
         self._model = model
         self._timeout_s = timeout_s
-        # Per-call cost envelopes, in call order — one per seat turn, for budget telemetry.
-        self.costs: list[CostEnvelope] = []
+        # Per-call cost records, in call order — one per seat turn, for budget telemetry.
+        self.usage: list[Usage] = []
 
     def argue(self, side: Side, brief: DigestInput) -> Case:
         system = _load_seat_prompt("bull" if side is Side.BULL else "bear")
@@ -104,8 +95,16 @@ class ClaudeCodeProvider:
         ]
         if self._model:
             cmd += ["--model", self._model]
-        parsed, envelope = _parse_stream_json(self._invoke(cmd))
-        self.costs.append(envelope)
+        parsed, input_tokens, output_tokens, cost_usd = _parse_stream_json(self._invoke(cmd))
+        self.usage.append(
+            Usage(
+                provider=self.name,
+                model=self._model or "",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+            )
+        )
         return parsed
 
     def _invoke(self, cmd: list[str]) -> str:
@@ -119,13 +118,14 @@ class ClaudeCodeProvider:
         return completed.stdout
 
 
-def _parse_stream_json(stdout: str) -> tuple[dict[str, object], CostEnvelope]:
-    """Parse a ``--output-format stream-json`` transcript into the seat's JSON + its cost envelope.
+def _parse_stream_json(stdout: str) -> tuple[dict[str, object], int, int, float]:
+    """Parse a ``--output-format stream-json`` transcript into the seat's JSON + its cost.
 
     The transcript is JSONL; its final ``result``-type message carries the assistant text under
-    ``result`` (which is itself the seat's small JSON object) plus the cost envelope. A transcript
-    with no result message, or a result that is not a JSON object, raises — the orchestrator catches
-    that and degrades the item to abstain (invalid degrades, never aborts the run).
+    ``result`` (which is itself the seat's small JSON object) plus the call cost (input/output
+    tokens + USD). A transcript with no result message, or a result that is not a JSON object,
+    raises — the
+    orchestrator catches that and degrades the item to abstain (invalid degrades, never aborts).
     """
 
     import json
@@ -147,13 +147,12 @@ def _parse_stream_json(stdout: str) -> tuple[dict[str, object], CostEnvelope]:
         raise ValueError(f"claude_code: expected a JSON object, got {type(parsed).__name__}")
     usage = result_msg.get("usage")
     usage = usage if isinstance(usage, dict) else {}
-    envelope = CostEnvelope(
-        cost_usd=_as_float(result_msg.get("total_cost_usd")),
-        input_tokens=int(_as_float(usage.get("input_tokens"))),
-        output_tokens=int(_as_float(usage.get("output_tokens"))),
-        duration_ms=int(_as_float(result_msg.get("duration_ms"))),
+    return (
+        parsed,
+        int(_as_float(usage.get("input_tokens"))),
+        int(_as_float(usage.get("output_tokens"))),
+        _as_float(result_msg.get("total_cost_usd")),
     )
-    return parsed, envelope
 
 
 def _as_float(value: object) -> float:
@@ -225,4 +224,4 @@ def _brief_prompt(brief: DigestInput) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["ClaudeCodeProvider", "CostEnvelope"]
+__all__ = ["ClaudeCodeProvider"]
