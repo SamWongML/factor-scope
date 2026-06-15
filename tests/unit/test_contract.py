@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from factor_scope.contract import (
     BullBearIndex,
@@ -14,7 +15,9 @@ from factor_scope.contract import (
     GateState,
     Lean,
     ListName,
+    ReliabilityBucket,
     RubricScore,
+    Scorecard,
     dashboard_json_schema,
 )
 
@@ -91,6 +94,24 @@ def test_item_index_defaults_none_and_roundtrips() -> None:
     assert restored == scored
 
 
+def test_scorecard_is_frozen_and_roundtrips() -> None:
+    # The scorecard is the descriptive self-scoring mirror: an immutable model that survives a
+    # JSON round-trip unchanged. Freezing it locks the contract — the mirror is built once and
+    # shared read-only onto every item; it can never be mutated in place after the fact.
+    card = Scorecard(
+        window="60d",
+        n=12,
+        brier=0.18,
+        skill_vs_baserate="+0.04",
+        reliability=[ReliabilityBucket(bucket=0.7, realised=0.6, note="overconfident")],
+        weak_patterns=["reversal:xhigh overconfident"],
+    )
+    restored = Scorecard.model_validate_json(card.model_dump_json())
+    assert restored == card
+    with pytest.raises(ValidationError):
+        card.n = 99  # type: ignore[misc]
+
+
 def test_dashboard_roundtrips_through_json() -> None:
     dash = Dashboard(
         as_of="2026-06-05",
@@ -98,11 +119,29 @@ def test_dashboard_roundtrips_through_json() -> None:
         snapshot_id="snap-abc123",
         items=[DashboardItem(item="通信ETF", list=ListName.WATCHLIST)],
     )
+    assert dash.schema_version == 2  # the frozen per-product-index contract surface
     blob = dash.model_dump_json()
     restored = Dashboard.model_validate_json(blob)
     assert restored == dash
     # And it is plain JSON (no exotic types leak into the artifact).
     json.loads(blob)
+
+
+def test_older_snapshot_parses() -> None:
+    # A night recorded under the pre-index v1 contract still parses: its stored schema_version is
+    # preserved verbatim (history is immutable — an old night is never silently rewritten to v2).
+    legacy = json.dumps(
+        {
+            "schema_version": 1,
+            "as_of": "2026-05-01",
+            "generated_at": "2026-05-01T22:00:00Z",
+            "snapshot_id": "snap-legacy",
+            "items": [{"item": "通信ETF", "list": "holdings"}],
+        }
+    )
+    restored = Dashboard.model_validate_json(legacy)
+    assert restored.schema_version == 1
+    assert restored.items[0].index is None
 
 
 def test_dashboard_index_roundtrips_through_json() -> None:

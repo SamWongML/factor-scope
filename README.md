@@ -48,7 +48,7 @@ One file, one schema version, three lists (`holdings · watchlist · emerging`).
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "as_of": "2026-06-05",
   "generated_at": "2026-06-05T22:00:00Z",
   "items": [
