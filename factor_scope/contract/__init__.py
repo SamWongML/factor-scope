@@ -131,6 +131,8 @@ class Scorecard(BaseModel):
     supply a number. Display is gated on a minimum sample so noise cannot mislead.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     window: str = "60d"
     n: int = 0
     brier: float | None = None
@@ -177,7 +179,7 @@ class DashboardItem(BaseModel):
 class Dashboard(BaseModel):
     """The dated morning artifact: one run → one dashboard.json."""
 
-    schema_version: int = 1
+    schema_version: int = 2  # v2 adds the per-product bull/bear index; the contract is now frozen
     as_of: str  # the as-of date the engine reasoned on (point-in-time)
     generated_at: str  # when this artifact was produced
     snapshot_id: str  # fingerprint of the frozen store state this run read (see store.snapshot_id)
