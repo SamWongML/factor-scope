@@ -247,7 +247,85 @@ situation as much as possible" under a growing dataset.
 
 ---
 
-## 8. What explicitly does not change
+## 8. Capacity — does DuckDB hold for a year and well beyond?
+
+Yes, with large headroom — but the load-bearing fix is the *access pattern*, not the engine. The two
+must not be conflated.
+
+### 8.1 How big the store actually gets
+
+The engine needs *daily* series (price, turnover, fundamentals) only for the items it reasons over —
+the book, the watchlist, and each theme's candidate pool — plus *quarterly* holdings for the graph.
+It does **not** need a decade of daily rows for all ~11k–12k CN public funds; the full universe is
+read mostly for metadata, mapping (overlap + return correlation), and the funnel. CN trading days
+≈ 244/year.
+
+| Daily-series scope | Codes | 1 yr, one series | 5 yr, three heavy daily series | 10 yr |
+|---|---|---|---|---|
+| Book + watchlist only | ~50 | ~12 k rows | ~0.18 M | ~0.37 M |
+| Theme candidate pool | ~1,000 | ~244 k | ~3.7 M | ~7.3 M |
+| Full universe (generous) | ~12,000 | ~2.9 M | ~44 M | ~88 M |
+
+Quarterly `fund_holdings` adds ~0.1–1 M rows/year even at full-universe top-10; `fred`/`demand`/
+`themes`/`calls` are negligible. A `prices` payload is a float plus a source tag, so in Parquet
+(dictionary/RLE encoded) a row is ~10–30 bytes: **even the generous 10-year case (~88 M rows) is
+≈1–2 GB**. The only series that can grow fast is discovery's `textstream` corpus — and it is already
+*excluded* from the reasoning snapshot (`snapshot_id(... exclude=(...))`), so it never enters the
+nightly reasoning hot path; its real cost is embedding storage, governed separately and TTL-able.
+
+### 8.2 DuckDB's headroom against those numbers
+
+DuckDB targets the "forgotten middle" (≈10 GB–100 TB) on a single node and has a state-of-the-art
+**out-of-core** engine that spills sort/join/aggregate to disk for larger-than-RAM work
+([DuckDB OOM / out-of-core guide][duckdb-oom]). Published single-machine benchmarks:
+
+- **TPC-H SF1000 ≈ 265 GB / 6 B + 1.5 B rows** runs on a laptop.
+- **SF3,000 and SF10,000 (~4 TB Parquet → 2.7 TB DuckDB, ~3.6 TB spill)** complete on a 128 GB
+  Framework laptop ([DuckDB ecosystem, Oct 2025][md-eco]).
+- Highly-**selective** aggregations over 250–500 GB partitioned Parquet return **sub-minute** on a
+  16 GB laptop ([DuckDB vs Polars on Parquet][cc-polars]).
+
+This engine's 10-year store (~1–2 GB, low tens of millions of rows) is **two to three orders of
+magnitude below** where DuckDB begins to strain, and the point-in-time reads are exactly the
+*selective* shape those benchmarks reward (one series, an `as_of` range, latest-per-key). Sub-second,
+indefinitely.
+
+### 8.3 The real risk was algorithmic, and §5 removes it
+
+Capacity was never the threat; three **O(entire history)** patterns were, and they would bite at a
+few million rows on *any* engine:
+
+- `snapshot_id` loading all readings ≤ D into Python to hash → **§5.1** makes it an incremental
+  per-day-digest fold (O(nightly delta)).
+- `read_as_of` window-scanning the whole series → **§5.1** prunes by `as_of`/partition.
+- `build_graph_from_store` rebuilding from full history each night → **§5.2** processes only the new
+  disclosures.
+
+With these, **per-night cost stays flat as history grows** — the engine does work proportional to one
+night's new facts, not to the accumulated decade. That, not raw DuckDB capacity, is what makes "one
+year and well beyond" safe. Partitioned Parquet (**§5.1**) is then a memory/locality optimisation
+(up to ~8× lower peak memory), not a necessity, and DuckLake/ArcticDB are reserved for the conditions
+that actually warrant them (a *live-store* multi-reader API, or genuinely billions of rows) — neither
+of which this single-user engine reaches on the foreseeable horizon.
+
+### 8.4 Concurrency at one year+ (the served future)
+
+DuckDB is **single-writer, multi-reader**: one read-write process, many `access_mode=READ_ONLY`
+readers ([DuckDB concurrency][duckdb-conc]). Today `serve` reads the immutable *artifacts*, not the
+store, so there is zero writer/reader contention regardless of size. If a future endpoint reads the
+store live, open it read-only (the nightly job is the sole writer) or move that read path to
+partitioned Parquet / DuckLake so readers never share the writer's lock — which is precisely the
+**§5.3 / §5.1** direction. Size does not change this; it is a concurrency-model choice, settled by the
+single-nightly-writer shape the engine already has.
+
+**Bottom line:** after one year the reasoning store is well under a gigabyte and a few million rows;
+after a decade it is low-single-digit gigabytes — comfortably inside DuckDB on a laptop with the
+access-pattern fixes of §5 keeping nightly work constant. DuckDB is not the limiting factor for the
+foreseeable life of this system.
+
+---
+
+## 9. What explicitly does not change
 
 The append-only point-in-time semantics, the one-way snapshot boundary, `generated_at` derived from
 `as_of` (no wall clock in the artifact), no-composite factors, guardrails server-side of the model,
@@ -271,3 +349,7 @@ reading a growing history.
 [etag]: https://www.baeldung.com/etags-for-rest-with-spring
 [moz-immut]: https://hacks.mozilla.org/2017/01/using-immutable-caching-to-speed-up-the-web/
 [knit-page]: https://www.getknit.dev/blog/api-pagination-best-practices
+[duckdb-oom]: https://duckdb.org/docs/current/guides/troubleshooting/oom_errors
+[md-eco]: https://motherduck.com/blog/duckdb-ecosystem-newsletter-october-2025/
+[cc-polars]: https://www.codecentric.de/en/knowledge-hub/blog/duckdb-vs-polars-performance-and-memory-with-massive-parquet-data
+[duckdb-conc]: https://duckdb.org/docs/current/connect/concurrency
