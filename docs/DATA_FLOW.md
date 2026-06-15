@@ -325,7 +325,105 @@ foreseeable life of this system.
 
 ---
 
-## 9. What explicitly does not change
+## 9. Live data resources, and how the design absorbs them
+
+A live run pulls from a wide, heterogeneous set of feeds — multiple CN scrapers, two US filing
+systems, a macro service, a news/text stream, and LLM endpoints. The point of this section is to
+confirm that the bronze envelope and the protocol seams absorb all of them, and to flag the two
+point-in-time refinements the research surfaced.
+
+### 9.1 Full inventory (every `fetch_live` in the repo)
+
+| Series | Region | Source / library | Endpoint or call | Cadence | Role |
+|---|---|---|---|---|---|
+| `positions` | — | local `positions.csv` | file | on edit | the user's book (only always-local source) |
+| `prices` | CN | **AkShare** (Eastmoney) → **Baostock** → **Mootdx/TDX** | `fund_etf_hist_em` · `query_history_k_data_plus` · `Quotes.bars` | daily | NAV, **triple-sourced, median-reconciled** |
+| `trading_activity` | CN | AkShare (Eastmoney) | `fund_etf_hist_em` | daily | turnover → crowding |
+| `fundamentals` | CN | AkShare (funddb/乐咕) | `index_value_hist_funddb` | daily | PE/PB → valuation |
+| `etf_scale` | CN | AkShare (SSE/SZSE) | `fund_etf_scale_sse` / `_szse` | daily/weekly | AUM, shares |
+| `fund_universe` | CN | AkShare (Eastmoney) | `fund_etf_spot_em` · `fund_exchange_rank_em` · `fund_name_em` | daily | universe + inception/delisting |
+| `fund_holdings` | CN | AkShare (Eastmoney) | `fund_portfolio_hold_em` | quarterly | look-through **graph edges** |
+| `demand` | CN | AkShare (macro) | `macro_china_industrial_production_yoy` | monthly | end-demand dial |
+| `edgar` | US | **EdgarTools** (`data.sec.gov`) | `13F-HR` (shares → lead-chain) · `NPORT-P` (weight → **graph edges**) | quarterly / monthly | US lead + US fund look-through |
+| `fred` | US | **fredapi** (St. Louis Fed) | `DGS10, DFII10, T10YIE, DTWEXBGS, DEXCHUS, WALCL` | daily–monthly | rates / real-rate / dollar / Fed liquidity |
+| `textstream` | CN/global | **httpx** feed | `GET feed_url` (CSV) | event/stream | news / research / filings corpus for discovery |
+| *(discovery model)* | — | **BERTopic** + sentence-transformers | local embeddings (MPS/CPU) | per discovery run | clusters `textstream` → themes |
+| *(judgment)* | — | **claude_code** (`claude -p`) · **DeepSeek** (`api.deepseek.com`) · pydantic-ai (discovery) | subprocess / HTTPS | per item / theme | LLM-derived fields, written as Readings |
+
+So a live run spans **~7 CN feeds (three of them redundant sources for one series), two US filing
+systems, six FRED series, a text feed, a local embedding model, and 2–3 LLM endpoints** — exactly the
+"hundreds of heterogeneous sources, each with different formats, cadence, and reliability" that the
+bronze-layer literature is written for ([Databricks medallion][db-med2], [bronze-layer best
+practice][bronze-bp]).
+
+### 9.2 Why the envelope already absorbs this
+
+The bronze best-practice checklist — *preserve raw, transform nothing; tag provenance + ingestion
+metadata; declare a system-of-record hierarchy; document survivorship* ([bronze-bp][bronze-bp]) — is
+already satisfied, feed-agnostically:
+
+- **One envelope normalises every feed.** AkShare frames, EdgarTools objects, FRED series, and a news
+  CSV all land as `Reading(series, key, as_of, fetched_at, payload)`. Adding a source is adding a
+  `fetch_live` that emits Readings — no schema migration, no new table. Partition-by-`series` (§5.1)
+  maps one-to-one onto these source families, so each feed is its own pruned partition path.
+- **Provenance is first-class.** `series` + `fetched_at` + the `payload["source"]` tag (akshare /
+  baostock / mootdx; 13F vs N-PORT) record where and when each fact came from — and crucially the
+  content-hash dedup of §5.1 **must keep `source` in the identity**, so two sources for the same
+  fund/day stay distinct rows (the current PK already does this; the redesign preserves it).
+- **System-of-record + reconciliation already exists.** Prices use an explicit hierarchy (AkShare →
+  Baostock → Mootdx) with **median** consensus and divergence flagging — the textbook
+  "conflicting sources → ranked system of record + documented survivorship" pattern.
+- **Survivorship is modelled.** Delisting is disclosed when a fund leaves the feed; graph edges close
+  per-source calendar (an N-PORT date never closes a 13F window). This is the anti-hype/survivorship
+  requirement (`U13`) the live US/CN holdings feeds demand.
+- **The LLM is just another (non-deterministic) source.** DeepSeek/Claude-derived fields are produced
+  in *ingest* and written as Readings, then reasoned over deterministically from the frozen snapshot —
+  the snapshot boundary already classifies them correctly (`U03`/`U09`).
+
+### 9.3 Two point-in-time refinements the research surfaced
+
+The append-only, latest-`as_of`≤`D` design is the right shape for *revised* data, but two live feeds
+need their `as_of` chosen carefully or they leak look-ahead:
+
+1. **FRED is revised; stamp the vintage, not the observation date.** Macro series are restated, and
+   ALFRED exposes every vintage via `realtime_start`/`realtime_end` ([ALFRED point-in-time][alfred]).
+   Today `fred.fetch_live` stamps `as_of = observation_date` and takes only the latest value — so a
+   later revision of an old observation, if re-fetched, would collide on `as_of` and conflate
+   vintages. **Refinement:** stamp `as_of` with the **release/vintage date** (or carry
+   `realtime_start`), so the macro dial sees only what was *published* by `D`. This tightens the
+   no-look-ahead invariant for the one feed that revises history.
+2. **EDGAR has hard rate limits and filing lag; throttle and use the filing date.** SEC fair-access
+   caps automated traffic at **10 requests/second per IP; exceed it and the IP gets a 403 for ~10
+   minutes** ([SEC fair access][sec-rate]). 13F lags ~45 days and N-PORT ~60 days before becoming
+   public, so reasoning must key on **filing date, not period-of-report** — which `fetch_live`
+   already does (`as_of = filing_date`). **Refinement:** keep a ≤10 req/s throttle in the EDGAR
+   adapter and, for backfill, walk filings (not just `.latest(1)`) within that budget. The existing
+   retry/timeout/degrade scaffolding (`ingest/base.py`) is the right place for the throttle.
+
+### 9.4 Reliability and the high-volume outlier
+
+- **The CN scrapers are unofficial and rate-limited.** AkShare aggregates Eastmoney / 同花顺 / Tencent
+  / Sina / 雪球 and is explicitly "unstable, API limits vary by source"; Baostock is accurate but
+  narrower ([AkShare/Baostock comparison][ak-rel]). The triple-source + median + retry/timeout +
+  degrade-never-raise design is precisely the mitigation — and for the *durable* future, AkTools (an
+  HTTP service wrapper) or an official/paid leg can be added as a fourth source behind the same
+  reconciliation, no contract change. First-print snapshotting of 份额/AUM (ROADMAP §5) stays the rule
+  for the restated feeds.
+- **`textstream` is the one feed that grows fast.** A news/research corpus is high-churn and high
+  volume, and its embeddings (BERTopic / sentence-transformers) are heavier than any structured row.
+  The design already keeps it **out of the reasoning snapshot** (`snapshot_id` excludes it); the
+  durable refinement is to **partition + TTL the corpus and hold embeddings in a dedicated vector
+  store**, not the structured bronze — so the high-volume text path scales independently of the
+  point-in-time facts the engine reasons over. This is the §8.1 caveat made concrete.
+
+**Net:** the live-source multiplicity is fully absorbed by the existing envelope and protocols; the
+redesign needs no new ingestion concept for it. The only feed-specific work is the two point-in-time
+`as_of` refinements (FRED vintage, EDGAR throttle/backfill) and giving the text/embedding path its own
+partitioned + vector home — all additive, none touching the contract or the invariants.
+
+---
+
+## 10. What explicitly does not change
 
 The append-only point-in-time semantics, the one-way snapshot boundary, `generated_at` derived from
 `as_of` (no wall clock in the artifact), no-composite factors, guardrails server-side of the model,
@@ -353,3 +451,8 @@ reading a growing history.
 [md-eco]: https://motherduck.com/blog/duckdb-ecosystem-newsletter-october-2025/
 [cc-polars]: https://www.codecentric.de/en/knowledge-hub/blog/duckdb-vs-polars-performance-and-memory-with-massive-parquet-data
 [duckdb-conc]: https://duckdb.org/docs/current/connect/concurrency
+[db-med2]: https://learn.microsoft.com/en-us/azure/databricks/lakehouse/medallion
+[bronze-bp]: https://medium.com/@kishanraj41/bronze-layer-data-modeling-best-practices-8acebd540754
+[alfred]: https://alfred.stlouisfed.org/
+[sec-rate]: https://www.sec.gov/edgar/searchedgar/accessing-edgar-data.htm
+[ak-rel]: https://github.com/akfamily/akshare
