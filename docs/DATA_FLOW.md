@@ -6,6 +6,11 @@ then **exposed as an API serving a frontend**. It complements `docs/ROADMAP.md` 
 `U01`–`U17` issue set) and `CLAUDE.md` (the rules) — this note is about the *shape of the data flow*
 and whether it stays maintainable and scalable as the universe and the night count grow.
 
+> For the **one-year-plus / any-dataset-size** horizon — bounding the reasoning working set,
+> append-on-change storage, incrementalising the theme→fund mapping cliff, lakehouse tiering,
+> bounded reprocessing, and schema evolution — see the companion note `docs/DATA_FLOW_DURABILITY.md`.
+> This note is the necessary first layer; that note is what keeps it durable as history accumulates.
+
 ---
 
 ## 0. Verdict
