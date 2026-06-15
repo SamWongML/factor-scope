@@ -202,7 +202,7 @@ Nothing is dropped: every original issue survives as a re-scoped U-issue, a merg
 ### §3 — Full CN fund universe (→ U06; AkShare, lazy-imported)
 
 - `fund_name_em` → **all funds** (code, type, short name). `fund_etf_spot_em` → on-exchange ETF
-  universe. `fund_etf_scale_sse` / `fund_etf_scale_szse` → ETF share/AUM.
+  universe + ETF share/AUM (总市值 / 最新份额).
   `fund_portfolio_hold_em(symbol, date)` → **fund holdings** (the graph edges).
   `fund_individual_analysis_xq` → Xueqiu per-fund analysis → "all funds in China" is data
   engineering, not research. Capture **inception + delisting** dates for U13 *(landed: the

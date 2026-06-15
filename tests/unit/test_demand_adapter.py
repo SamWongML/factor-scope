@@ -38,8 +38,16 @@ def test_demand_rejects_a_non_numeric_value() -> None:
 
 
 def test_demand_maps_the_akshare_release_columns() -> None:
-    bars = [{"日期": "2026-03-31", "当月环比": "0.12"}]
-    reading = demand._from_bars(bars, fetched_at=FETCHED_AT)[0]
+    # the live release (日期 / 今值 / 前值, all the YoY growth rate) maps to the change in that
+    # rate — accelerating vs fading demand. The latest row whose actual (今值) has not printed
+    # yet is NaN and is dropped. Pinned offline so the mapping is covered without the network.
+    bars = [
+        {"日期": "2026-08-15", "今值": 5.7, "预测值": 6.0, "前值": 6.8},
+        {"日期": "2026-09-15", "今值": float("nan"), "预测值": float("nan"), "前值": 5.7},
+    ]
+    readings = demand._from_bars(bars, fetched_at=FETCHED_AT)
+    assert len(readings) == 1  # the unreleased forecast row is dropped, not raised on
+    reading = readings[0]
     assert reading.key == demand.KEY
-    assert reading.as_of == "2026-03-31"
-    assert reading.payload == {"revision": 0.12}
+    assert reading.as_of == "2026-08-15"
+    assert reading.payload["revision"] == pytest.approx(5.7 - 6.8)

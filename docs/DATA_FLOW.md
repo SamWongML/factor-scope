@@ -32,10 +32,10 @@ A live run is `factor-scope ingest` (fills the durable store) then `run`/`build_
 | # | Feed | Adapter | Live source | Granularity | What it returns per run |
 |---|------|---------|-------------|-------------|--------------------------|
 | 1 | **Fund universe** | `ingest/fund_universe.py` | AkShare `fund_name_em` + `fund_etf_spot_em` + `fund_exchange_rank_em` | bulk, all funds | **~20,000 rows** (one per fund, re-stamped `as_of`=tonight) |
-| 2 | **ETF scale (AUM/shares)** | `ingest/etf_scale.py` | AkShare `fund_etf_scale_sse` + `fund_etf_scale_szse` | bulk, both exchanges | ~1,000–2,000 rows |
+| 2 | **ETF scale (AUM/shares)** | `ingest/etf_scale.py` | AkShare `fund_etf_spot_em` | bulk, one frame spanning both exchanges | ~1,500 rows (one per ETF) |
 | 3 | **Fund holdings** | `ingest/fund_holdings.py` | AkShare `fund_portfolio_hold_em` | **per on-exchange ETF** | ~10–50 rows × **every on-exchange ETF** |
 | 4 | **Trading activity** (turnover 换手率 + 成交额) | `ingest/trading_activity.py` | AkShare `fund_etf_hist_em` | **per on-exchange ETF, FULL history** | **full daily history** × every ETF |
-| 5 | **Fundamentals (PE)** | `ingest/fundamentals.py` | AkShare `index_value_hist_funddb` | **per on-exchange ETF, FULL history** | **full PE history** × every ETF |
+| 5 | **Fundamentals (PE)** | `ingest/fundamentals.py` | AkShare `stock_zh_index_value_csindex` | **per mapped ETF's tracked index** | ~20 trailing PE rows × each mapped ETF |
 | 6 | **Prices / NAV** | `ingest/prices.py` (+ `baostock.py`, `mootdx.py`) | AkShare `fund_etf_hist_em`, Baostock, Mootdx — triple-sourced + reconciled | per code, **last bar only** | 1 reconciled row × **book codes only (3)** |
 | 7 | **End-demand revision** | `ingest/demand.py` | AkShare `macro_china_industrial_production_yoy` | bulk, one book-wide series | a handful of rows |
 
@@ -185,9 +185,10 @@ immutable JSON serving). Fix the write path; layer storage for growth.
 ### 5.1 Two ingest fixes (highest leverage — do these first)
 
 **(a) Incremental ingest (watermarks).** Before fetching a series/key, read its latest stored
-`as_of` and request only newer bars. AkShare's `fund_etf_hist_em` / `index_value_hist_funddb` accept
+`as_of` and request only newer bars. AkShare's `fund_etf_hist_em` accepts
 `start_date`. This turns *quadratic → linear*, and cuts both network time and write volume by
-~99.7%. Apply to `trading_activity`, `fundamentals`, and the holdings/universe re-pulls.
+~99.7%. Apply to `trading_activity` and the holdings/universe re-pulls (the CSI valuation feed already
+returns only a short trailing window, so fundamentals leans on content dedup below instead).
 
 **(b) Store only real revisions (content dedup).** Change `append` so a row is skipped when the most
 recent stored `(series, key, as_of)` already has an identical `payload`. Keep a new row **only when

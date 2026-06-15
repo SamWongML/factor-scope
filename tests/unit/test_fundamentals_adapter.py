@@ -6,6 +6,8 @@ A malformed header or non-numeric value is a hard parse error.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from factor_scope.ingest import fundamentals
@@ -38,7 +40,11 @@ def test_fundamentals_rejects_a_non_numeric_value() -> None:
 
 
 def test_fundamentals_maps_the_akshare_valuation_columns() -> None:
-    bars = [{"日期": "2026-05-30", "市盈率": "44.1"}]
+    # the live CSI index valuation feed (日期 as a date, 市盈率2 the trailing-12-month multiple)
+    # maps to a Reading keyed by the *fund* code, not the index, so the valuation factor ranks
+    # the fund's own basket. 市盈率1 (the static multiple) is present but ignored. Pinned offline
+    # so the mapping is covered without the network.
+    bars = [{"日期": date(2026, 5, 30), "市盈率1": 50.0, "市盈率2": 44.1}]
     reading = fundamentals._from_bars("561010", bars, fetched_at=FETCHED_AT)[0]
     assert reading.key == "561010"
     assert reading.as_of == "2026-05-30"
