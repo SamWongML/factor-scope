@@ -202,8 +202,8 @@ trivially within DuckDB's envelope for a decade-plus.
 
 ### 5.2 Medallion storage split
 
-- **Bronze (raw landing, optional but recommended).** The non-deterministic research/ingest job
-  (ROADMAP U03) writes raw provider responses to Parquet partitioned by `source`/`as_of`. Enables
+- **Bronze (raw landing, optional but recommended).** A non-deterministic research/ingest job
+  writes raw provider responses to Parquet partitioned by `source`/`as_of`. Enables
   replay and debugging; ages out after the silver layer is trusted. This is the *only* layer that
   touches the network.
 - **Silver (the point-in-time `readings` log).** Stays DuckDB-backed and append-only. Recent window
@@ -251,7 +251,7 @@ snapshot ("cassette") fixture model:
 2. The `fake` provider **replays** those recordings instead of hitting the network; the **same**
    ingest code (universe loop, watermark, reconciliation, dedup, delisting) runs in both modes.
 3. Determinism is preserved: recorded responses + the deterministic `fetched_at_for(as_of)` keep
-   `dashboard.json` byte-for-byte, and the snapshot boundary (U03) still freezes the reasoning input.
+   `dashboard.json` byte-for-byte, and the snapshot boundary still freezes the reasoning input.
 
 This is consistent with the ROADMAP's snapshot boundary: ingest is the non-deterministic edge;
 everything downstream is deterministic over a frozen snapshot. **Fixtures become a committed frozen
@@ -261,26 +261,27 @@ test instead of living only in this document.
 
 ---
 
-## Part 7 — Migration plan (slots into the ROADMAP U-issues)
+## Part 7 — Migration plan (standalone)
 
-Ordered by leverage; each is one session / one PR / `make check` green.
+This refactor stands on its own — it is **not** filed under or dependent on any existing roadmap
+issue. Ordered by leverage; each is one session / one PR / `make check` green.
 
 1. **Content-dedup append** (§5.1b). Smallest change, biggest win; kills write amplification
    immediately. Unit-test that re-appending an unchanged payload is a no-op and a changed payload
-   adds exactly one revision. *(extends the store; relates to U03/U04.)*
+   adds exactly one revision.
 2. **Incremental watermark ingest** (§5.1a) for `trading_activity`, `fundamentals`, holdings,
-   universe. Turns quadratic → linear. *(relates to U06 full-universe ingest.)*
+   universe. Turns quadratic → linear.
 3. **Cassette fixtures + unified ingest path** (§6). Removes the offline/online code fork; gives the
-   expensive live paths real coverage. *(relates to U03, U05.)*
+   expensive live paths real coverage.
 4. **Cold-tier partitioned Parquet** (§5.2) via `export_parquet` with Hive layout + a recent-window
-   policy. *(near-term subset of U17.)*
+   policy.
 5. **Read-only serving connection over silver** (§5.4) for time-series endpoints; keep JSON serving
-   for dashboards. *(relates to U16.)*
-6. **DuckLake migration** (§5.3) when multi-process live reads are needed. *(the durable end-state of
-   U17.)*
+   for dashboards.
+6. **DuckLake migration** (§5.3) when multi-process live reads are needed.
 
 Steps 1–3 are the ones that decide whether the system survives a year of nightly runs; 4–6 are the
-durability/scale headroom once the write path is sound.
+durability/scale headroom once the write path is sound. Frontend-delivery scalability under load is
+evaluated separately in `docs/SERVING_EVALUATION.md`.
 
 ---
 
