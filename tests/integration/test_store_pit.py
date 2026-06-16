@@ -79,6 +79,31 @@ def test_append_is_idempotent_on_re_run() -> None:
         assert [r.payload["nav"] for r in store.history("prices", "X")] == [1.0]  # no duplicate
 
 
+def test_append_dedups_a_refetched_reading_across_nights() -> None:
+    # The nightly ingest re-pulls full histories, so the same (series, key, as_of) payload arrives
+    # again under a fresh fetched_at (a later night). Identity keys on content, not the fetch stamp,
+    # so the re-fetch is a no-op — cross-night, not just within a run's retries.
+    with DuckDBStore() as store:
+        first = _reading("X", "2026-01-01", 1.0, fetched_at="2026-01-01T22:00:00Z")
+        assert store.append([first]) == 1
+        again = _reading("X", "2026-01-01", 1.0, fetched_at="2026-02-01T22:00:00Z")  # later night
+        assert store.append([again]) == 0  # unchanged payload → no-op despite the fresh fetched_at
+        assert store.count("prices") == 1
+        assert [r.payload["nav"] for r in store.history("prices", "X")] == [1.0]
+
+
+def test_a_restatement_at_the_same_as_of_is_a_new_revision() -> None:
+    # A genuine restatement — a changed payload at the same as_of, disclosed a later night — is
+    # still recorded as a new revision, and read_as_of returns the latest one.
+    with DuckDBStore() as store:
+        store.append([_reading("X", "2026-01-01", 1.0, fetched_at="2026-01-01T22:00:00Z")])
+        added = store.append([_reading("X", "2026-01-01", 2.0, fetched_at="2026-02-01T22:00:00Z")])
+        assert added == 1  # exactly one new revision
+        assert store.count("prices") == 2  # both revisions retained — the audit trail
+        assert [r.payload["nav"] for r in store.history("prices", "X")] == [1.0, 2.0]
+        assert store.read_as_of("prices", "2026-06-01")[0].payload["nav"] == 2.0  # latest revision
+
+
 def test_snapshot_id_is_content_addressed_and_point_in_time() -> None:
     # The id fingerprints the store state knowable as of D: same facts → same id, regardless of
     # insertion order, and a later disclosure (as_of > D) never changes the as-of-D snapshot.
@@ -118,13 +143,13 @@ def test_snapshot_id_can_exclude_a_series() -> None:
         assert store.snapshot_id("2026-06-01") != base  # but it is a real, knowable fact otherwise
 
 
-def test_append_keeps_rows_that_differ_only_by_source() -> None:
-    # Two sources reading the same fund/day are DISTINCT facts — provenance is part of the identity,
-    # so dedup must not collapse an AkShare row and a Baostock row for the same (key, as_of).
+def test_an_oscillating_payload_is_recorded_as_a_new_revision() -> None:
+    # Dedup is against the LATEST revision, not the whole history: a value that changes and later
+    # returns to an earlier payload is a genuine new disclosure, so it is recorded again.
     with DuckDBStore() as store:
-        akshare = Reading(series="prices", key="X", as_of="2026-01-01", fetched_at="t",
-                          payload={"nav": 1.0, "source": "akshare"})
-        baostock = akshare.model_copy(update={"payload": {"nav": 1.0, "source": "baostock"}})
-        assert store.append([akshare, baostock]) == 2
-        assert store.append([akshare, baostock]) == 0  # still idempotent on re-run
-        assert store.count("prices") == 2
+        store.append([_reading("X", "2026-01-01", 1.0, fetched_at="2026-01-01T22:00:00Z")])
+        store.append([_reading("X", "2026-01-01", 2.0, fetched_at="2026-02-01T22:00:00Z")])
+        added = store.append([_reading("X", "2026-01-01", 1.0, fetched_at="2026-03-01T22:00:00Z")])
+        assert added == 1  # back to 1.0, but it differs from the latest (2.0) → a new revision
+        assert [r.payload["nav"] for r in store.history("prices", "X")] == [1.0, 2.0, 1.0]
+        assert store.read_as_of("prices", "2026-06-01")[0].payload["nav"] == 1.0

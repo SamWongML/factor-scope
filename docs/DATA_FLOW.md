@@ -78,11 +78,14 @@ These are fine and need no change:
 ### Per-run *store* writes (the problem)
 
 `fetched_at = fetched_at_for(as_of) = "{as_of}T22:00:00Z"` is derived from the run date in **live as
-well as offline** (`markets/base.py:72`). The store's identity is
-`PRIMARY KEY (series, key, as_of, fetched_at, payload)` with `ON CONFLICT DO NOTHING`
-(`store/__init__.py:73,110`). Because `fetched_at` changes every night, **re-fetching the same
-historical bar tomorrow produces a *different* primary key** → it is inserted again. The
-`ON CONFLICT` guard only dedups *within one run's retries*, never across nights.
+well as offline** (`markets/base.py:72`), so it changes every night. The original store identity was
+`PRIMARY KEY (series, key, as_of, fetched_at, payload)` with `ON CONFLICT DO NOTHING`: because
+`fetched_at` moved nightly, **re-fetching the same historical bar tomorrow produced a *different*
+primary key** → it was inserted again, and the `ON CONFLICT` guard only deduped *within one run's
+retries*, never across nights. `append` now keys on content instead (see Part 5.1b — **shipped**):
+a reading is written only when its payload differs from the latest revision already held for that
+`(series, key, as_of)`, so an unchanged re-fetch is a cross-night no-op. The figures below are the
+*pre-fix* write volume that change removed.
 
 Estimated rows written per night in year 1 (≈1,000 on-exchange ETFs; ~800 avg history bars each):
 
@@ -190,13 +193,13 @@ immutable JSON serving). Fix the write path; layer storage for growth.
 ~99.7%. Apply to `trading_activity` and the holdings/universe re-pulls (the CSI valuation feed already
 returns only a short trailing window, so fundamentals leans on content dedup below instead).
 
-**(b) Store only real revisions (content dedup).** Change `append` so a row is skipped when the most
-recent stored `(series, key, as_of)` already has an identical `payload`. Keep a new row **only when
-the payload genuinely changed** (a real restatement) — that is exactly the bitemporal contract the
-docstring promises. This preserves "a later disclosure never rewrites an earlier read" while ending
-the duplicate firehose. (Concretely: drop `payload` from the identity, gate the insert on
-"payload differs from the latest revision for this `(series,key,as_of)`", and keep `fetched_at`/a
-revision counter to record *when* a real change was seen.)
+**(b) Store only real revisions (content dedup) — shipped.** `append` skips a row when the most
+recent stored revision for its `(series, key, as_of)` already has an identical `payload`, keeping a
+new row **only when the payload genuinely changed** (a real restatement) — exactly the bitemporal
+contract the docstring promises. This preserves "a later disclosure never rewrites an earlier read"
+while ending the duplicate firehose. The identity is now `PRIMARY KEY (series, key, as_of,
+fetched_at)` — `payload` left the key, and `fetched_at` records *when* a real change was seen — with
+the insert gated on "payload differs from the latest revision for this `(series,key,as_of)`".
 
 Together these make the silver store a minimal bitemporal log: ~2,500 new rows/night, linear growth,
 trivially within DuckDB's envelope for a decade-plus.
