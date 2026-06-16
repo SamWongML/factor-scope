@@ -8,6 +8,7 @@ imported lazily inside :func:`create_app` (see digest/claude_code.py for the pat
 offline suite never needs a web stack.
 """
 
+import hashlib
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,9 +23,17 @@ if TYPE_CHECKING:
 _AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # A recorded night never changes (re-runs rewrite it byte-for-byte), so dated responses are
-# cacheable forever; the index and `latest` move nightly and must revalidate.
+# cacheable forever; the index and `latest` move once a night, so they stay cacheable but
+# revalidate against a strong ETag (a cheap 304) rather than refetching every time.
 _IMMUTABLE = "public, max-age=31536000, immutable"
-_REVALIDATE = "no-cache"
+_REVALIDATE = "public, max-age=0, must-revalidate"
+
+
+def _etag(payload: str) -> str:
+    """A strong validator over the response's identity — content for the index, the pointer's
+    target for ``latest`` — so an unchanged night index revalidates to 304."""
+
+    return '"' + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32] + '"'
 
 
 def create_app(history_dir: Path, *, allow_origins: tuple[str, ...] = ("*",)) -> "FastAPI":
@@ -35,7 +44,7 @@ def create_app(history_dir: Path, *, allow_origins: tuple[str, ...] = ("*",)) ->
     """
 
     # lazy: the pinned serve extra is only needed once an app is actually created
-    from fastapi import FastAPI, HTTPException, Response
+    from fastapi import FastAPI, HTTPException, Request, Response
     from fastapi.middleware.cors import CORSMiddleware
 
     app = FastAPI(title="factor-scope history", description=__doc__)
@@ -47,20 +56,32 @@ def create_app(history_dir: Path, *, allow_origins: tuple[str, ...] = ("*",)) ->
     )
 
     @app.get("/dashboards", response_model=DashboardIndex)
-    def dashboards(response: Response) -> DashboardIndex:
-        """Every recorded night, oldest first."""
+    def dashboards(request: Request, response: Response) -> "DashboardIndex | Response":
+        """Every recorded night, oldest first — O(1) from the materialized catalog."""
 
+        index = read_index(history_dir)
+        etag = _etag(index.model_dump_json())
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": _REVALIDATE})
+        response.headers["ETag"] = etag
         response.headers["Cache-Control"] = _REVALIDATE
-        return read_index(history_dir)
+        return index
 
     @app.get("/dashboards/latest", response_model=Dashboard)
-    def latest(response: Response) -> Dashboard:
-        """The newest recorded night."""
+    def latest(request: Request, response: Response) -> "Dashboard | Response":
+        """The newest recorded night — a pointer to the last catalog entry, not a re-scan."""
 
         entries = read_index(history_dir).entries
-        dash = load(history_dir, entries[-1].as_of) if entries else None
+        if not entries:
+            raise HTTPException(status_code=404, detail="no nights recorded yet")
+        latest_as_of = entries[-1].as_of
+        etag = _etag(f"{latest_as_of}:{entries[-1].snapshot_id}")
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": _REVALIDATE})
+        dash = load(history_dir, latest_as_of)
         if dash is None:
             raise HTTPException(status_code=404, detail="no nights recorded yet")
+        response.headers["ETag"] = etag
         response.headers["Cache-Control"] = _REVALIDATE
         return dash
 

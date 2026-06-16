@@ -1,5 +1,7 @@
 """Integration tests for the dashboard history — one immutable artifact per night."""
 
+from pathlib import Path
+
 import pytest
 
 from factor_scope.config import Config
@@ -51,6 +53,53 @@ def test_an_unreadable_night_degrades_to_absence_in_the_index(tmp_path) -> None:
     history = tmp_path / "dashboards"
     record(_dash("2026-06-05"), history)
     (history / "2026-06-06.json").write_text("not json", encoding="utf-8")
+    assert [e.as_of for e in read_index(history).entries] == ["2026-06-05"]
+
+
+def test_reading_the_index_is_o1_in_history_length(tmp_path, monkeypatch) -> None:
+    # The catalog is materialized at record time, so listing opens exactly one file — the
+    # catalog itself — never the per-night artifacts, no matter how long the history grows.
+    history = tmp_path / "dashboards"
+    for day in range(1, 9):
+        record(_dash(f"2026-06-0{day}"), history)
+
+    opened: list[str] = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        opened.append(self.name)
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    read_index(history)
+    assert opened == ["index.json"]
+
+
+def test_the_index_is_rebuildable_from_disk_when_the_catalog_is_missing(tmp_path) -> None:
+    # The catalog is a cache over the immutable night files, never the source of truth: lose it
+    # and the index rebuilds purely from the artifacts on disk.
+    history = tmp_path / "dashboards"
+    record(_dash("2026-06-06"), history)
+    record(_dash("2026-06-04"), history)
+    record(_dash("2026-06-05"), history)
+    (history / "index.json").unlink()
+    idx = read_index(history)
+    assert [e.as_of for e in idx.entries] == ["2026-06-04", "2026-06-05", "2026-06-06"]
+    assert all(e.snapshot_id == f"snap-{e.as_of}" for e in idx.entries)
+
+
+def test_a_corrupt_catalog_falls_back_to_a_disk_rebuild(tmp_path) -> None:
+    history = tmp_path / "dashboards"
+    record(_dash("2026-06-05"), history)
+    (history / "index.json").write_text("not json", encoding="utf-8")
+    assert [e.as_of for e in read_index(history).entries] == ["2026-06-05"]
+
+
+def test_a_disk_rebuild_skips_a_corrupt_night(tmp_path) -> None:
+    history = tmp_path / "dashboards"
+    record(_dash("2026-06-05"), history)
+    (history / "2026-06-06.json").write_text("not json", encoding="utf-8")
+    (history / "index.json").unlink()
     assert [e.as_of for e in read_index(history).entries] == ["2026-06-05"]
 
 
