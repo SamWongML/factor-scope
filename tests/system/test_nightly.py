@@ -66,8 +66,8 @@ def test_nightly_entrypoint_writes_artifact_and_run_log(tmp_path) -> None:
     # The run log records the frozen snapshot the run read — the same id the artifact carries.
     assert record["snapshot_id"] and record["snapshot_id"] == dash.snapshot_id
 
-    # The night also landed in the history as an immutable dated artifact; the index manifest
-    # a frontend lists nights from derives live from those files.
+    # The night also landed in the history as an immutable dated artifact, catalogued in the
+    # index manifest a frontend lists nights from.
     dated = tmp_path / "dashboards" / f"{dash.as_of}.json"
     assert dated.read_text(encoding="utf-8") == p["output"].read_text(encoding="utf-8")
     index = read_index(tmp_path / "dashboards")

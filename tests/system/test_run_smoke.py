@@ -38,7 +38,7 @@ def test_run_entrypoint_emits_valid_dashboard(tmp_path) -> None:
 
 def test_run_records_the_night_in_the_history(tmp_path) -> None:
     # The artifact survives past tomorrow: every run also lands as an immutable dated file
-    # next to the artifact. The index a frontend lists nights from derives live from those files.
+    # next to the artifact, catalogued in the index a frontend lists nights from.
     out = tmp_path / "dashboard.json"
     result = runner.invoke(app, ["run", "--output", str(out), "--quiet"])
     assert result.exit_code == 0, result.output

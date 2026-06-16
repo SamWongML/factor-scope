@@ -31,8 +31,17 @@ def test_index_lists_the_recorded_nights(client: TestClient) -> None:
     resp = client.get("/dashboards")
     assert resp.status_code == 200
     assert [e["as_of"] for e in resp.json()["entries"]] == ["2026-06-04", "2026-06-05"]
-    # The index moves nightly — clients must revalidate.
-    assert resp.headers["cache-control"] == "no-cache"
+    # The index moves only nightly — cacheable with revalidation, carrying a strong ETag.
+    assert resp.headers["cache-control"] == "public, max-age=0, must-revalidate"
+    assert resp.headers["etag"]
+
+
+def test_index_revalidates_to_304_on_a_matching_etag(client: TestClient) -> None:
+    first = client.get("/dashboards")
+    etag = first.headers["etag"]
+    again = client.get("/dashboards", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.headers["etag"] == etag
 
 
 def test_a_night_is_served_as_the_recorded_artifact(client: TestClient) -> None:
@@ -48,7 +57,17 @@ def test_latest_is_the_newest_night(client: TestClient) -> None:
     resp = client.get("/dashboards/latest")
     assert resp.status_code == 200
     assert resp.json()["as_of"] == "2026-06-05"
-    assert resp.headers["cache-control"] == "no-cache"
+    # `latest` is a pointer to the last catalog entry — revalidated, not re-scanned.
+    assert resp.headers["cache-control"] == "public, max-age=0, must-revalidate"
+    assert resp.headers["etag"]
+
+
+def test_latest_revalidates_to_304_on_a_matching_etag(client: TestClient) -> None:
+    first = client.get("/dashboards/latest")
+    etag = first.headers["etag"]
+    again = client.get("/dashboards/latest", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.headers["etag"] == etag
 
 
 def test_unknown_or_malformed_dates_are_absent(client: TestClient) -> None:
