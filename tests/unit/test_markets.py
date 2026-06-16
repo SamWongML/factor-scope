@@ -14,7 +14,7 @@ from factor_scope.config import Config
 from factor_scope.contract import ListName
 from factor_scope.markets import ComposedMarket, get_market
 from factor_scope.pipeline import build_dashboard
-from factor_scope.store import Reading
+from factor_scope.store import PointInTimeStore, Reading
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +61,9 @@ def test_ashare_fixture_gather_keeps_every_series() -> None:
 class _FakeUniverse:
     """A one-position book, in the UniverseSource shape."""
 
-    def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
+    def gather(
+        self, config: Config, *, as_of: str, fetched_at: str, store: PointInTimeStore | None = None
+    ) -> list[Reading]:
         return [
             Reading(
                 series="positions",

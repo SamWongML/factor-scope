@@ -65,7 +65,8 @@ def test_fred_live_smoke() -> None:
 
 @skip_unless_live
 def test_fund_holdings_live_smoke() -> None:
-    reading = fund_holdings.fetch_live(_PROBE, fetched_at="t")[0]
+    # AkShare queries holdings per calendar year, derived from the run stamp — pass a real one.
+    reading = fund_holdings.fetch_live(_PROBE, fetched_at="2026-06-05T22:00:00Z")[0]
     assert reading.payload.keys() == {"fund", "holding", "weight"}
     assert reading.payload["fund"] == _PROBE
     assert 0.0 <= reading.payload["weight"] <= 1.0
