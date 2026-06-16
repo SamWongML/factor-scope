@@ -1,6 +1,6 @@
 """Emerging funnel — wire the three stages into a per-theme shortlist.
 
-The cheap→expensive cascade (ROADMAP §8): qualify each industry (Stage A); only for a cleared theme
+The cheap→expensive cascade: qualify each industry (Stage A); only for a cleared theme
 generate + rank its candidate funds to a finalist pool on the fixed Stage-B scorecard (a coarse
 liquidity filter, the anti-hype guardrails, then the graded screen); then spend a cheap-LLM re-rank
 only on those finalists to land the top 3 (Stage 3). The output is a :class:`Shortlist` per cleared

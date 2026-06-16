@@ -1,4 +1,4 @@
-"""Per-task reasoning tiers — cost follows difficulty (ROADMAP §8–§9).
+"""Per-task reasoning tiers — cost follows difficulty.
 
 Reasoning is split into difficulty tiers so the expensive deep-think seat is reserved for the one
 hard call (the final bull/bear→synthesis debate) and the bulk jobs run cheap-first on DeepSeek V4

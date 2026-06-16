@@ -35,7 +35,7 @@ def offline_mode() -> bool:
 DISCOVERY_DRAFT = "draft"
 DISCOVERY_JUDGE = "judge"
 
-# Reasoning is tiered so cost follows difficulty (ROADMAP §8–§9): the cheap DeepSeek V4 tiers do the
+# Reasoning is tiered so cost follows difficulty: the cheap DeepSeek V4 tiers do the
 # bulk and mid-tier work, and the expensive deep-think seat is reserved for the one hard call — the
 # final bull/bear→synthesis debate. Explicit model IDs only (the ``deepseek-chat`` /
 # ``deepseek-reasoner`` aliases deprecate 2026-07-24).
@@ -92,7 +92,7 @@ def _default_discovery_models() -> dict[str, ModelSpec]:
 def _default_model_prices() -> dict[str, Price]:
     """USD per 1M in/out tokens — the table the cost meter prices token-only providers from.
 
-    DeepSeek V4 list prices (ROADMAP §9, verified 2026-06-08). ``claude_code`` reports its own USD
+    DeepSeek V4 list prices (verified 2026-06-08). ``claude_code`` reports its own USD
     in the stream-json envelope, so the deep-think model needs no line; add one per priced model.
     """
 

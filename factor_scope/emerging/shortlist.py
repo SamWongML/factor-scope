@@ -1,6 +1,6 @@
 """Emerging funnel — Stage 3: re-rank the finalists to a defensible top 3.
 
-The cascade's last narrowing (ROADMAP §8): the deterministic Stage-B scorecard ranks a theme's
+The cascade's last narrowing: the deterministic Stage-B scorecard ranks a theme's
 candidate funds to a handful of finalists cheaply, and only *those few* earn a **cheap-LLM read** of
 their qualitative materials. Spending the expensive model on the whole universe is the waste the
 funnel exists to avoid; spending it on the finalists is the point.

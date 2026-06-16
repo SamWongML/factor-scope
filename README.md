@@ -116,5 +116,3 @@ make check      # lint (ruff) + typecheck (mypy strict) + full suite — the gat
 ```
 
 Tests are marked `unit` / `integration` / `system` (see `pyproject.toml`). Work test-first: RED → GREEN → REFACTOR. The entrypoint must always stay runnable.
-
-Architecture map, direction & upgrade plan (`U01`–`U17`): `docs/ROADMAP.md`.
