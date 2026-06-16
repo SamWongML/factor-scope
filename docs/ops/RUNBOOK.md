@@ -58,8 +58,9 @@ see whether the nightly job is running, what it cost, and whether any seat is fa
 
 Every run also records its artifact as `out/dashboards/<as_of>.json`, so past mornings stay
 inspectable. The first recording of a night stands: a later run never rewrites an earlier night
-(mirroring the append-only store). The index a frontend lists nights from is derived live from
-these files by the API below — there is no persisted manifest to drift. To backfill a night from
+(mirroring the append-only store). The index a frontend lists nights from is read in O(1) from a
+materialized `index.json` catalog beside these files; the catalog is a cache the API rebuilds from
+the night files if it is ever lost or unreadable, so it cannot drift. To backfill a night from
 before the history existed, rebuild it from the durable store:
 `factor-scope run --as-of YYYY-MM-DD --store-path out/store.duckdb` (point-in-time reads see only
 what was knowable that night; live-provider digests are not reproduced — cached debates are reused).

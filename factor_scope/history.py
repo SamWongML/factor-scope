@@ -8,8 +8,8 @@ rewrites an earlier read).
 Alongside the night files lives ``index.json`` — a small catalog the frontend lists nights from
 in O(1), holding just what each entry needs (``as_of`` / ``generated_at`` / ``snapshot_id`` /
 ``n_items``), all known at record time. The catalog is a cache, never the source of truth: it is
-appended to only when a night is recorded, and :func:`read_index` rebuilds it purely from the
-night files whenever it is missing or unreadable.
+appended to only when a night is recorded, and :func:`read_index` falls back to deriving the index
+straight from the night files whenever the catalog is missing or unreadable.
 """
 
 from __future__ import annotations
