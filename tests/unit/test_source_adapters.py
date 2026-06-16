@@ -41,6 +41,14 @@ def test_fund_holdings_keys_each_edge() -> None:
     assert readings[0].payload == {"fund": "561010", "holding": "中际旭创", "weight": 0.094}
 
 
+def test_fund_holdings_first_year_is_the_watermark_year_else_the_run_year() -> None:
+    # No watermark → start at the run stamp's year (no hard-coded lookback, no wall clock).
+    assert fund_holdings._first_year(None, "2026-09-30T22:00:00Z") == 2026
+    # A watermark from a prior year → re-request that year forward so a year-boundary gap backfills.
+    assert fund_holdings._first_year("2025-12-31", "2026-09-30T22:00:00Z") == 2025
+    assert fund_holdings._first_year("2026-06-30", "2026-09-30T22:00:00Z") == 2026
+
+
 def test_fred_keys_by_series_id() -> None:
     readings = fred.parse("series_id,as_of,value\nDGS10,2026-06-04,4.21\n", fetched_at="x")
     assert readings[0].key == "DGS10"
