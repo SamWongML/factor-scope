@@ -187,11 +187,15 @@ immutable JSON serving). Fix the write path; layer storage for growth.
 
 ### 5.1 Two ingest fixes (highest leverage — do these first)
 
-**(a) Incremental ingest (watermarks).** Before fetching a series/key, read its latest stored
-`as_of` and request only newer bars. AkShare's `fund_etf_hist_em` accepts
-`start_date`. This turns *quadratic → linear*, and cuts both network time and write volume by
-~99.7%. Apply to `trading_activity` and the holdings/universe re-pulls (the CSI valuation feed already
-returns only a short trailing window, so fundamentals leans on content dedup below instead).
+**(a) Incremental ingest (watermarks) — shipped.** Before each per-fund re-pull the universe loop
+reads that `(series, key)`'s latest stored `as_of` and the adapter requests only newer observations
+— `trading_activity` via AkShare's `fund_etf_hist_em` `start_date`, holdings via the disclosure year
+derived from the watermark (the run stamp's year when nothing is stored — never a hard-coded
+lookback). This turns *quadratic → linear*, cutting both network time and write volume by ~99.7%. The
+CSI valuation feed already returns only a short trailing window, so `fundamentals` applies the
+watermark as a write-filter and leans on content dedup below for the rest. The whole-universe
+`fund_universe`/`etf_scale` snapshots stay full re-pulls — delisting detection needs the complete
+membership each night.
 
 **(b) Store only real revisions (content dedup) — shipped.** `append` skips a row when the most
 recent stored revision for its `(series, key, as_of)` already has an identical `payload`, keeping a
@@ -241,7 +245,7 @@ single DuckDB file plus the 5.1 fixes is sufficient — adopt DuckLake as a *sea
 
 **Today the offline path is a *different system* than live.** `config.source == "fixtures"` takes a
 separate branch (`markets/ashare.py:60-79`) that loads small pre-baked CSVs (1 fund, ~1,200 rows) and
-**bypasses** the universe-scale loop, the (future) watermark/incremental logic, the multi-source
+**bypasses** the universe-scale loop, the watermark/incremental logic, the multi-source
 reconciliation + retry + circuit breaker, and delisting detection — all the live-only code is
 `# pragma: no cover`. The most expensive, most bug-prone behavior is never exercised by the suite.
 

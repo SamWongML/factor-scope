@@ -66,7 +66,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         fund_holdings,
         "fetch_live",
-        lambda fund, *, fetched_at: [
+        lambda fund, *, fetched_at, since=None: [
             Reading(series="fund_holdings", key=f"{fund}/X", as_of="2026-03-31",
                     fetched_at=fetched_at, payload={"fund": fund, "holding": "X", "weight": 0.1})
         ],
@@ -102,7 +102,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         trading_activity,
         "fetch_live",
-        lambda code, *, fetched_at: [
+        lambda code, *, fetched_at, since=None: [
             Reading(series="trading_activity", key=code, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"turnover": 3.1, "amount": 2.8})
         ],
@@ -110,7 +110,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         fundamentals,
         "fetch_live",
-        lambda code, *, fetched_at: [
+        lambda code, *, fetched_at, since=None: [
             Reading(series="fundamentals", key=code, as_of="2026-05-29", fetched_at=fetched_at,
                     payload={"pe": 42.5})
         ],

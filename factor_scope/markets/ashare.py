@@ -37,7 +37,7 @@ from factor_scope.ingest import (
 )
 from factor_scope.ingest.base import fetched_at_for
 from factor_scope.markets.base import ComposedMarket
-from factor_scope.store import Reading
+from factor_scope.store import PointInTimeStore, Reading
 
 
 class AShareUniverse:
@@ -51,7 +51,9 @@ class AShareUniverse:
     each configured EDGAR filer.
     """
 
-    def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]:
+    def gather(
+        self, config: Config, *, as_of: str, fetched_at: str, store: PointInTimeStore | None = None
+    ) -> list[Reading]:
         readings: list[Reading] = list(
             positions.load_fixture(
                 config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
@@ -80,14 +82,55 @@ class AShareUniverse:
         universe = fund_universe.fetch_live(as_of=as_of, fetched_at=fetched_at)  # pragma: no cover
         readings += universe  # pragma: no cover - live path
         readings += etf_scale.fetch_live(fetched_at=fetched_at)  # pragma: no cover
+        # The per-fund re-pulls are watermarked: each adapter is handed the latest as_of already
+        # stored for its (series, key), so the universe-wide nightly re-pull fetches only newer
+        # observations (quadratic → linear). The whole-universe fund_universe/etf_scale snapshots
+        # stay full — delisting detection needs the complete membership list.
+        activity_floor = _series_watermarks(store, trading_activity.SERIES, as_of)
+        valuation_floor = _series_watermarks(store, fundamentals.SERIES, as_of)
+        holdings_floor = _holdings_watermarks(store, as_of)
         for fund in universe:  # pragma: no cover - live path
             if fund.payload["on_exchange"]:  # ETFs disclose holdings → the look-through graph edges
-                readings += fund_holdings.fetch_live(fund.key, fetched_at=fetched_at)
-                readings += trading_activity.fetch_live(fund.key, fetched_at=fetched_at)
-                readings += fundamentals.fetch_live(fund.key, fetched_at=fetched_at)
+                readings += fund_holdings.fetch_live(
+                    fund.key, fetched_at=fetched_at, since=holdings_floor.get(fund.key)
+                )
+                readings += trading_activity.fetch_live(
+                    fund.key, fetched_at=fetched_at, since=activity_floor.get(fund.key)
+                )
+                readings += fundamentals.fetch_live(
+                    fund.key, fetched_at=fetched_at, since=valuation_floor.get(fund.key)
+                )
         for cik in config.edgar_ciks:  # pragma: no cover - live path
             readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
         return readings
+
+
+def _series_watermarks(
+    store: PointInTimeStore | None, series: str, as_of: str
+) -> dict[str, str]:
+    """The newest stored ``as_of`` per key in ``series`` knowable as of the run — the fetch floor.
+
+    Keyed by the adapter's own key (a fund code for trading activity / valuation), so a re-pull
+    starts just past what the append-only log already holds. Empty when there is no store to read
+    (the offline fixtures path, or a direct ``gather`` call), so the first pull takes full history.
+    """
+
+    if store is None:
+        return {}
+    return {r.key: r.as_of for r in store.read_as_of(series, as_of)}
+
+
+def _holdings_watermarks(store: PointInTimeStore | None, as_of: str) -> dict[str, str]:
+    """The latest disclosed quarter per fund — holdings key is ``fund/holding``, grouped by fund."""
+
+    if store is None:
+        return {}
+    latest: dict[str, str] = {}
+    for r in store.read_as_of(fund_holdings.SERIES, as_of):
+        fund = str(r.payload["fund"])
+        if r.as_of > latest.get(fund, ""):
+            latest[fund] = r.as_of
+    return latest
 
 
 class ASharePrices:
@@ -183,14 +226,16 @@ class AShareMarket:
 
     name: str = "ashare"
 
-    def gather(self, config: Config, *, as_of: str) -> list[Reading]:
+    def gather(
+        self, config: Config, *, as_of: str, store: PointInTimeStore | None = None
+    ) -> list[Reading]:
         composed = ComposedMarket(
             name=self.name,
             universe=AShareUniverse(),
             prices=ASharePrices(),
             themes=AShareThemes(),
         )
-        readings = composed.gather(config, as_of=as_of)
+        readings = composed.gather(config, as_of=as_of, store=store)
         fetched_at = fetched_at_for(as_of)
         readings += _gather_macro(config, fetched_at=fetched_at)
         readings += _gather_demand(config, fetched_at=fetched_at)

@@ -53,3 +53,21 @@ def test_trading_activity_maps_the_akshare_bar_columns() -> None:
     assert reading.key == "561010"
     assert reading.as_of == "2026-05-30"
     assert reading.payload == {"turnover": 4.25, "amount": 3.60}
+
+
+def test_trading_activity_from_bars_keeps_only_bars_past_the_watermark() -> None:
+    # the incremental re-pull drops bars at or before the stored watermark (AkShare's start_date is
+    # inclusive, so the boundary bar can return) — only strictly-newer sessions become rows.
+    bars = [
+        {"日期": "2026-05-29", "换手率": "1.0", "成交额": "1.0"},
+        {"日期": "2026-05-30", "换手率": "2.0", "成交额": "2.0"},
+    ]
+    kept = trading_activity._from_bars("561010", bars, fetched_at=FETCHED_AT, since="2026-05-29")
+    assert [r.as_of for r in kept] == ["2026-05-30"]
+
+
+def test_trading_activity_start_date_is_the_day_after_the_watermark() -> None:
+    # the AkShare start_date is the day past the watermark (YYYYMMDD), so the request never re-pulls
+    # the stored bar — and it rolls the year correctly at a year boundary.
+    assert trading_activity._start_date("2026-06-30") == "20260701"
+    assert trading_activity._start_date("2026-12-31") == "20270101"

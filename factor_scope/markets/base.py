@@ -17,14 +17,16 @@ from typing import Protocol, runtime_checkable
 from factor_scope.config import Config
 from factor_scope.ingest.base import fetched_at_for
 from factor_scope.ingest.positions import SERIES as POSITIONS_SERIES
-from factor_scope.store import Reading
+from factor_scope.store import PointInTimeStore, Reading
 
 
 @runtime_checkable
 class UniverseSource(Protocol):
     """Yields the run's book — the ``positions`` rows that seed the three lists."""
 
-    def gather(self, config: Config, *, as_of: str, fetched_at: str) -> list[Reading]: ...
+    def gather(
+        self, config: Config, *, as_of: str, fetched_at: str, store: PointInTimeStore | None = None
+    ) -> list[Reading]: ...
 
 
 @runtime_checkable
@@ -51,7 +53,9 @@ class Market(Protocol):
     def name(self) -> str:  # read-only, so a frozen dataclass field satisfies it
         ...
 
-    def gather(self, config: Config, *, as_of: str) -> list[Reading]: ...
+    def gather(
+        self, config: Config, *, as_of: str, store: PointInTimeStore | None = None
+    ) -> list[Reading]: ...
 
 
 @dataclass(frozen=True)
@@ -68,9 +72,13 @@ class ComposedMarket:
     prices: PriceSource
     themes: ThemeSource
 
-    def gather(self, config: Config, *, as_of: str) -> list[Reading]:
+    def gather(
+        self, config: Config, *, as_of: str, store: PointInTimeStore | None = None
+    ) -> list[Reading]:
         fetched_at = fetched_at_for(as_of)
-        readings = list(self.universe.gather(config, as_of=as_of, fetched_at=fetched_at))
+        readings = list(
+            self.universe.gather(config, as_of=as_of, fetched_at=fetched_at, store=store)
+        )
         codes = [r.key for r in readings if r.series == POSITIONS_SERIES]
         readings += self.prices.gather(config, codes, as_of=as_of, fetched_at=fetched_at)
         readings += self.themes.gather(config, as_of=as_of, fetched_at=fetched_at)

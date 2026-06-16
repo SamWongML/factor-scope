@@ -51,11 +51,14 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
     return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
-def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
+def _from_bars(
+    code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str, since: str | None = None
+) -> list[Reading]:
     """Map CSI index valuation bars (日期 / 市盈率2, the trailing-12-month multiple) to Readings.
 
-    The pure core of live: keyed by the fund ``code`` (not the index), so the valuation factor ranks
-    the fund's tracked basket against its own history.
+    The pure core of live: keyed by the fund ``code`` (not the index), so the valuation factor
+    ranks the fund's tracked basket against its own history. ``since`` is the incremental-fetch
+    watermark — only bars strictly newer than it become rows.
     """
 
     return [
@@ -67,13 +70,19 @@ def _from_bars(code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str)
             payload={"pe": float(bar["市盈率2"])},
         )
         for bar in bars
+        if since is None or str(bar["日期"]) > since
     ]
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
+def fetch_live(
+    code: str, *, fetched_at: str, since: str | None = None
+) -> list[Reading]:  # pragma: no cover - live path
     """Pull a fund basket's PE history via AkShare's CSI index valuation feed.
 
-    Requires the `live` extra + network. A fund with no tracked-index mapping yields no rows.
+    Requires the `live` extra + network. A fund with no tracked-index mapping yields no rows. The
+    CSI feed already serves only a short trailing window, so ``since`` (the latest stored ``as_of``)
+    is applied as a write-watermark — newer bars only — with the store's content dedup as the
+    backstop for the rest, rather than a network ``start_date`` the feed does not expose.
     """
 
     index_code = _TRACKED_INDEX.get(code)
@@ -82,4 +91,5 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
     import akshare as ak
 
     frame = ak.stock_zh_index_value_csindex(symbol=index_code)
-    return _from_bars(code, (bar for _, bar in frame.iterrows()), fetched_at=fetched_at)
+    bars = (bar for _, bar in frame.iterrows())
+    return _from_bars(code, bars, fetched_at=fetched_at, since=since)

@@ -132,7 +132,9 @@ def ingest(config: Config, *, market: Market | None = None) -> int:
     store = _open_store(config)
     graph = _open_graph(config)
     try:
-        n = store.append(mkt.gather(config, as_of=as_of))
+        # Pass the store so each per-fund re-pull is watermarked against what prior nights already
+        # wrote — gather reads it before tonight's rows land, so the floor is last night's latest.
+        n = store.append(mkt.gather(config, as_of=as_of, store=store))
         # A fund the universe feed stopped listing is disclosed delisted as of tonight — the only
         # way an append-only store learns of a death no feed announces.
         n += store.append(
