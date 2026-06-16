@@ -2,7 +2,7 @@
 
 An **independent** assessment of whether the proposed data-flow refactor (see `docs/DATA_FLOW.md`)
 can deliver data to a frontend at scale — low latency, high throughput — under load. This evaluation
-is **standalone**: it is not filed under, dependent on, or scoped by any existing roadmap issue.
+is **standalone**.
 
 Scope: the *read path* the frontend touches, not the nightly write path. Where the write-path
 refactor affects serving, it is called out.

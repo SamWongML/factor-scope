@@ -1,6 +1,6 @@
 # factor-scope — Data-Flow Architecture: live feeds, scale, and the durable target
 
-This is a design companion to `docs/ROADMAP.md`. It answers three questions the nightly-batch →
+This is a data-flow design companion to `CLAUDE.md`. It answers three questions the nightly-batch →
 API → frontend future raises:
 
 1. **What does a complete *live* run actually pull** (every CN + US feed) and **how many artifacts
@@ -254,7 +254,7 @@ snapshot ("cassette") fixture model:
 3. Determinism is preserved: recorded responses + the deterministic `fetched_at_for(as_of)` keep
    `dashboard.json` byte-for-byte, and the snapshot boundary still freezes the reasoning input.
 
-This is consistent with the ROADMAP's snapshot boundary: ingest is the non-deterministic edge;
+This is consistent with the snapshot boundary: ingest is the non-deterministic edge;
 everything downstream is deterministic over a frozen snapshot. **Fixtures become a committed frozen
 snapshot at realistic scale**, so `make test`/`make system` actually validates the incremental-ingest
 and dedup paths that production depends on — and the artifact-volume math above gets a regression
@@ -264,8 +264,7 @@ test instead of living only in this document.
 
 ## Part 7 — Migration plan (standalone)
 
-This refactor stands on its own — it is **not** filed under or dependent on any existing roadmap
-issue. Ordered by leverage; each is one session / one PR / `make check` green.
+This refactor stands on its own. Ordered by leverage; each is one session / one PR / `make check` green.
 
 1. **Content-dedup append** (§5.1b). Smallest change, biggest win; kills write amplification
    immediately. Unit-test that re-appending an unchanged payload is a no-op and a changed payload

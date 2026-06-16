@@ -19,7 +19,7 @@ make check    # lint + typecheck + test — THE bar; a change isn't done until t
 
 CLI: `factor-scope run|nightly|serve|ingest|schedule|schema` (`--help` per command).
 
-## Layout — full map in `docs/ROADMAP.md`
+## Layout
 
 - `factor_scope/contract/` — pydantic models for `dashboard.json` + JSON-schema export. **The spine.**
 - `pipeline.py` — `ingest()` fills the store; `build_dashboard`/`run` read it → `Dashboard`.
@@ -68,5 +68,4 @@ CLI: `factor-scope run|nightly|serve|ingest|schedule|schema` (`--help` per comma
   in `.claude/agents/`) · `fake` (the deterministic offline stub) · DeepSeek is a **chore** model
   only, never a `--provider` value.
 
-Ops (nightly job, scheduling, provider budget): `docs/ops/RUNBOOK.md`. Direction, architecture map &
-upgrade plan: `docs/ROADMAP.md`.
+Ops (nightly job, scheduling, provider budget): `docs/ops/RUNBOOK.md`.

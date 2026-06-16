@@ -1,6 +1,6 @@
 """Inferred theme→fund mapping — candidate generation from data (重合度 + 涨跌幅相关性).
 
-A professional CN sector-rotation desk (ROADMAP §4) never starts from a hand-tagged table: it
+A professional CN sector-rotation desk never starts from a hand-tagged table: it
 derives each theme's candidate funds from the data. For a theme's reference constituents, this
 module ranks the fund universe by **holdings overlap (重合度)** — the disclosed weight a fund
 carries in the theme's names, read off the look-through graph — **confirmed by rolling return

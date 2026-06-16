@@ -171,12 +171,9 @@ sets `budget_exhausted: true` — the cap lives outside the model, exactly like 
 Read `dashboard.json` (or `factor-scope run` / `nightly` prints a terminal render). Most mornings the
 right action is none — *patience is a position*. The engine shortens your **lag**, not your judgment.
 
-## Graduate tier (documented, not built)
+## Documented, not built
 
-Add only when backtesting begins — not on the nightly critical path:
+Add only when its trigger arrives — not on the nightly critical path:
 
-- **Bitemporal backtesting** on ArcticDB under a strict durability discipline: Deflated Sharpe Ratio,
-  Probability of Backtest Overfitting, purged/embargoed CV (CPCV), parameter-stability, after-cost +
-  point-in-time always. The self-scoring loop is the live durability mechanism until then.
 - An **optional local vector store** (e.g. LanceDB + local embeddings) for fuzzy theme/news recall —
   the emerging funnel's live discovery swap — live by default, never in CI.
