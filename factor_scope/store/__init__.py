@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS readings (
     as_of VARCHAR NOT NULL,
     fetched_at VARCHAR NOT NULL,
     payload VARCHAR NOT NULL,
-    PRIMARY KEY (series, key, as_of, fetched_at, payload)
+    PRIMARY KEY (series, key, as_of, fetched_at)
 );
 """
 
@@ -102,13 +102,37 @@ class DuckDBStore:
         ]
         if not rows:
             return 0
-        # Idempotent append: a retried run re-stamps the same deterministic fetched_at, so an
-        # identical row is a no-op (provenance is part of the key — two sources for the same
-        # fund/day stay distinct). Return how many were actually new.
+        # Content-addressed revision: a reading is stored only when its payload differs from the
+        # latest revision already held for that (series, key, as_of). The nightly ingest re-pulls
+        # full histories, so an unchanged bar arrives again every night under a fresh fetched_at —
+        # keying the write on content, not the fetch stamp, makes that re-fetch a no-op (cross-
+        # night, not just within one run's retries). A genuine restatement (a changed payload) is
+        # recorded as a new revision, read_as_of returns the latest. Return how many were written.
         before = self.count()
-        self._con.executemany(
-            f"INSERT INTO readings ({_COLS}) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", rows
+        self._con.execute(
+            "CREATE OR REPLACE TEMP TABLE _incoming "
+            "(series VARCHAR, key VARCHAR, as_of VARCHAR, fetched_at VARCHAR, payload VARCHAR)"
         )
+        try:
+            self._con.executemany("INSERT INTO _incoming VALUES (?, ?, ?, ?, ?)", rows)
+            self._con.execute(
+                f"""
+                INSERT INTO readings ({_COLS})
+                SELECT i.series, i.key, i.as_of, i.fetched_at, i.payload
+                FROM _incoming i
+                LEFT JOIN (
+                    SELECT series, key, as_of, payload FROM readings
+                    QUALIFY row_number() OVER (
+                        PARTITION BY series, key, as_of ORDER BY fetched_at DESC
+                    ) = 1
+                ) latest
+                  ON latest.series = i.series AND latest.key = i.key AND latest.as_of = i.as_of
+                WHERE latest.payload IS NULL OR latest.payload <> i.payload
+                ON CONFLICT DO NOTHING
+                """
+            )
+        finally:
+            self._con.execute("DROP TABLE IF EXISTS _incoming")
         return self.count() - before
 
     def read_as_of(self, series: str, as_of: str) -> list[Reading]:
