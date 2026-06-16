@@ -6,11 +6,14 @@ the release's own date. ``revision`` is the period-over-period change in end-dem
 factor ranks the latest revision point-in-time against its own history — accelerating revisions are
 a demand tailwind, fading ones a headwind.
 
-Live pulls AkShare's industrial orders/capex release — never called in CI.
+Live reads AkShare's industrial value-added YoY release
+(``macro_china_industrial_production_yoy``) and takes the change in the growth rate as the
+revision — never called in CI.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -44,18 +47,28 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
 
 
 def _from_bars(bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
-    """Map AkShare's release rows (日期 / 当月环比) to Readings — the pure core of live."""
+    """Map the release rows (日期 / 今值 / 前值, the YoY growth rate) to Readings — the pure core.
 
-    return [
-        Reading(
-            series=SERIES,
-            key=KEY,
-            as_of=str(bar["日期"]),
-            fetched_at=fetched_at,
-            payload={"revision": float(bar["当月环比"])},
+    ``revision`` is the change in that rate (今值 − 前值): positive is accelerating demand,
+    negative fading. The latest period's actual (今值) can be unreleased (NaN); that row is
+    dropped, not raised.
+    """
+
+    readings: list[Reading] = []
+    for bar in bars:
+        current = float(bar["今值"])
+        if math.isnan(current):
+            continue
+        readings.append(
+            Reading(
+                series=SERIES,
+                key=KEY,
+                as_of=str(bar["日期"]),
+                fetched_at=fetched_at,
+                payload={"revision": current - float(bar["前值"])},
+            )
         )
-        for bar in bars
-    ]
+    return readings
 
 
 def fetch_live(*, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path

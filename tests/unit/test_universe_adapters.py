@@ -160,3 +160,23 @@ def test_etf_scale_carries_aum_per_exchange_stamped_with_its_own_date() -> None:
     assert sse.payload["aum"] == 68.0
     assert sse.payload["shares"] == 40.0
     assert by_code["159755"].payload["exchange"] == "szse"
+
+
+def test_etf_scale_maps_the_akshare_spot_columns() -> None:
+    # the live ETF spot feed (代码 / 数据日期 / 总市值 in 元 / 最新份额 in 份) maps to the same
+    # Reading shape as the fixture (aum/shares in 亿), pinned offline so the mapping is covered
+    # without the network. 数据日期 arrives as a timestamp; only its date is kept, and the exchange
+    # is read off the code prefix (5… is Shanghai, otherwise Shenzhen).
+    rows = [
+        {"代码": "561010", "数据日期": "2026-06-15 00:00:00", "总市值": 6_800_000_000.0,
+         "最新份额": 4_000_000_000.0},
+        {"代码": "159755", "数据日期": "2026-06-15 00:00:00", "总市值": 4_600_000_000.0,
+         "最新份额": 4_200_000_000.0},
+    ]
+    sse, szse = etf_scale._from_rows(rows, fetched_at=FETCHED_AT)
+    assert sse.series == etf_scale.SERIES
+    assert sse.key == "561010"
+    assert sse.as_of == "2026-06-15"  # the feed's own date, time component dropped
+    assert sse.payload == {"exchange": "sse", "aum": 68.0, "shares": 40.0}
+    assert szse.key == "159755"
+    assert szse.payload == {"exchange": "szse", "aum": 46.0, "shares": 42.0}

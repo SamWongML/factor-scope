@@ -77,6 +77,26 @@ factor-scope serve                      # http://127.0.0.1:8765
 It never ingests or reasons — the snapshot boundary holds. At one small JSON per night
 (~365/year) the history needs no retention machinery.
 
+## Verifying the live path
+
+The offline suite (`make check`) is forced onto fixtures + the `fake` provider, so it never imports a
+live source — it cannot catch a dependency upgrade or an upstream API/schema drift that breaks a real
+nightly. Run the live canary after **any dependency bump or adapter change**, before trusting the next
+nightly:
+
+```bash
+make live-check    # FACTOR_SCOPE_LIVE=1 live smoke suite + a real `factor-scope ingest`
+```
+
+`tests/integration/test_adapters_live.py` (gated by `FACTOR_SCOPE_LIVE=1`, skipped everywhere else)
+hits each source and asserts its **full payload schema** — keys, types, plausible ranges — so drift
+fails here loudly instead of silently feeding the artifact. Run it on the Mac-mini host: several CN
+feeds geo-block cloud runners, so a GitHub Actions live canary is unreliable and intentionally not
+wired up. The `fred` and `edgar` legs need their credentials set first (`FRED_API_KEY` and an EDGAR
+identity, e.g. `EDGARTOOLS_IDENTITY="you you@example.com"`); without them those two legs are the only
+ones that can't run. A fund with no tracked-index mapping has no valuation read and reads
+`valid=False` — expected, not a failure.
+
 ## Scheduling
 
 Generate the scheduler config with `factor-scope schedule` (a pure render — review it before

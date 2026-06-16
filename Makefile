@@ -1,13 +1,12 @@
 # factor-scope — developer entrypoints. Uses `uv` as the package manager.
 .DEFAULT_GOAL := help
-.PHONY: help setup test unit system lint typecheck check run clean
+.PHONY: help setup test unit system lint typecheck check live-check run clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-setup: ## Create the uv venv and install the project (+dev, +store, +serve extras)
-	uv venv
-	uv pip install -e ".[dev,store,serve]"
+setup: ## Install the project from the committed lock (+dev, +store, +serve, +live extras)
+	uv sync --frozen --extra dev --extra store --extra serve --extra live
 
 test: ## Run the full test suite (unit + integration + system), offline
 	uv run pytest
@@ -25,6 +24,10 @@ typecheck: ## Type-check with mypy
 	uv run mypy factor_scope
 
 check: lint typecheck test ## Everything CI runs
+
+live-check: ## Verify the live path against real sources — run after any dependency/adapter change
+	FACTOR_SCOPE_LIVE=1 uv run --extra live pytest tests/integration/test_adapters_live.py -v
+	uv run --extra live factor-scope ingest
 
 run: ## Run the engine over bundled fixtures (offline) and print the morning artifact
 	uv run factor-scope run --offline
