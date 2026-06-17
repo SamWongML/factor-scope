@@ -29,11 +29,11 @@ _IMMUTABLE = "public, max-age=31536000, immutable"
 _REVALIDATE = "public, max-age=0, must-revalidate"
 
 
-def _etag(payload: str) -> str:
-    """A strong validator over the response's identity — content for the index, the pointer's
-    target for ``latest`` — so an unchanged night index revalidates to 304."""
+def _etag(identity: str) -> str:
+    """A strong validator over whatever pins a response's identity, so an unchanged response
+    revalidates to a cheap 304."""
 
-    return '"' + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32] + '"'
+    return '"' + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32] + '"'
 
 
 def _page_links(offset: int, limit: int, total: int) -> str:

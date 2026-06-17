@@ -138,6 +138,19 @@ def test_cors_is_closed_by_default_and_configurable(tmp_path) -> None:
     assert allowed.headers["access-control-allow-origin"] == "https://app.example"
 
 
+def test_a_closed_surface_rejects_the_cors_preflight(tmp_path) -> None:
+    # The browser's pre-flight OPTIONS for a cross-origin read is not granted on a closed surface.
+    record(_dash("2026-06-05"), tmp_path)
+    preflight = {"Origin": "https://app.example", "Access-Control-Request-Method": "GET"}
+
+    closed = TestClient(create_app(tmp_path)).options("/dashboards", headers=preflight)
+    assert "access-control-allow-origin" not in closed.headers
+
+    open_to = TestClient(create_app(tmp_path, allow_origins=("https://app.example",)))
+    granted = open_to.options("/dashboards", headers=preflight)
+    assert granted.headers["access-control-allow-origin"] == "https://app.example"
+
+
 def test_openapi_exposes_the_contract_models(client: TestClient) -> None:
     # The typed schema a frontend client is generated from — the contract models ARE the API.
     schemas = client.get("/openapi.json").json()["components"]["schemas"]
