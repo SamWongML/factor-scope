@@ -333,6 +333,12 @@ def serve(
     ),
     host: str = typer.Option("127.0.0.1", help="Interface to bind — localhost by default."),
     port: int = typer.Option(8765, help="Port to bind."),
+    allow_origin: list[str] = typer.Option(
+        [],
+        "--allow-origin",
+        help="A front-end origin allowed to read this API (repeatable). A localhost bind opens "
+        "wide by default; any remote bind stays closed until origins are named here.",
+    ),
 ) -> None:
     """Serve the dashboard history as a read-only JSON API (needs the ``serve`` extra).
 
@@ -346,7 +352,19 @@ def serve(
 
     from factor_scope.serve import create_app
 
-    uvicorn.run(create_app(history_dir), host=host, port=port)
+    uvicorn.run(create_app(history_dir, allow_origins=_cors_origins(host, allow_origin)),
+                host=host, port=port)
+
+
+# A localhost, single-user bind may read from anywhere on the machine; a remote bind must not echo
+# arbitrary origins, so it stays closed until the operator names the front-ends allowed to read it.
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _cors_origins(host: str, allow_origin: list[str]) -> tuple[str, ...]:
+    if allow_origin:
+        return tuple(allow_origin)
+    return ("*",) if host in _LOOPBACK else ()
 
 
 @app.command()

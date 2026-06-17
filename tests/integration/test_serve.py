@@ -49,8 +49,19 @@ def test_a_night_is_served_as_the_recorded_artifact(client: TestClient) -> None:
     assert resp.status_code == 200
     dash = Dashboard.model_validate(resp.json())
     assert dash == _dash("2026-06-04")
-    # A recorded night never changes, so the response is cacheable forever.
+    # A recorded night never changes, so the response is cacheable forever, with a strong ETag
+    # for the static/CDN tier to validate against.
     assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert resp.headers["etag"]
+
+
+def test_a_night_revalidates_to_304_on_a_matching_etag(client: TestClient) -> None:
+    first = client.get("/dashboards/2026-06-04")
+    etag = first.headers["etag"]
+    again = client.get("/dashboards/2026-06-04", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.headers["etag"] == etag
+    assert again.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 def test_latest_is_the_newest_night(client: TestClient) -> None:
@@ -83,6 +94,50 @@ def test_an_empty_history_serves_an_empty_index_and_no_latest(tmp_path) -> None:
     assert bare.get("/dashboards/latest").status_code == 404
 
 
+def test_the_index_is_paginated_and_bounded(tmp_path) -> None:
+    for day in range(1, 7):
+        record(_dash(f"2026-06-{day:02d}"), tmp_path)
+    client = TestClient(create_app(tmp_path))
+
+    page = client.get("/dashboards", params={"limit": 2, "offset": 2})
+    assert page.status_code == 200
+    # A bounded window into the oldest-first index, with the full count out of band.
+    assert [e["as_of"] for e in page.json()["entries"]] == ["2026-06-03", "2026-06-04"]
+    assert page.headers["x-total-count"] == "6"
+    # Link relations let a client walk the whole history without an unbounded response.
+    assert 'rel="next"' in page.headers["link"]
+    assert 'rel="prev"' in page.headers["link"]
+
+    last = client.get("/dashboards", params={"limit": 2, "offset": 4})
+    assert [e["as_of"] for e in last.json()["entries"]] == ["2026-06-05", "2026-06-06"]
+    assert 'rel="next"' not in last.headers.get("link", "")
+
+    # The window bounds the payload regardless of how long the history grows.
+    over = client.get("/dashboards", params={"limit": 9999})
+    assert over.status_code == 422
+
+
+def test_large_list_responses_are_compressed(tmp_path) -> None:
+    for day in range(1, 21):
+        record(_dash(f"2026-06-{day:02d}"), tmp_path)
+    client = TestClient(create_app(tmp_path))
+    resp = client.get("/dashboards", headers={"Accept-Encoding": "gzip"})
+    assert resp.status_code == 200
+    assert resp.headers["content-encoding"] == "gzip"
+
+
+def test_cors_is_closed_by_default_and_configurable(tmp_path) -> None:
+    record(_dash("2026-06-05"), tmp_path)
+    cross = {"Origin": "https://app.example", "Access-Control-Request-Method": "GET"}
+
+    closed = TestClient(create_app(tmp_path))
+    assert "access-control-allow-origin" not in closed.get("/dashboards", headers=cross).headers
+
+    open_to = TestClient(create_app(tmp_path, allow_origins=("https://app.example",)))
+    allowed = open_to.get("/dashboards", headers=cross)
+    assert allowed.headers["access-control-allow-origin"] == "https://app.example"
+
+
 def test_openapi_exposes_the_contract_models(client: TestClient) -> None:
     # The typed schema a frontend client is generated from — the contract models ARE the API.
     schemas = client.get("/openapi.json").json()["components"]["schemas"]
@@ -106,3 +161,40 @@ def test_serve_command_binds_the_history_api(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert bound == {"host": "127.0.0.1", "port": 9999, "nights": ["2026-06-05"]}
+
+
+def test_serve_does_not_open_cors_wide_on_a_remote_bind(tmp_path, monkeypatch) -> None:
+    # Binding beyond localhost without an explicit allow-list must NOT echo arbitrary origins.
+    record(_dash("2026-06-05"), tmp_path)
+    cross = {"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"}
+    seen: dict[str, object] = {}
+
+    def fake_run(built: FastAPI, host: str, port: int) -> None:
+        headers = TestClient(built).get("/dashboards", headers=cross).headers
+        seen["acao"] = headers.get("access-control-allow-origin")
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    result = CliRunner().invoke(cli, ["serve", "--history-dir", str(tmp_path), "--host", "0.0.0.0"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["acao"] is None
+
+
+def test_serve_honours_an_explicit_cors_allow_list(tmp_path, monkeypatch) -> None:
+    record(_dash("2026-06-05"), tmp_path)
+    cross = {"Origin": "https://app.example", "Access-Control-Request-Method": "GET"}
+    seen: dict[str, object] = {}
+
+    def fake_run(built: FastAPI, host: str, port: int) -> None:
+        headers = TestClient(built).get("/dashboards", headers=cross).headers
+        seen["acao"] = headers.get("access-control-allow-origin")
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    result = CliRunner().invoke(
+        cli,
+        ["serve", "--history-dir", str(tmp_path), "--host", "0.0.0.0",
+         "--allow-origin", "https://app.example"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["acao"] == "https://app.example"

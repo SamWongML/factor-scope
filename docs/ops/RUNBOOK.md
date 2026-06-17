@@ -69,14 +69,45 @@ Serve the history to a frontend with the read-only API (the pinned `serve` extra
 
 ```bash
 factor-scope serve                      # http://127.0.0.1:8765
-# GET /dashboards            → the index (one entry per night, oldest first)
-# GET /dashboards/2026-06-05 → that night's artifact (immutable, cacheable forever)
-# GET /dashboards/latest     → the newest night
-# GET /openapi.json          → the typed schema to generate a frontend client from
+# GET /dashboards?limit=&offset= → the index, oldest first (bounded page; X-Total-Count + Link)
+# GET /dashboards/2026-06-05     → that night's artifact (immutable, cacheable forever; ETag)
+# GET /dashboards/latest         → the newest night (revalidates against a strong ETag)
+# GET /openapi.json              → the typed schema to generate a frontend client from
 ```
 
 It never ingests or reasons — the snapshot boundary holds. At one small JSON per night
 (~365/year) the history needs no retention machinery.
+
+**Response hygiene.** Every response carries a strong `ETag` (immutable nights are also
+content-addressed by `snapshot_id`) and is gzip-compressed over the wire; `/dashboards` is bounded
+to one page (`limit` ≤ 500, default 100), the full count in `X-Total-Count` and page navigation in
+`Link` — the list is never returned unbounded.
+
+**CORS.** A localhost bind opens CORS wide (single-user surface); any remote bind
+(`--host 0.0.0.0`) stays closed until the front-end origins are named explicitly:
+
+```bash
+factor-scope serve --host 0.0.0.0 --allow-origin https://dash.example
+```
+
+**Static / CDN tier (the common path off the app).** The dated artifacts are immutable and
+content-addressed, so they are trivially cacheable — the dashboard directory *is* the origin. Front
+it directly with a static file server / object store / CDN and let only the dynamic endpoints reach
+the Python app:
+
+```nginx
+# the immutable, content-addressed nights — served straight off disk, long-lived + revalidatable
+location /dashboards/ {
+    root /srv/factor-scope/out;          # …/out/dashboards/<as_of>.json
+    add_header Cache-Control "public, max-age=31536000, immutable";
+    gzip on; gzip_types application/json;
+    try_files $uri @app;                 # /dashboards (index) and /latest fall through to the app
+}
+location @app { proxy_pass http://127.0.0.1:8765; }
+```
+
+This takes the dominant read (open a given morning) entirely off the app process; only the
+once-a-day index/`latest` touch Python.
 
 ## Verifying the live path
 
