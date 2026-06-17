@@ -110,7 +110,9 @@ def test_fundamentals_live_smoke() -> None:
 @skip_unless_live
 def test_trading_activity_live_smoke() -> None:
     reading = trading_activity.fetch_live(_PROBE, fetched_at="t")[0]
-    assert reading.payload.keys() == {"turnover", "amount"}
+    # EastMoney history yields {turnover, amount}; the spot-board fallback adds a `provisional` tag.
+    assert {"turnover", "amount"} <= reading.payload.keys()
+    assert reading.payload.keys() <= {"turnover", "amount", "provisional"}  # only the optional tag
     assert reading.payload["turnover"] >= 0 and reading.payload["amount"] >= 0
 
 

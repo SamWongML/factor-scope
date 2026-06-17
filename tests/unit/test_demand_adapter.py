@@ -51,3 +51,23 @@ def test_demand_maps_the_akshare_release_columns() -> None:
     assert reading.key == demand.KEY
     assert reading.as_of == "2026-08-15"
     assert reading.payload["revision"] == pytest.approx(5.7 - 6.8)
+
+
+def test_demand_drops_rows_where_previous_value_is_unreleased() -> None:
+    # 前值 can also be NaN when the prior period hasn't been revised yet; dropping such a row
+    # is correct — we can't compute a revision without a baseline.
+    bars = [
+        {"日期": "2026-08-15", "今值": 5.7, "预测值": 6.0, "前值": float("nan")},
+        {"日期": "2026-07-15", "今值": 6.8, "预测值": 6.5, "前值": 5.2},
+    ]
+    readings = demand._from_bars(bars, fetched_at=FETCHED_AT)
+    assert len(readings) == 1
+    assert readings[0].as_of == "2026-07-15"
+    assert readings[0].payload["revision"] == pytest.approx(6.8 - 5.2)
+
+
+def test_demand_drops_an_unreleased_row_without_reading_its_baseline() -> None:
+    # 今值 unreleased (NaN): the row is dropped before 前值 is read at all, so a blank/non-numeric
+    # baseline on that same row cannot raise — a revision needs both points, and this one has none.
+    bars = [{"日期": "2026-08-15", "今值": float("nan"), "前值": "—"}]
+    assert demand._from_bars(bars, fetched_at=FETCHED_AT) == []

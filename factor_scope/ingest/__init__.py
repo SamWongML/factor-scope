@@ -89,15 +89,22 @@ def _with_timeout(thunk: Callable[[], list[Reading]], seconds: float) -> list[Re
 
 
 def _live_or_empty(
-    fetch: Callable[..., list[Reading]], code: str, *, source: str, fetched_at: str
+    fetch: Callable[..., list[Reading]],
+    code: str,
+    *,
+    source: str,
+    fetched_at: str,
+    **kwargs: object,
 ) -> list[Reading]:
-    """A live price read that yields no rows instead of raising on failure — *loudly*.
+    """A live read that yields no rows instead of raising on failure — *loudly*.
 
-    The CN price path is multi-sourced for anti-fragility: turning one source going
-    offline into an empty read lets :func:`prices.select_reconciled` fall back to the others, rather
-    than letting an IP-block, hang, or timeout crash the whole nightly run. Each attempt is bounded
-    by a wall-clock deadline and the read is retried with backoff, so a transient blip is ridden out
-    and a hung server is abandoned rather than counted as an outage.
+    The live ingest path is resilient by construction: turning a source going offline into an empty
+    read lets the caller degrade — the multi-source price path reconciles to the remaining sources
+    (:func:`prices.select_reconciled`), a per-fund factor leg falls to ``FactorState(valid=False)``
+    — rather than letting an IP-block, hang, or timeout crash the whole nightly run. Each attempt is
+    bounded by a wall-clock deadline and retried with backoff, so a transient blip is ridden out and
+    a hung server is abandoned rather than counted as an outage. Any ``kwargs`` (e.g. the
+    incremental-fetch ``since`` watermark) pass straight through to ``fetch``.
 
     A genuine empty read (no bars today) returns ``[]`` silently; a *failure* returns ``[]`` only
     after logging the exception with its source and code, so a silently-degraded source can't go
@@ -106,11 +113,13 @@ def _live_or_empty(
 
     try:
         return _with_retries(
-            lambda: _with_timeout(lambda: fetch(code, fetched_at=fetched_at), _TIMEOUT_SECONDS)
+            lambda: _with_timeout(
+                lambda: fetch(code, fetched_at=fetched_at, **kwargs), _TIMEOUT_SECONDS
+            )
         )
     except Exception:
         logger.warning(
-            "live price source %r failed for %s; falling back to the cross-source",
+            "live source %r failed for %s; degrading to no reading this run",
             source,
             code,
             exc_info=True,

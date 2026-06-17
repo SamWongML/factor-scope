@@ -59,13 +59,16 @@ def _from_bars(bars: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Re
         current = float(bar["今值"])
         if math.isnan(current):
             continue
+        previous = float(bar["前值"])
+        if math.isnan(previous):
+            continue
         readings.append(
             Reading(
                 series=SERIES,
                 key=KEY,
                 as_of=str(bar["日期"]),
                 fetched_at=fetched_at,
-                payload={"revision": current - float(bar["前值"])},
+                payload={"revision": current - previous},
             )
         )
     return readings

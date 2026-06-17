@@ -91,14 +91,29 @@ class AShareUniverse:
         holdings_floor = _holdings_watermarks(store, as_of)
         for fund in universe:  # pragma: no cover - live path
             if fund.payload["on_exchange"]:  # ETFs disclose holdings → the look-through graph edges
-                readings += fund_holdings.fetch_live(
-                    fund.key, fetched_at=fetched_at, since=holdings_floor.get(fund.key)
+                # Each per-fund leg runs behind the same resilience boundary as the price sources:
+                # retry + a wall-clock deadline + a logged failover, so one fund's blocked or hung
+                # source degrades that factor to invalid rather than aborting the universe loop.
+                readings += _live_or_empty(
+                    fund_holdings.fetch_live,
+                    fund.key,
+                    source=fund_holdings.SERIES,
+                    fetched_at=fetched_at,
+                    since=holdings_floor.get(fund.key),
                 )
-                readings += trading_activity.fetch_live(
-                    fund.key, fetched_at=fetched_at, since=activity_floor.get(fund.key)
+                readings += _live_or_empty(
+                    trading_activity.fetch_live,
+                    fund.key,
+                    source=trading_activity.SERIES,
+                    fetched_at=fetched_at,
+                    since=activity_floor.get(fund.key),
                 )
-                readings += fundamentals.fetch_live(
-                    fund.key, fetched_at=fetched_at, since=valuation_floor.get(fund.key)
+                readings += _live_or_empty(
+                    fundamentals.fetch_live,
+                    fund.key,
+                    source=fundamentals.SERIES,
+                    fetched_at=fetched_at,
+                    since=valuation_floor.get(fund.key),
                 )
         for cik in config.edgar_ciks:  # pragma: no cover - live path
             readings += edgar.fetch_live(cik, form="NPORT-P", fetched_at=fetched_at)
@@ -113,11 +128,19 @@ def _series_watermarks(
     Keyed by the adapter's own key (a fund code for trading activity / valuation), so a re-pull
     starts just past what the append-only log already holds. Empty when there is no store to read
     (the offline fixtures path, or a direct ``gather`` call), so the first pull takes full history.
+
+    Provisional readings (a spot-board current-session estimate, not a settled history bar) are
+    skipped, so an outage that fell back to the spot board does not advance the floor — the next
+    history pull backfills the sessions it missed instead of starting past them.
     """
 
     if store is None:
         return {}
-    return {r.key: r.as_of for r in store.read_as_of(series, as_of)}
+    return {
+        r.key: r.as_of
+        for r in store.read_as_of(series, as_of)
+        if not r.payload.get("provisional")
+    }
 
 
 def _holdings_watermarks(store: PointInTimeStore | None, as_of: str) -> dict[str, str]:
