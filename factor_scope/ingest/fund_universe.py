@@ -1,38 +1,24 @@
 """The full CN fund universe — every fund's identity, lifecycle, and scorecard inputs.
 
-`fund_universe.csv → {code, name, type, on_exchange, inception, delisting, fee, tracking_error,
-top10_weight}`. This is the book the engine reasons over once theme→fund mapping (a later step)
-replaces the hand-curated list: all funds, not just the held ones. Each row is keyed by code and
-stamped with the run's ``as_of`` (universe membership is point-in-time — a delisted fund is kept
-with its ``delisting`` date so the look-through stays survivorship-aware). The per-fund scorecard
-inputs (fee, tracking error, top-10 weight) may be absent for a fund that does not disclose them;
-a missing input degrades the row to ``valid=False`` rather than dropping it.
+The universe read carries ``{code, name, type, on_exchange, inception, delisting, fee,
+tracking_error, top10_weight}`` per fund. This is the book the engine reasons over once theme→fund
+mapping (a later step) replaces the hand-curated list: all funds, not just the held ones. Each row
+is keyed by code and stamped with the run's ``as_of`` (universe membership is point-in-time — a
+delisted fund is kept with its ``delisting`` date so the look-through stays survivorship-aware). The
+per-fund scorecard inputs (fee, tracking error, top-10 weight) may be absent for a fund that does
+not disclose them; a missing input degrades the row to ``valid=False`` rather than dropping it. The
+mapping from the universe read to a ``Reading`` lives in the feed (``factor_scope.ingest.feed``).
 
 Live merges AkShare's ``fund_name_em`` (all funds) with ``fund_etf_spot_em`` (the on-exchange ETF
-universe) — never called in CI.
+universe) — never called in CI; the delisting machinery below has no live feed (a dead fund simply
+vanishes from the next pull).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from factor_scope.ingest.base import optional_float, read_rows, required_str
 from factor_scope.store import Reading
 
 SERIES = "fund_universe"
-FIXTURE = "fund_universe.csv"
-_REQUIRED = (
-    "code",
-    "name",
-    "type",
-    "on_exchange",
-    "inception",
-    "delisting",
-    "fee",
-    "tracking_error",
-    "top10_weight",
-)
-_SCORECARD = ("fee", "tracking_error", "top10_weight")
 
 
 def delisting_disclosures(
@@ -74,35 +60,6 @@ def still_listed(delisting: str, as_of: str) -> bool:
     """
 
     return not delisting or delisting > as_of
-
-
-def parse(text: str, *, as_of: str, fetched_at: str) -> list[Reading]:
-    readings: list[Reading] = []
-    for line_no, row in read_rows(text, _REQUIRED, SERIES):
-        code = required_str(row, "code", line_no, SERIES)
-        scorecard = {f: optional_float(row, f, line_no, SERIES) for f in _SCORECARD}
-        readings.append(
-            Reading(
-                series=SERIES,
-                key=code,
-                as_of=as_of,
-                fetched_at=fetched_at,
-                payload={
-                    "name": required_str(row, "name", line_no, SERIES),
-                    "type": required_str(row, "type", line_no, SERIES),
-                    "on_exchange": (row.get("on_exchange") or "").strip().lower() == "true",
-                    "inception": (row.get("inception") or "").strip(),
-                    "delisting": (row.get("delisting") or "").strip(),
-                    **scorecard,
-                    "valid": all(v is not None for v in scorecard.values()),
-                },
-            )
-        )
-    return readings
-
-
-def load_fixture(path: Path, *, as_of: str, fetched_at: str) -> list[Reading]:
-    return parse(path.read_text(encoding="utf-8"), as_of=as_of, fetched_at=fetched_at)
 
 
 def fetch_live(*, as_of: str, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path

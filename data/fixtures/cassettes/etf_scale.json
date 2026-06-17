@@ -1,0 +1,72 @@
+[
+  {
+    "code": "561010",
+    "as_of": "2026-05-31",
+    "exchange": "sse",
+    "aum": 68.0,
+    "shares": 40.0
+  },
+  {
+    "code": "515880",
+    "as_of": "2026-05-31",
+    "exchange": "sse",
+    "aum": 55.0,
+    "shares": 46.0
+  },
+  {
+    "code": "588200",
+    "as_of": "2026-05-31",
+    "exchange": "sse",
+    "aum": 30.0,
+    "shares": 29.0
+  },
+  {
+    "code": "561160",
+    "as_of": "2026-05-31",
+    "exchange": "sse",
+    "aum": 82.0,
+    "shares": 70.0
+  },
+  {
+    "code": "159755",
+    "as_of": "2026-05-31",
+    "exchange": "szse",
+    "aum": 46.0,
+    "shares": 42.0
+  },
+  {
+    "code": "516160",
+    "as_of": "2026-05-31",
+    "exchange": "szse",
+    "aum": 30.0,
+    "shares": 27.0
+  },
+  {
+    "code": "159857",
+    "as_of": "2026-05-31",
+    "exchange": "szse",
+    "aum": 55.0,
+    "shares": 50.0
+  },
+  {
+    "code": "510300",
+    "as_of": "2026-05-31",
+    "exchange": "sse",
+    "aum": 1200.0,
+    "shares": 400.0
+  },
+  {
+    "code": "159999",
+    "as_of": "2026-05-31",
+    "exchange": "szse",
+    "aum": 5.0,
+    "shares": 4.0
+  },
+  {
+    "code": "562990",
+    "as_of": "2026-05-31",
+    "exchange": "szse",
+    "aum": 12.0,
+    "shares": 10.0
+  }
+]

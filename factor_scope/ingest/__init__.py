@@ -127,9 +127,7 @@ def _live_or_empty(
         return []
 
 
-def _check_price_health(  # pragma: no cover - live path
-    n_funds: int, degraded: list[str]
-) -> None:
+def _check_price_health(n_funds: int, degraded: list[str]) -> None:
     """Log the per-run price-source summary and trip the data circuit breaker on systemic failure.
 
     ``degraded`` are the funds with no reconciled price tonight — either unpriced (both sources

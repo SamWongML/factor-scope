@@ -1,52 +1,28 @@
-"""Prices / fund-NAV adapter (CN). Fixture: `prices.csv → {code, as_of, nav}`.
+"""Prices / fund-NAV adapter (CN). Reads ``{code, as_of, nav}`` rows.
 
-Per-item gain comes from cost basis vs the current NAV pulled here. Live is AkShare's ETF history —
-EastMoney (``fund_etf_hist_em``) with a Sina (``fund_etf_hist_sina``) fallback for when EastMoney's
-history host refuses the request — never called in CI (which forces offline).
+Per-item gain comes from cost basis vs the current NAV pulled here, and the trend/reversal/low-vol
+factors read the NAV history. Live is AkShare's ETF history — EastMoney (``fund_etf_hist_em``) with
+a Sina (``fund_etf_hist_sina``) fallback for when EastMoney's history host refuses the request —
+never called in CI (which forces offline). Offline, the recorded NAV history is replayed through the
+feed and reconciled across the three corroborating legs by :func:`select_reconciled`.
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from statistics import median
 
-from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
 
 logger = logging.getLogger(__name__)
 
 SERIES = "prices"
-SOURCE = "akshare"  # this adapter's provenance tag; its live backend + fixture are AkShare-shaped
-FIXTURE = "prices.csv"
-_REQUIRED = ("code", "as_of", "nav")
+SOURCE = "akshare"  # this adapter's provenance tag; its live backend is AkShare-shaped
 
 # CN prices are dual-sourced (AkShare + Baostock) so one scraper going offline can't kill a run.
 # Two same-day reads within this fraction corroborate each other; the default is the
 # SEC/CSSF NAV-error materiality baseline (0.5%). Callers pass a per-run override (Config).
 _CORROBORATION_TOLERANCE = 0.005
-
-
-def parse(text: str, *, fetched_at: str) -> list[Reading]:
-    readings: list[Reading] = []
-    for line_no, row in read_rows(text, _REQUIRED, SERIES):
-        code = required_str(row, "code", line_no, SERIES)
-        as_of = required_str(row, "as_of", line_no, SERIES)
-        nav = as_float(row, "nav", line_no, SERIES)
-        readings.append(
-            Reading(
-                series=SERIES,
-                key=code,
-                as_of=as_of,
-                fetched_at=fetched_at,
-                payload={"nav": nav, "source": SOURCE},
-            )
-        )
-    return readings
-
-
-def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
-    return parse(path.read_text(encoding="utf-8"), fetched_at=fetched_at)
 
 
 def _flag(reading: Reading, peer_nav: float) -> Reading:

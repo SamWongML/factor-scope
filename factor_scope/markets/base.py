@@ -4,8 +4,10 @@ A :class:`Market` turns one run (a :class:`~factor_scope.config.Config` + an ``a
 :class:`~factor_scope.store.Reading` rows the pipeline reasons over. It is composed of three
 substitutable sources — a :class:`UniverseSource` (the book), a :class:`PriceSource` (NAVs), and a
 :class:`ThemeSource` (emerging candidates) — so the engine targets these interfaces, not A-share.
-:class:`ComposedMarket` is the generic wiring (universe → its codes → prices → themes); concrete
-markets (see :mod:`factor_scope.markets.ashare`) reuse it and may add market-level reads on top.
+:class:`ComposedMarket` is the generic wiring (universe → its codes → prices → themes) a market can
+reuse; a concrete market may instead orchestrate its own gather (A-share prices its on-exchange
+universe, not just the book, so it composes the sources directly — see
+:mod:`factor_scope.markets.ashare`).
 """
 
 from __future__ import annotations
