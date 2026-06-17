@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from factor_scope import history
@@ -111,7 +111,16 @@ def _resolve_as_of(config: Config) -> str:
 
 
 def _open_store(config: Config) -> DuckDBStore:
-    return DuckDBStore(":memory:" if config.store_path is None else config.store_path)
+    return DuckDBStore(
+        ":memory:" if config.store_path is None else config.store_path,
+        cold_dir=config.cold_dir,
+    )
+
+
+def _cold_cutoff(as_of: str, hot_window_days: int) -> str:
+    """The oldest as-of kept hot: readings dated before this tier to cold on the next ingest."""
+
+    return (date.fromisoformat(as_of) - timedelta(days=hot_window_days)).isoformat()
 
 
 def _open_graph(config: Config) -> LadybugGraphStore:
@@ -146,6 +155,10 @@ def ingest(config: Config, *, market: Market | None = None) -> int:
         )
         build_graph_from_store(graph, store)
         n += _materialise_mapping(store, graph, as_of)
+        # Tier readings outside the hot window to cold Parquet, keeping the hot DuckDB file bounded
+        # as history accrues. Reads still union hot + cold, so the snapshot is unchanged.
+        if config.cold_dir is not None:
+            store.tier_cold(_cold_cutoff(as_of, config.hot_window_days))
         return n
     finally:
         store.close()

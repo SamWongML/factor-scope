@@ -216,8 +216,9 @@ trivially within DuckDB's envelope for a decade-plus.
   touches the network.
 - **Silver (the point-in-time `readings` log).** Stays DuckDB-backed and append-only. Recent window
   hot in the DuckDB file; cold data exported to **Hive-partitioned Parquet** (`series=…/year=…/`) via
-  the existing `export_parquet`, queried in place. The deterministic reasoning pipeline reads only
-  this layer (the snapshot boundary), keyed by `snapshot_id`.
+  `DuckDBStore.tier_cold`, queried in place — every read unions hot + cold transparently. The
+  deterministic reasoning pipeline reads only this layer (the snapshot boundary), keyed by
+  `snapshot_id`.
 - **Gold (the artifact).** `dashboard.json` + the immutable `dashboards/<as_of>.json` archive —
   unchanged. Already content-addressed and cache-friendly.
 
@@ -280,7 +281,7 @@ This refactor stands on its own. Ordered by leverage; each is one session / one 
    universe. Turns quadratic → linear.
 3. **Cassette fixtures + unified ingest path** (§6). Removes the offline/online code fork; gives the
    expensive live paths real coverage.
-4. **Cold-tier partitioned Parquet** (§5.2) via `export_parquet` with Hive layout + a recent-window
+4. **Cold-tier partitioned Parquet** (§5.2) via `DuckDBStore.tier_cold` with Hive layout + a recent-window
    policy.
 5. **Read-only serving connection over silver** (§5.4) for time-series endpoints; keep JSON serving
    for dashboards.

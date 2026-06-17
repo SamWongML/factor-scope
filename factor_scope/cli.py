@@ -111,6 +111,17 @@ def ingest(
         "--graph-path",
         help="The durable connection graph to materialise from the holdings feeds.",
     ),
+    cold_dir: Path | None = typer.Option(
+        None,
+        "--cold-dir",
+        help="Tier readings older than the hot window into Hive-partitioned Parquet here "
+        "(series=…/year=…); reads union hot + cold. Unset = keep the whole log hot.",
+    ),
+    hot_window_days: int = typer.Option(
+        365,
+        "--hot-window-days",
+        help="How many days of readings stay hot in the DuckDB file before tiering to --cold-dir.",
+    ),
 ) -> None:
     """Fill the point-in-time store + connection graph from a source, so `run` can read them."""
 
@@ -120,6 +131,8 @@ def ingest(
         as_of=as_of,
         store_path=store_path,
         graph_path=graph_path,
+        cold_dir=cold_dir,
+        hot_window_days=hot_window_days,
     )
     n = ingest_pipeline(config)
     typer.echo(f"✓ appended {n} readings to {store_path}; built graph at {graph_path}", err=True)
@@ -239,6 +252,17 @@ def nightly(
     graph_path: Path = typer.Option(
         Path("out") / "graph.ladybug", "--graph-path", help="The durable connection graph."
     ),
+    cold_dir: Path | None = typer.Option(
+        None,
+        "--cold-dir",
+        help="Tier readings older than the hot window into Hive-partitioned Parquet here "
+        "(series=…/year=…); reads union hot + cold. Unset = keep the whole log hot.",
+    ),
+    hot_window_days: int = typer.Option(
+        365,
+        "--hot-window-days",
+        help="How many days of readings stay hot in the DuckDB file before tiering to --cold-dir.",
+    ),
     log_path: Path = typer.Option(
         Path("out") / "nightly.jsonl", "--log-path", help="The append-only ops run log (JSONL)."
     ),
@@ -274,6 +298,8 @@ def nightly(
         history_dir=history_dir,
         store_path=store_path,
         graph_path=graph_path,
+        cold_dir=cold_dir,
+        hot_window_days=hot_window_days,
         log_path=log_path,
         spend_path=spend_path,
         monthly_budget_usd=monthly_budget,
