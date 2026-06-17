@@ -38,7 +38,7 @@ from factor_scope.ingest import (
     trading_activity,
 )
 from factor_scope.ingest.base import fetched_at_for
-from factor_scope.ingest.feed import Feed, get_feed
+from factor_scope.ingest.feed import get_feed
 from factor_scope.store import PointInTimeStore, Reading
 
 
@@ -57,7 +57,7 @@ class AShareUniverse:
     def gather(
         self, config: Config, *, as_of: str, fetched_at: str, store: PointInTimeStore | None = None
     ) -> list[Reading]:
-        feed: Feed = get_feed(config)
+        feed = get_feed(config)
         readings: list[Reading] = list(
             positions.load_fixture(
                 config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
@@ -151,7 +151,7 @@ class ASharePrices:
         fetched_at: str,
         required: Sequence[str] | None = None,
     ) -> list[Reading]:
-        feed: Feed = get_feed(config)
+        feed = get_feed(config)
         required_codes = set(codes if required is None else required)
         readings: list[Reading] = []
         degraded: list[str] = []  # book codes with no reconciled price — unpriced or flagged
@@ -169,9 +169,7 @@ class ASharePrices:
         return readings
 
 
-def _reconcile_history(
-    sources: list[list[Reading]], *, tolerance: float
-) -> list[Reading]:
+def _reconcile_history(sources: list[list[Reading]], *, tolerance: float) -> list[Reading]:
     """Reconcile one code's NAV history across the price legs, one bar per shared date.
 
     Each leg is that source's read (possibly empty, possibly multi-bar). For every date any leg

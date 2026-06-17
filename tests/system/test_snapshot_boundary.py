@@ -48,6 +48,22 @@ def test_a_fixed_snapshot_reproduces_and_carries_its_snapshot_id(tmp_path) -> No
     assert first.snapshot_id  # non-empty: the artifact names the frozen snapshot it read
 
 
+def test_ingest_makes_no_network_calls(monkeypatch, tmp_path) -> None:
+    # The offline edge: `ingest` replays the committed cassettes through the same universe loop +
+    # reconciliation as live, so with every socket path booby-trapped it still fills the store —
+    # proving the offline transport (CassetteFeed) reaches for no network.
+    def _deny(*args: object, **kwargs: object) -> object:
+        raise AssertionError("offline `ingest` attempted a network call — cassettes replay locally")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _deny)
+    monkeypatch.setattr(socket, "create_connection", _deny)
+    monkeypatch.setattr(socket.socket, "connect", _deny)
+    monkeypatch.setattr(socket.socket, "connect_ex", _deny)
+
+    n = ingest(Config(store_path=tmp_path / "store.duckdb", graph_path=tmp_path / "graph.ladybug"))
+    assert n > 0  # the store was filled entirely from the local recordings
+
+
 def test_run_makes_no_network_calls(monkeypatch) -> None:
     # The no-network guard: with every socket path booby-trapped, a fixtures `run` still produces
     # its artifact — proving it reads the frozen snapshot and never reaches for the network.
