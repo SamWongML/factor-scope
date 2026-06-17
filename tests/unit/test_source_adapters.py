@@ -1,5 +1,6 @@
 """Unit tests for the fixture parsers of the remaining ingestion adapters."""
 
+import logging
 import sys
 import types
 
@@ -16,6 +17,7 @@ from factor_scope.ingest import (
 )
 from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
+from tests.unit._akshare_fakes import FakeFrame, install_fake_akshare
 
 pytestmark = pytest.mark.unit
 
@@ -32,6 +34,56 @@ def test_prices_reads_as_of_per_row() -> None:
 def test_prices_rejects_bad_nav() -> None:
     with pytest.raises(IngestError, match="nav"):
         prices.parse("code,as_of,nav\n561010,2026-06-05,n/a\n", fetched_at="x")
+
+
+def test_sina_symbol_prefixes_by_listing_exchange() -> None:
+    assert prices._sina_symbol("561010") == "sh561010"  # SSE ETFs are 5x
+    assert prices._sina_symbol("159915") == "sz159915"  # SZSE ETFs are 1x
+
+
+def test_prices_fetch_live_uses_eastmoney_when_reachable(monkeypatch) -> None:
+    def em(**kwargs: object) -> FakeFrame:
+        return FakeFrame([{"日期": "2026-06-16", "收盘": 0.918}])
+
+    def sina(symbol: str) -> FakeFrame:
+        raise AssertionError("Sina must not be called when EastMoney answers")
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    reading = prices.fetch_live("561010", fetched_at="t")[0]
+    assert reading.as_of == "2026-06-16"
+    assert reading.payload == {"nav": 0.918, "source": "akshare"}
+
+
+def test_prices_fetch_live_falls_back_to_sina_when_eastmoney_history_refused(monkeypatch) -> None:
+    requested: list[str] = []
+
+    def em(**kwargs: object) -> FakeFrame:
+        raise ConnectionError("history host closed the connection")
+
+    def sina(symbol: str) -> FakeFrame:
+        requested.append(symbol)
+        return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    reading = prices.fetch_live("561010", fetched_at="t")[0]
+    assert requested == ["sh561010"]  # routed to Sina with the exchange prefix
+    assert reading.as_of == "2026-06-16"
+    assert reading.payload == {"nav": 0.918, "source": "akshare"}  # still the akshare leg
+
+
+def test_prices_fetch_live_logs_loudly_when_it_falls_back_to_sina(monkeypatch, caplog) -> None:
+    # A silent EastMoney→Sina swap would hide a persistently-blocked primary for weeks; the fallback
+    # must log so the degradation is visible even though Sina covers the read.
+    def em(**kwargs: object) -> FakeFrame:
+        raise ConnectionError("history host closed the connection")
+
+    def sina(symbol: str) -> FakeFrame:
+        return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    with caplog.at_level(logging.WARNING):
+        prices.fetch_live("561010", fetched_at="t")
+    assert any(r.levelno == logging.WARNING and "561010" in r.getMessage() for r in caplog.records)
 
 
 def test_fund_holdings_keys_each_edge() -> None:

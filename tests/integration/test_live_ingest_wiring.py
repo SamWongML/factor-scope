@@ -362,3 +362,36 @@ def test_live_or_empty_abandons_a_hung_read_and_falls_back(monkeypatch, caplog) 
         out = ingest._live_or_empty(hung, "561010", source="akshare", fetched_at="t")
     assert out == []
     assert any("akshare" in rec.message.lower() for rec in caplog.records)
+
+
+def test_live_or_empty_forwards_extra_kwargs_to_the_fetch() -> None:
+    # The per-fund factor legs (holdings/activity/valuation) need their incremental-fetch watermark;
+    # _live_or_empty forwards any extra kwargs (here ``since``) to the wrapped fetch unchanged.
+    seen: dict[str, object] = {}
+
+    def fetch(code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        seen.update(code=code, fetched_at=fetched_at, since=since)
+        return []
+
+    ingest._live_or_empty(
+        fetch, "561010", source="trading_activity", fetched_at="t", since="2026-06-05"
+    )
+    assert seen == {"code": "561010", "fetched_at": "t", "since": "2026-06-05"}
+
+
+def test_gather_live_degrades_a_failing_per_fund_leg(monkeypatch, caplog) -> None:
+    # A per-fund factor leg that raises (a transient outage) must degrade to no reading for that
+    # fund — its factor falls to invalid — not abort the whole universe loop. The failure is logged.
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)  # no real backoff between retries
+
+    def blocked(code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        raise ConnectionError("valuation host blocked")
+
+    monkeypatch.setattr(fundamentals, "fetch_live", blocked)
+    with caplog.at_level(logging.WARNING):
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    assert {r.key for r in readings if r.series == "fund_holdings"}  # the loop was not aborted
+    assert not [r for r in readings if r.series == "fundamentals"]  # the failing leg → no reading
+    assert any("fundamentals" in rec.getMessage() for rec in caplog.records)

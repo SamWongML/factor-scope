@@ -1,16 +1,20 @@
 """Prices / fund-NAV adapter (CN). Fixture: `prices.csv → {code, as_of, nav}`.
 
-Per-item gain comes from cost basis vs the current NAV pulled here. Live is AkShare's ETF history
-(``fund_etf_hist_em``) — never called in CI (which forces offline).
+Per-item gain comes from cost basis vs the current NAV pulled here. Live is AkShare's ETF history —
+EastMoney (``fund_etf_hist_em``) with a Sina (``fund_etf_hist_sina``) fallback for when EastMoney's
+history host refuses the request — never called in CI (which forces offline).
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from statistics import median
 
 from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
+
+logger = logging.getLogger(__name__)
 
 SERIES = "prices"
 SOURCE = "akshare"  # this adapter's provenance tag; its live backend + fixture are AkShare-shaped
@@ -98,19 +102,40 @@ def select_reconciled(
     return [canonical]
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
-    """Pull the latest daily NAV for one ETF via AkShare. Requires the `live` extra + network."""
+def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:
+    """Pull the latest daily raw-close NAV for one ETF via AkShare. Requires `live` + network.
+
+    EastMoney is the primary backend; when its history host refuses the request, Sina serves the
+    same unadjusted daily close, so a block on one host can't unprice the book. The provenance tag
+    stays ``akshare`` either way — both are AkShare backends on the same raw-close basis.
+    """
 
     import akshare as ak
 
-    frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")  # adjust="" → raw close
-    last = frame.iloc[-1]
+    try:
+        frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")  # adjust="" → raw close
+        last = frame.iloc[-1]
+        as_of, nav = str(last["日期"]), float(last["收盘"])
+    except Exception as exc:
+        logger.warning("prices: EastMoney history refused %s (%s); falling back to Sina", code, exc)
+        frame = ak.fund_etf_hist_sina(symbol=_sina_symbol(code))  # same raw daily close, via Sina
+        last = frame.iloc[-1]
+        as_of, nav = str(last["date"]), float(last["close"])
     return [
         Reading(
             series=SERIES,
             key=code,
-            as_of=str(last["日期"]),
+            as_of=as_of,
             fetched_at=fetched_at,
-            payload={"nav": float(last["收盘"]), "source": SOURCE},
+            payload={"nav": nav, "source": SOURCE},
         )
     ]
+
+
+def _sina_symbol(code: str) -> str:
+    """AkShare's Sina ETF symbol — the exchange-prefixed code the Sina endpoint expects.
+
+    SSE-listed ETFs use codes in the ``5`` range, SZSE-listed ones in the ``1`` range.
+    """
+
+    return f"{'sh' if code.startswith('5') else 'sz'}{code}"

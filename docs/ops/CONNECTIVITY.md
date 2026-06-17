@@ -21,15 +21,15 @@ Two transport classes, because the remediation differs sharply between them.
 
 | Feed | Adapter | Library | Hosts (port 443) | Credential |
 |------|---------|---------|------------------|------------|
-| Prices / NAV (primary) | `ingest/prices.py` | akshare → EastMoney | `push2his.eastmoney.com`, `push2delay.eastmoney.com`, `88.push2.eastmoney.com`, `quote.eastmoney.com` | — |
+| Prices / NAV (primary) | `ingest/prices.py` | akshare → EastMoney, **Sina fallback** | `push2his.eastmoney.com`, `quote.eastmoney.com`; `finance.sina.com.cn` (fallback) | — |
 | ETF scale (AUM/shares) | `ingest/etf_scale.py` | akshare → EastMoney | `push2delay.eastmoney.com`, `push2his.eastmoney.com`, `88.push2.eastmoney.com`, `quote.eastmoney.com` | — |
 | Fund holdings | `ingest/fund_holdings.py` | akshare → EastMoney | `api.fund.eastmoney.com`, `fundf10.eastmoney.com` | — |
 | Fund universe | `ingest/fund_universe.py` | akshare → EastMoney | `api.fund.eastmoney.com`, `fund.eastmoney.com`, `fundf10.eastmoney.com`, `overseas.1234567.com.cn`, `help.1234567.com.cn` | — |
 | Fundamentals (basket PE) | `ingest/fundamentals.py` | akshare → CSI | `www.csindex.com.cn`, `oss-ch.csindex.com.cn` | — |
-| Trading activity | `ingest/trading_activity.py` | akshare → EastMoney | `push2his.eastmoney.com`, `push2delay.eastmoney.com`, `88.push2.eastmoney.com`, `quote.eastmoney.com` | — |
+| Trading activity | `ingest/trading_activity.py` | akshare → EastMoney, **spot-board fallback** | `push2his.eastmoney.com` (history); `88.push2.eastmoney.com`, `push2delay.eastmoney.com` (spot fallback) | — |
 | Demand (industrial YoY) | `ingest/demand.py` | akshare → macro | `data.stats.gov.cn`, `datacenter-web.eastmoney.com`, `data.eastmoney.com`, `data.mofcom.gov.cn`, `finance.sina.com.cn`, `quotes.sina.cn`, `datacenter.jin10.com`, `datacenter-api.jin10.com`, `cdn.jin10.com` | — |
 | FRED macro/liquidity | `ingest/fred.py` | fredapi | `api.stlouisfed.org` | `FRED_API_KEY` |
-| EDGAR 13F / N-PORT | `ingest/edgar.py` | edgartools | `www.sec.gov`, `data.sec.gov`, `efts.sec.gov` | EDGAR identity (`EDGAR_IDENTITY` / `EDGARTOOLS_IDENTITY="name you@example.com"`) |
+| EDGAR 13F / N-PORT | `ingest/edgar.py` | edgartools | `www.sec.gov`, `data.sec.gov`, `efts.sec.gov` | `EDGAR_IDENTITY="name you@example.com"` |
 | Text stream (corpus) | `ingest/textstream.py` | httpx | the configured `--feed-url` host | — |
 | DeepSeek (chore only) | `digest/deepseek.py` | httpx | `api.deepseek.com` | `DEEPSEEK_API_KEY` |
 
@@ -42,6 +42,22 @@ Two transport classes, because the remediation differs sharply between them.
 
 The digest path (`digest/claude_code.py`) shells out to the local `claude` CLI, which uses
 `ANTHROPIC_BASE_URL` and is not a feed. `positions`/`calls`/`themes` have no live data backend.
+
+### EastMoney `push2his` (the kline-history host) and the akshare fallbacks
+
+EastMoney's heavy daily-kline host, `push2his.eastmoney.com`, rate-limits aggressively: under load it
+completes the TLS handshake (genuine `*.eastmoney.com` cert) and then closes every request without a
+response — independent of node, client, headers, or TLS fingerprint, and on a direct mainland-China
+egress as readily as anywhere. The lighter EastMoney hosts (`api.fund.eastmoney.com`,
+`push2delay`/`88.push2` quote-list) stay reachable through it. Both akshare legs that depended on
+`push2his` therefore carry a fallback so a block on that one host can't unprice the book or drop the
+crowding surface:
+
+- **prices** — EastMoney (`fund_etf_hist_em`) first, then **Sina** (`fund_etf_hist_sina`,
+  `finance.sina.com.cn`) on the same raw-close basis. Provenance stays `akshare` either way.
+- **trading activity** — EastMoney per-fund history (`fund_etf_hist_em`) first, then the
+  **whole-market spot board** (`fund_etf_spot_em`, the `clist/get` host) for the current session's
+  turnover + traded value. The spot board is fetched once per run and memoised.
 
 ## Scan result — every feed currently fails
 

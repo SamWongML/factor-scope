@@ -75,7 +75,8 @@ Only FRED and EDGAR need secrets; every other feed is keyless. Acquire and expor
 
 - **`FRED_API_KEY`** — free from <https://fredaccount.stlouisfed.org/apikeys> (register → request key).
 - **EDGAR identity** — no signup; SEC just requires a User-Agent of the form `name email`. Set
-  **`EDGARTOOLS_IDENTITY`** (the edgartools library also accepts `EDGAR_IDENTITY`).
+  **`EDGAR_IDENTITY`** — this is the variable the edgartools library reads (`EDGARTOOLS_IDENTITY`
+  is not checked by the library and will have no effect).
 - **`DEEPSEEK_API_KEY`** *(optional)* — only if you run the research/discovery job; not on the nightly
   judgment path.
 
@@ -83,7 +84,7 @@ For an interactive shell, put them in the shell profile (`~/.zshrc`):
 
 ```bash
 export FRED_API_KEY="…"
-export EDGARTOOLS_IDENTITY="Your Name you@example.com"
+export EDGAR_IDENTITY="Your Name you@example.com"
 # export DEEPSEEK_API_KEY="…"   # optional, discovery only
 ```
 
@@ -103,7 +104,7 @@ table (full host list in `CONNECTIVITY.md`):
 | Failing test(s) | Likely cause | Fix |
 |---|---|---|
 | `test_fred_live_smoke` → `valid API key` | `FRED_API_KEY` unset/typo | redo Step 3, re-`source` |
-| `test_edgar_*` → `IdentityNotSetException` | EDGAR identity unset | set `EDGARTOOLS_IDENTITY` |
+| `test_edgar_*` → `IdentityNotSetException` | EDGAR identity unset | set `EDGAR_IDENTITY` |
 | any akshare test → `JSONDecodeError`/`403`/timeout | host unreachable from this network (CN geo-block, or an HTTP proxy in front) | run on a network that can reach EastMoney/CSI directly; if a corporate proxy intercepts, allowlist the hosts in `CONNECTIVITY.md` |
 | `test_baostock_live_smoke` / `test_mootdx_live_smoke` → hang/login fail | raw-TCP `:10030`/`:7709` blocked | needs raw L4 egress (no HTTP-only proxy); confirm with `python -c "import socket; socket.create_connection(('public-api.baostock.com',10030),5)"` |
 

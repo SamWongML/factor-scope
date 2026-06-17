@@ -24,6 +24,7 @@ from factor_scope.ingest import (
     prices,
     trading_activity,
 )
+from factor_scope.markets import ashare
 from factor_scope.pipeline import ingest as nightly_ingest
 from factor_scope.store import DuckDBStore, Reading
 
@@ -170,3 +171,25 @@ def test_reingest_same_night_writes_nothing(monkeypatch, tmp_path) -> None:
     nightly_ingest(Config(source="live", as_of="2026-09-30", **paths))
     assert _counts(paths["store_path"]) == before
     assert seen[trading_activity.SERIES][-1] == "2026-09-30"  # the watermark, not a re-pull of all
+
+
+def test_a_provisional_spot_bar_does_not_set_the_history_floor(tmp_path) -> None:
+    # A spot-board bar is the current session only — were it to set the incremental floor, the next
+    # history pull would start past it and never backfill the sessions the outage skipped. Tagged
+    # provisional, it is excluded from the floor, so a recovered history pull self-heals the gap.
+    store = DuckDBStore(tmp_path / "store.duckdb")
+    try:
+        store.append(
+            [
+                Reading(series=trading_activity.SERIES, key=_FUND, as_of="2026-06-10",
+                        fetched_at="2026-06-10T22:00:00Z",
+                        payload={"turnover": 1.0, "amount": 1.0}),
+                Reading(series=trading_activity.SERIES, key=_FUND, as_of="2026-06-12",
+                        fetched_at="2026-06-12T22:00:00Z",
+                        payload={"turnover": 2.0, "amount": 2.0, "provisional": True}),
+            ]
+        )
+        floors = ashare._series_watermarks(store, trading_activity.SERIES, "2026-06-12")
+    finally:
+        store.close()
+    assert _FUND not in floors  # no floor → the recovered history pull backfills from scratch
