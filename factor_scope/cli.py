@@ -59,6 +59,12 @@ def run(
         "--store-path",
         help="Read from a durable store (else an in-memory one auto-ingested from the source).",
     ),
+    cold_dir: Path | None = typer.Option(
+        None,
+        "--cold-dir",
+        help="The store's cold tier, if one was configured at ingest; reads union hot + cold. "
+        "Omitting it against a tiered store silently drops the tiered history.",
+    ),
     graph_path: Path | None = typer.Option(
         None,
         "--graph-path",
@@ -81,6 +87,7 @@ def run(
         output_path=output,
         history_dir=history_dir,
         store_path=store_path,
+        cold_dir=cold_dir,
         graph_path=graph_path,
         provider="fake" if is_offline else provider,
     )
