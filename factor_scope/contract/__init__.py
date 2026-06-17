@@ -189,6 +189,52 @@ class Dashboard(BaseModel):
         return [it for it in self.items if it.list_name is name]
 
 
+class SeriesFactor(BaseModel):
+    """One factor's band at a single night — the compact per-night cell of a factor trail."""
+
+    model_config = ConfigDict(frozen=True)
+
+    factor: str
+    level: Band
+
+
+class SeriesPoint(BaseModel):
+    """One night of a fund's pre-materialized trail: its NAV, return, gate, and factor bands.
+
+    Compact by design — only the chartable scalars, never the full per-night evidence — so a
+    multi-year trail stays small and serves flat regardless of how large the store behind it grows.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    as_of: str
+    nav: float | None = None  # point-in-time NAV (absent for a name with no price read)
+    gain: float | None = None  # return vs cost basis (absent off the book)
+    gate: GateState = GateState.UNKNOWN
+    factors: list[SeriesFactor] = Field(default_factory=list)
+
+
+class FundSeries(BaseModel):
+    """A fund's pre-materialized time-series — one :class:`SeriesPoint` per recorded night.
+
+    Written incrementally at the end of each run (one point appended per night), so serving the
+    whole trail reads only this artifact — flat in the underlying store's size (see
+    factor_scope.series). Oldest first.
+    """
+
+    schema_version: int = 1
+    code: str
+    name: str
+    points: list[SeriesPoint] = Field(default_factory=list)
+
+
+class SeriesIndex(BaseModel):
+    """The catalog of funds that have a materialized trail — what ``/series`` lists."""
+
+    schema_version: int = 1
+    codes: list[str] = Field(default_factory=list)
+
+
 class DashboardIndexEntry(BaseModel):
     """One night in the dashboard history — enough to list it without opening the file."""
 
@@ -223,6 +269,7 @@ __all__ = [
     "DashboardItem",
     "Evidence",
     "FactorState",
+    "FundSeries",
     "GateState",
     "Lean",
     "LeanAction",
@@ -230,5 +277,8 @@ __all__ = [
     "ReliabilityBucket",
     "RubricScore",
     "Scorecard",
+    "SeriesFactor",
+    "SeriesIndex",
+    "SeriesPoint",
     "dashboard_json_schema",
 ]

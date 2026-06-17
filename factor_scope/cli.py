@@ -251,10 +251,22 @@ def nightly(
         "--history-dir",
         help="Where the per-night history accumulates (default: dashboards/ next to the artifact).",
     ),
+    series_dir: Path | None = typer.Option(
+        None,
+        "--series-dir",
+        help="Where the pre-materialized per-fund time-series trails accumulate "
+        "(default: series/ next to the artifact).",
+    ),
     store_path: Path = typer.Option(
         Path("out") / "store.duckdb",
         "--store-path",
         help="The durable store leans persist into (so tomorrow's self-scoring can read them).",
+    ),
+    replica_path: Path | None = typer.Option(
+        None,
+        "--replica-path",
+        help="Where to publish the read-only store replica after the run, for isolated ad-hoc "
+        "queries (default: <store-path>.replica next to the store).",
     ),
     graph_path: Path = typer.Option(
         Path("out") / "graph.ladybug", "--graph-path", help="The durable connection graph."
@@ -303,7 +315,11 @@ def nightly(
         as_of=as_of,
         output_path=output,
         history_dir=history_dir,
+        series_dir=series_dir,
         store_path=store_path,
+        # Publish the read-only replica next to the store unless an explicit path is given, so an
+        # isolated ad-hoc query path exists after each run (see factor_scope.store.replica).
+        replica_path=replica_path or store_path.with_suffix(".replica.duckdb"),
         graph_path=graph_path,
         cold_dir=cold_dir,
         hot_window_days=hot_window_days,
@@ -331,6 +347,12 @@ def serve(
         "--history-dir",
         help="The per-night dashboard history to serve (what `run`/`nightly` record).",
     ),
+    series_dir: Path = typer.Option(
+        Path("out") / "series",
+        "--series-dir",
+        help="The pre-materialized per-fund time-series trails to serve (what `run`/`nightly` "
+        "materialize). Adds /series and /series/{code}.",
+    ),
     host: str = typer.Option("127.0.0.1", help="Interface to bind — localhost by default."),
     port: int = typer.Option(8765, help="Port to bind."),
     allow_origin: list[str] = typer.Option(
@@ -340,20 +362,23 @@ def serve(
         "wide by default; any remote bind stays closed until origins are named here.",
     ),
 ) -> None:
-    """Serve the dashboard history as a read-only JSON API (needs the ``serve`` extra).
+    """Serve the dashboard history + time-series read-only (needs the ``serve`` extra).
 
     The frontend seam over the recorded nights: ``/dashboards`` lists them,
-    ``/dashboards/{as_of}`` reopens one, ``/dashboards/latest`` is the newest, and
-    ``/openapi.json`` is the typed schema to generate a client from. Read-only by
-    construction — it never ingests or reasons.
+    ``/dashboards/{as_of}`` reopens one, ``/dashboards/latest`` is the newest,
+    ``/series`` lists the funds with a trail, ``/series/{code}`` is one fund's pre-materialized
+    time-series (served flat, no query in the request path), and ``/openapi.json`` is the typed
+    schema to generate a client from. Read-only by construction — it never ingests or reasons.
     """
 
     import uvicorn  # lazy: the pinned serve extra is only needed when actually serving
 
     from factor_scope.serve import create_app
 
-    uvicorn.run(create_app(history_dir, allow_origins=_cors_origins(host, allow_origin)),
-                host=host, port=port)
+    uvicorn.run(
+        create_app(history_dir, series_dir=series_dir,
+                   allow_origins=_cors_origins(host, allow_origin)),
+        host=host, port=port)
 
 
 # A localhost, single-user bind may read from anywhere on the machine; a remote bind must not echo

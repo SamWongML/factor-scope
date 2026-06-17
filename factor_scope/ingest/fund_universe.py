@@ -1,8 +1,8 @@
 """The full CN fund universe — every fund's identity, lifecycle, and scorecard inputs.
 
 The universe read carries ``{code, name, type, on_exchange, inception, delisting, fee,
-tracking_error, top10_weight}`` per fund. This is the book the engine reasons over once theme→fund
-mapping (a later step) replaces the hand-curated list: all funds, not just the held ones. Each row
+tracking_error, top10_weight}`` per fund. This is the book the engine reasons over once the
+theme→fund mapping replaces the hand-curated list: all funds, not just the held ones. Each row
 is keyed by code and stamped with the run's ``as_of`` (universe membership is point-in-time — a
 delisted fund is kept with its ``delisting`` date so the look-through stays survivorship-aware). The
 per-fund scorecard inputs (fee, tracking error, top-10 weight) may be absent for a fund that does

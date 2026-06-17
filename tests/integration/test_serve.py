@@ -8,8 +8,15 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from typer.testing import CliRunner  # noqa: E402
 
+from factor_scope import series  # noqa: E402
 from factor_scope.cli import app as cli  # noqa: E402
-from factor_scope.contract import Dashboard  # noqa: E402
+from factor_scope.contract import (  # noqa: E402
+    Band,
+    Dashboard,
+    FundSeries,
+    SeriesFactor,
+    SeriesPoint,
+)
 from factor_scope.history import record  # noqa: E402
 from factor_scope.serve import create_app  # noqa: E402
 
@@ -18,6 +25,12 @@ pytestmark = pytest.mark.integration
 
 def _dash(as_of: str) -> Dashboard:
     return Dashboard(as_of=as_of, generated_at=f"{as_of}T22:00:00Z", snapshot_id=f"snap-{as_of}")
+
+
+def _series_point(as_of: str) -> SeriesPoint:
+    return SeriesPoint(
+        as_of=as_of, nav=1.0, gain=0.1, factors=[SeriesFactor(factor="trend", level=Band.HIGH)]
+    )
 
 
 @pytest.fixture()
@@ -151,11 +164,60 @@ def test_a_closed_surface_rejects_the_cors_preflight(tmp_path) -> None:
     assert granted.headers["access-control-allow-origin"] == "https://app.example"
 
 
-def test_openapi_exposes_the_contract_models(client: TestClient) -> None:
+@pytest.fixture()
+def series_client(tmp_path) -> TestClient:
+    sdir = tmp_path / "series"
+    for as_of in ("2026-06-04", "2026-06-05"):
+        series.record([("513100", "GF Nasdaq", _series_point(as_of))], sdir)
+    return TestClient(create_app(tmp_path / "dashboards", series_dir=sdir))
+
+
+def test_a_fund_trail_is_served_from_the_materialized_artifact(series_client: TestClient) -> None:
+    resp = series_client.get("/series/513100")
+    assert resp.status_code == 200
+    trail = FundSeries.model_validate(resp.json())
+    assert trail.code == "513100" and trail.name == "GF Nasdaq"
+    assert [p.as_of for p in trail.points] == ["2026-06-04", "2026-06-05"]
+    # The trail gains a point each night, so it revalidates against a strong ETag (a cheap 304).
+    assert resp.headers["cache-control"] == "public, max-age=0, must-revalidate"
+    assert resp.headers["etag"]
+
+
+def test_a_fund_trail_revalidates_to_304_on_a_matching_etag(series_client: TestClient) -> None:
+    first = series_client.get("/series/513100")
+    etag = first.headers["etag"]
+    again = series_client.get("/series/513100", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.headers["etag"] == etag
+
+
+def test_the_series_index_lists_the_funds_with_a_trail(series_client: TestClient) -> None:
+    resp = series_client.get("/series")
+    assert resp.status_code == 200
+    assert resp.json()["codes"] == ["513100"]
+    assert resp.headers["cache-control"] == "public, max-age=0, must-revalidate"
+    assert resp.headers["etag"]
+
+
+def test_an_unknown_or_malformed_code_is_absent(series_client: TestClient) -> None:
+    assert series_client.get("/series/999999").status_code == 404
+    # The code IS the filename; a traversal attempt is foreclosed, not resolved.
+    assert series_client.get("/series/..%2Findex").status_code == 404
+
+
+def test_series_endpoints_are_absent_without_a_series_dir(client: TestClient) -> None:
+    # Omitting series_dir serves the dashboard history alone — no time-series surface is mounted.
+    assert client.get("/series").status_code == 404
+    assert client.get("/series/513100").status_code == 404
+
+
+def test_openapi_exposes_the_contract_models(series_client: TestClient) -> None:
     # The typed schema a frontend client is generated from — the contract models ARE the API.
-    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    schemas = series_client.get("/openapi.json").json()["components"]["schemas"]
     assert "Dashboard" in schemas
     assert "DashboardIndex" in schemas
+    assert "FundSeries" in schemas
+    assert "SeriesIndex" in schemas
 
 
 def test_serve_command_binds_the_history_api(tmp_path, monkeypatch) -> None:

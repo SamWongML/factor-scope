@@ -13,7 +13,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from factor_scope.contract import Dashboard, DashboardIndex
+from factor_scope import series as series_gold
+from factor_scope.contract import Dashboard, DashboardIndex, FundSeries, SeriesIndex
 from factor_scope.history import load, read_index
 
 if TYPE_CHECKING:
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
 
 # The date IS the filename; rejecting anything else also forecloses path traversal.
 _AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+# A fund code IS the trail's filename; only code-shaped names resolve, foreclosing path traversal.
+_CODE = re.compile(r"[A-Za-z0-9._-]+")
 
 # A recorded night never changes (re-runs rewrite it byte-for-byte), so dated responses are
 # cacheable forever; the index and `latest` move once a night, so they stay cacheable but
@@ -48,8 +52,16 @@ def _page_links(offset: int, limit: int, total: int) -> str:
     return ", ".join(rels)
 
 
-def create_app(history_dir: Path, *, allow_origins: tuple[str, ...] = ()) -> "FastAPI":
+def create_app(
+    history_dir: Path,
+    *,
+    series_dir: Path | None = None,
+    allow_origins: tuple[str, ...] = (),
+) -> "FastAPI":
     """The read-only history API over one history directory.
+
+    ``series_dir`` adds the pre-materialized time-series endpoints (``/series``, ``/series/{code}``)
+    over the gold trails a run writes there; omitting it serves the dashboard history alone.
 
     ``allow_origins`` is closed by default — no cross-origin reads until an operator names the
     front-ends allowed to read this surface (the ``serve`` command opens it wide only for a
@@ -130,5 +142,44 @@ def create_app(history_dir: Path, *, allow_origins: tuple[str, ...] = ()) -> "Fa
         response.headers["ETag"] = etag
         response.headers["Cache-Control"] = _IMMUTABLE
         return dash
+
+    if series_dir is not None:
+
+        @app.get("/series", response_model=SeriesIndex)
+        def series_index(request: Request, response: Response) -> "SeriesIndex | Response":
+            """The funds with a materialized trail — the catalog a chart picker lists from. Grows
+            once a night, so it is cacheable with a strong ETag (a cheap 304), not re-scanned."""
+
+            index = SeriesIndex(codes=series_gold.list_codes(series_dir))
+            etag = _etag(index.model_dump_json())
+            if request.headers.get("if-none-match") == etag:
+                return Response(
+                    status_code=304, headers={"ETag": etag, "Cache-Control": _REVALIDATE}
+                )
+            response.headers["ETag"] = etag
+            response.headers["Cache-Control"] = _REVALIDATE
+            return index
+
+        @app.get("/series/{code}", response_model=FundSeries)
+        def fund_series(
+            code: str, request: Request, response: Response
+        ) -> "FundSeries | Response":
+            """One fund's pre-materialized time-series, served flat — read cost is the trail length
+            (one point per night), independent of how large the store behind it has grown. It gains
+            a point each night, so it revalidates against a strong ETag rather than caching forever.
+            """
+
+            trail = series_gold.load(series_dir, code) if _CODE.fullmatch(code) else None
+            if trail is None:
+                raise HTTPException(status_code=404, detail=f"no series for {code!r}")
+            last = trail.points[-1].as_of if trail.points else ""
+            etag = _etag(f"{code}:{len(trail.points)}:{last}")
+            if request.headers.get("if-none-match") == etag:
+                return Response(
+                    status_code=304, headers={"ETag": etag, "Cache-Control": _REVALIDATE}
+                )
+            response.headers["ETag"] = etag
+            response.headers["Cache-Control"] = _REVALIDATE
+            return trail
 
     return app
