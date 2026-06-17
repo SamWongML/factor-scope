@@ -32,6 +32,11 @@ def publish_replica(store_path: str | Path, replica_path: str | Path) -> Path:
     Called after the nightly writer has closed (so the file is checkpointed), so the replica is a
     point-in-time copy a read-only query pool can open without ever touching the writer's handle.
     Staged beside the target and renamed, so a concurrent reader never opens a half-written replica.
+
+    This copies the *hot* store file only. With a cold tier configured, the older readings already
+    live in their own read-only ``cold_dir`` Parquet and are queried in place — so a reader that
+    needs the full history opens the replica as ``DuckDBStore(replica, read_only=True, cold_dir=…)``
+    (its reads union hot + cold) rather than the hot ``readings`` table alone.
     """
 
     replica = Path(replica_path)
@@ -47,8 +52,13 @@ class ReadReplica:
 
     Opens ``pool_size`` read-only connections to the replica up front; :meth:`query` checks one out
     (blocking when all are busy, so concurrency is bounded) and runs the statement with a memory
-    cap, a thread cap, a row cap, and a wall-clock timeout. None of this can reach the live store —
-    the replica is a separate file — so concurrent reads never block the nightly writer.
+    cap, a row cap, and a wall-clock timeout. None of this can reach the live store — the replica is
+    a separate file — so concurrent reads never block the nightly writer.
+
+    The replica is the *hot* store file; with a cold tier configured the older readings live in
+    ``cold_dir`` Parquet, untouched by :func:`publish_replica`. For full point-in-time history over
+    the replica, open it as ``DuckDBStore(replica, read_only=True, cold_dir=…)`` — its reads union
+    hot + cold — rather than querying the hot ``readings`` table alone through this pool.
     """
 
     def __init__(
@@ -57,7 +67,6 @@ class ReadReplica:
         *,
         pool_size: int = 4,
         memory_limit: str = "256MB",
-        threads: int = 1,
         row_limit: int = 10_000,
         timeout_s: float = 5.0,
     ) -> None:
@@ -68,10 +77,9 @@ class ReadReplica:
         self._pool: queue.Queue[duckdb.DuckDBPyConnection] = queue.Queue(maxsize=pool_size)
         for _ in range(pool_size):
             con = duckdb.connect(str(replica_path), read_only=True)
-            # Per-query caps live on each connection: bound the memory and threads one query may
-            # claim so a heavy escape-hatch read can't starve the box or the nightly job.
+            # Bound the memory one query may claim so a heavy escape-hatch read can't starve the
+            # box.
             con.execute(f"SET memory_limit='{memory_limit}'")
-            con.execute(f"SET threads={threads}")
             self._pool.put(con)
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:

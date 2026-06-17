@@ -39,25 +39,38 @@ def materialize(
     The NAV is a single point-in-time read (the latest ``prices`` row knowable as of the run date);
     the return, gate, and valid factor bands come straight off the already-built item. A name with
     no price read carries a ``None`` NAV — it still keeps a factor trail.
+
+    A code that appears on more than one list (e.g. a held fund the funnel also surfaces as
+    emerging) yields a single trail — the trail is per-fund. The first projection wins, and
+    ``pairs`` leads with the core lists, so the holding/watchlist view takes precedence over
+    the emerging one.
     """
 
     navs = {r.key: float(r.payload["nav"]) for r in store.read_as_of("prices", as_of)}
-    return [
-        (
-            code,
-            item.item,
-            SeriesPoint(
-                as_of=as_of,
-                nav=navs.get(code),
-                gain=item.gain,
-                gate=item.gate,
-                factors=[
-                    SeriesFactor(factor=s.factor, level=s.level) for s in item.states if s.valid
-                ],
-            ),
+    entries: list[SeriesEntry] = []
+    seen: set[str] = set()
+    for code, item in pairs:
+        if code in seen:
+            continue
+        seen.add(code)
+        entries.append(
+            (
+                code,
+                item.item,
+                SeriesPoint(
+                    as_of=as_of,
+                    nav=navs.get(code),
+                    gain=item.gain,
+                    gate=item.gate,
+                    factors=[
+                        SeriesFactor(factor=s.factor, level=s.level)
+                        for s in item.states
+                        if s.valid
+                    ],
+                ),
+            )
         )
-        for code, item in pairs
-    ]
+    return entries
 
 
 def _write_atomic(path: Path, text: str) -> None:

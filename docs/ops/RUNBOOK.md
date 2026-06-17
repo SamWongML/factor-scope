@@ -99,6 +99,11 @@ structurally — through a bounded connection pool with per-query memory, row, a
 replica defaults beside the store (`<store-path>.replica.duckdb`); override its location with
 `--replica-path`.
 
+The replica is the **hot** store file. With `--cold-dir` set, the older readings live in their own
+read-only Parquet, so a `ReadReplica` query over the hot `readings` table sees only the hot window;
+for the full point-in-time history, open the replica as `DuckDBStore(replica, read_only=True,
+cold_dir=…)` instead — its `read_as_of`/`history` reads union hot + cold.
+
 **Response hygiene.** Every response carries a strong `ETag` (immutable nights are also
 content-addressed by `snapshot_id`) and is gzip-compressed over the wire; `/dashboards` is bounded
 to one page (`limit` ≤ 500, default 100), the full count in `X-Total-Count` and page navigation in

@@ -7,6 +7,8 @@ nightly writer (DuckDB's one-RW-or-many-RO rule, satisfied structurally by the s
 
 from __future__ import annotations
 
+import threading
+
 import duckdb
 import pytest
 
@@ -71,6 +73,55 @@ def test_a_query_reads_the_replica_while_the_writer_holds_the_store(tmp_path) ->
             pool.close()
     finally:
         writer.close()
+
+
+def test_concurrent_reads_do_not_block_the_nightly_writer(tmp_path) -> None:
+    # Four reader threads hammer the replica while a fifth thread drives the live writer, all
+    # released together by a barrier. Because the replica is a separate file, the readers and the
+    # writer never share a lock: every reader query succeeds and the writer commits all its appends.
+    store_path = tmp_path / "store.duckdb"
+    _seed_store(store_path)  # 2 prices rows (A, B)
+    publish_replica(store_path, tmp_path / "r.duckdb")
+
+    pool = ReadReplica(tmp_path / "r.duckdb", pool_size=4)
+    writer = DuckDBStore(store_path)  # holds the live store read-write throughout
+    errors: list[BaseException] = []
+    gate = threading.Barrier(5)
+
+    def read_loop() -> None:
+        gate.wait()
+        try:
+            for _ in range(25):
+                assert pool.query("SELECT count(*) FROM readings") == [(2,)]
+        except BaseException as exc:  # noqa: BLE001 — surface any reader failure to the assertions
+            errors.append(exc)
+
+    def write_loop() -> None:
+        gate.wait()
+        try:
+            for i in range(25):
+                writer.append(
+                    [Reading(series="prices", key=f"W{i}", as_of="2026-06-07",
+                             fetched_at="t", payload={"nav": float(i)})]
+                )
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=read_loop) for _ in range(4)]
+    threads.append(threading.Thread(target=write_loop))
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+    finally:
+        pool.close()
+        wrote = writer.count("prices")
+        writer.close()
+
+    assert not errors, errors
+    assert not any(t.is_alive() for t in threads)  # nothing deadlocked
+    assert wrote == 2 + 25  # the writer made full progress under concurrent reads
 
 
 def test_a_read_only_store_refuses_to_write(tmp_path) -> None:

@@ -105,7 +105,6 @@ class DuckDBStore:
 
         self._path = str(path)
         self._cold_dir = Path(cold_dir) if cold_dir is not None else None
-        self._read_only = read_only
         if self._path != ":memory:" and not read_only:
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._con = duckdb.connect(self._path, read_only=read_only)
