@@ -1,0 +1,123 @@
+[
+  {
+    "code": "561010",
+    "name": "光通信 / optical-module ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2021-01-20",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.01,
+    "top10_weight": 0.62
+  },
+  {
+    "code": "515880",
+    "name": "通信ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2019-06-15",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.011,
+    "top10_weight": 0.58
+  },
+  {
+    "code": "588200",
+    "name": "科创芯片ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2022-09-01",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.013,
+    "top10_weight": 0.6
+  },
+  {
+    "code": "561160",
+    "name": "储能ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2022-03-10",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.01,
+    "top10_weight": 0.55
+  },
+  {
+    "code": "159755",
+    "name": "电池ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2021-11-08",
+    "delisting": "",
+    "fee": 0.006,
+    "tracking_error": 0.012,
+    "top10_weight": 0.6
+  },
+  {
+    "code": "516160",
+    "name": "新能源车ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2021-05-20",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.015,
+    "top10_weight": 0.58
+  },
+  {
+    "code": "159857",
+    "name": "光储龙头ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2023-02-14",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.011,
+    "top10_weight": 0.62
+  },
+  {
+    "code": "510300",
+    "name": "沪深300ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2012-05-28",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.002,
+    "top10_weight": 0.65
+  },
+  {
+    "code": "000001",
+    "name": "华夏成长混合",
+    "type": "混合型",
+    "on_exchange": false,
+    "inception": "2001-12-18",
+    "delisting": "",
+    "fee": null,
+    "tracking_error": null,
+    "top10_weight": null
+  },
+  {
+    "code": "159999",
+    "name": "退市光伏ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2018-03-01",
+    "delisting": "2025-12-31",
+    "fee": 0.005,
+    "tracking_error": 0.02,
+    "top10_weight": 0.5
+  },
+  {
+    "code": "562990",
+    "name": "新储能ETF",
+    "type": "ETF",
+    "on_exchange": true,
+    "inception": "2025-12-15",
+    "delisting": "",
+    "fee": 0.005,
+    "tracking_error": 0.012,
+    "top10_weight": 0.6
+  }
+]

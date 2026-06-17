@@ -1,0 +1,330 @@
+{
+  "561010": [
+    {
+      "as_of": "2026-05-15",
+      "turnover": 2.81,
+      "amount": 3.64
+    },
+    {
+      "as_of": "2026-05-18",
+      "turnover": 3.78,
+      "amount": 3.81
+    },
+    {
+      "as_of": "2026-05-19",
+      "turnover": 4.49,
+      "amount": 3.63
+    },
+    {
+      "as_of": "2026-05-20",
+      "turnover": 4.6,
+      "amount": 3.16
+    },
+    {
+      "as_of": "2026-05-21",
+      "turnover": 4.08,
+      "amount": 2.58
+    },
+    {
+      "as_of": "2026-05-22",
+      "turnover": 3.17,
+      "amount": 2.09
+    },
+    {
+      "as_of": "2026-05-25",
+      "turnover": 2.31,
+      "amount": 1.87
+    },
+    {
+      "as_of": "2026-05-26",
+      "turnover": 1.91,
+      "amount": 1.99
+    },
+    {
+      "as_of": "2026-05-27",
+      "turnover": 2.17,
+      "amount": 2.42
+    },
+    {
+      "as_of": "2026-05-28",
+      "turnover": 2.97,
+      "amount": 3.01
+    },
+    {
+      "as_of": "2026-05-29",
+      "turnover": 3.94,
+      "amount": 3.56
+    },
+    {
+      "as_of": "2026-06-01",
+      "turnover": 4.63,
+      "amount": 3.88
+    },
+    {
+      "as_of": "2026-06-02",
+      "turnover": 4.73,
+      "amount": 3.86
+    },
+    {
+      "as_of": "2026-06-03",
+      "turnover": 4.19,
+      "amount": 3.51
+    },
+    {
+      "as_of": "2026-06-04",
+      "turnover": 3.28,
+      "amount": 2.96
+    },
+    {
+      "as_of": "2026-06-05",
+      "turnover": 2.43,
+      "amount": 2.41
+    }
+  ],
+  "515880": [
+    {
+      "as_of": "2026-05-15",
+      "turnover": 1.61,
+      "amount": 2.34
+    },
+    {
+      "as_of": "2026-05-18",
+      "turnover": 2.58,
+      "amount": 2.51
+    },
+    {
+      "as_of": "2026-05-19",
+      "turnover": 3.29,
+      "amount": 2.33
+    },
+    {
+      "as_of": "2026-05-20",
+      "turnover": 3.4,
+      "amount": 1.86
+    },
+    {
+      "as_of": "2026-05-21",
+      "turnover": 2.88,
+      "amount": 1.28
+    },
+    {
+      "as_of": "2026-05-22",
+      "turnover": 1.97,
+      "amount": 0.79
+    },
+    {
+      "as_of": "2026-05-25",
+      "turnover": 1.11,
+      "amount": 0.57
+    },
+    {
+      "as_of": "2026-05-26",
+      "turnover": 0.71,
+      "amount": 0.69
+    },
+    {
+      "as_of": "2026-05-27",
+      "turnover": 0.97,
+      "amount": 1.12
+    },
+    {
+      "as_of": "2026-05-28",
+      "turnover": 1.77,
+      "amount": 1.71
+    },
+    {
+      "as_of": "2026-05-29",
+      "turnover": 2.74,
+      "amount": 2.26
+    },
+    {
+      "as_of": "2026-06-01",
+      "turnover": 3.43,
+      "amount": 2.58
+    },
+    {
+      "as_of": "2026-06-02",
+      "turnover": 3.53,
+      "amount": 2.56
+    },
+    {
+      "as_of": "2026-06-03",
+      "turnover": 2.99,
+      "amount": 2.21
+    },
+    {
+      "as_of": "2026-06-04",
+      "turnover": 2.08,
+      "amount": 1.66
+    },
+    {
+      "as_of": "2026-06-05",
+      "turnover": 1.23,
+      "amount": 1.11
+    }
+  ],
+  "588200": [
+    {
+      "as_of": "2026-05-15",
+      "turnover": 4.61,
+      "amount": 4.84
+    },
+    {
+      "as_of": "2026-05-18",
+      "turnover": 5.58,
+      "amount": 5.01
+    },
+    {
+      "as_of": "2026-05-19",
+      "turnover": 6.29,
+      "amount": 4.83
+    },
+    {
+      "as_of": "2026-05-20",
+      "turnover": 6.4,
+      "amount": 4.36
+    },
+    {
+      "as_of": "2026-05-21",
+      "turnover": 5.88,
+      "amount": 3.78
+    },
+    {
+      "as_of": "2026-05-22",
+      "turnover": 4.97,
+      "amount": 3.29
+    },
+    {
+      "as_of": "2026-05-25",
+      "turnover": 4.11,
+      "amount": 3.07
+    },
+    {
+      "as_of": "2026-05-26",
+      "turnover": 3.71,
+      "amount": 3.19
+    },
+    {
+      "as_of": "2026-05-27",
+      "turnover": 3.97,
+      "amount": 3.62
+    },
+    {
+      "as_of": "2026-05-28",
+      "turnover": 4.77,
+      "amount": 4.21
+    },
+    {
+      "as_of": "2026-05-29",
+      "turnover": 5.74,
+      "amount": 4.76
+    },
+    {
+      "as_of": "2026-06-01",
+      "turnover": 6.43,
+      "amount": 5.08
+    },
+    {
+      "as_of": "2026-06-02",
+      "turnover": 6.53,
+      "amount": 5.06
+    },
+    {
+      "as_of": "2026-06-03",
+      "turnover": 5.99,
+      "amount": 4.71
+    },
+    {
+      "as_of": "2026-06-04",
+      "turnover": 5.08,
+      "amount": 4.16
+    },
+    {
+      "as_of": "2026-06-05",
+      "turnover": 4.23,
+      "amount": 3.61
+    }
+  ],
+  "561160": [
+    {
+      "as_of": "2026-05-15",
+      "turnover": 2.21,
+      "amount": 2.64
+    },
+    {
+      "as_of": "2026-05-18",
+      "turnover": 3.18,
+      "amount": 2.81
+    },
+    {
+      "as_of": "2026-05-19",
+      "turnover": 3.89,
+      "amount": 2.63
+    },
+    {
+      "as_of": "2026-05-20",
+      "turnover": 4.0,
+      "amount": 2.16
+    },
+    {
+      "as_of": "2026-05-21",
+      "turnover": 3.48,
+      "amount": 1.58
+    },
+    {
+      "as_of": "2026-05-22",
+      "turnover": 2.57,
+      "amount": 1.09
+    },
+    {
+      "as_of": "2026-05-25",
+      "turnover": 1.71,
+      "amount": 0.87
+    },
+    {
+      "as_of": "2026-05-26",
+      "turnover": 1.31,
+      "amount": 0.99
+    },
+    {
+      "as_of": "2026-05-27",
+      "turnover": 1.57,
+      "amount": 1.42
+    },
+    {
+      "as_of": "2026-05-28",
+      "turnover": 2.37,
+      "amount": 2.01
+    },
+    {
+      "as_of": "2026-05-29",
+      "turnover": 3.34,
+      "amount": 2.56
+    },
+    {
+      "as_of": "2026-06-01",
+      "turnover": 4.03,
+      "amount": 2.88
+    },
+    {
+      "as_of": "2026-06-02",
+      "turnover": 4.13,
+      "amount": 2.86
+    },
+    {
+      "as_of": "2026-06-03",
+      "turnover": 3.59,
+      "amount": 2.51
+    },
+    {
+      "as_of": "2026-06-04",
+      "turnover": 2.68,
+      "amount": 1.96
+    },
+    {
+      "as_of": "2026-06-05",
+      "turnover": 1.83,
+      "amount": 1.41
+    }
+  ]
+}

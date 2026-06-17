@@ -1,7 +1,8 @@
 """The fundamentals ingest adapter — per-fund PE, the valuation surface.
 
-Each row is keyed by code and stamped with the valuation feed's own date, carrying ``pe`` (市盈率).
-A malformed header or non-numeric value is a hard parse error.
+Each row is keyed by the fund code and stamped with the valuation feed's own date, carrying ``pe``
+(市盈率). This pins the live AkShare column mapping; the offline replay is covered in
+``tests/unit/test_feed.py``.
 """
 
 from __future__ import annotations
@@ -11,32 +12,10 @@ from datetime import date
 import pytest
 
 from factor_scope.ingest import fundamentals
-from factor_scope.ingest.base import IngestError
 
 pytestmark = pytest.mark.unit
 
 FETCHED_AT = "2026-06-05T22:00:00Z"
-
-
-def test_fundamentals_carries_pe_stamped_with_the_feed_date() -> None:
-    readings = fundamentals.parse(
-        "code,as_of,pe\n561010,2026-05-29,42.5\n", fetched_at=FETCHED_AT
-    )
-    first = readings[0]
-    assert first.series == fundamentals.SERIES
-    assert first.key == "561010"
-    assert first.as_of == "2026-05-29"
-    assert first.payload == {"pe": 42.5}
-
-
-def test_fundamentals_rejects_a_malformed_header() -> None:
-    with pytest.raises(IngestError):
-        fundamentals.parse("code,as_of\n561010,2026-05-29\n", fetched_at="t")
-
-
-def test_fundamentals_rejects_a_non_numeric_value() -> None:
-    with pytest.raises(IngestError):
-        fundamentals.parse("code,as_of,pe\n561010,2026-05-29,n/a\n", fetched_at=FETCHED_AT)
 
 
 def test_fundamentals_maps_the_akshare_valuation_columns() -> None:

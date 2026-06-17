@@ -57,7 +57,7 @@ A live run is `factor-scope ingest` (fills the durable store) then `run`/`build_
 
 **The cost-driving asymmetry.** Prices (feed 6) are pulled for the **book's 3 codes** only, but
 holdings/trading/fundamentals (feeds 3–5) loop over the **entire on-exchange ETF universe**
-(`markets/ashare.py:83-87`), and feeds 4–5 re-pull the **full multi-year history** every single
+(the `AShareUniverse` loop in `markets/ashare.py`), and feeds 4–5 re-pull the **full multi-year history** every single
 night. That loop — universe-wide × full-history × nightly — is where all the volume comes from.
 
 ---
@@ -242,31 +242,30 @@ single DuckDB file plus the 5.1 fixes is sufficient — adopt DuckLake as a *sea
 
 ---
 
-## Part 6 — Make fixtures reflect the live run (the refactor)
+## Part 6 — Make fixtures reflect the live run (cassette ingest) — shipped
 
-**Today the offline path is a *different system* than live.** `config.source == "fixtures"` takes a
-separate branch (`markets/ashare.py:60-79`) that loads small pre-baked CSVs (1 fund, ~1,200 rows) and
-**bypasses** the universe-scale loop, the watermark/incremental logic, the multi-source
-reconciliation + retry + circuit breaker, and delisting detection — all the live-only code is
-`# pragma: no cover`. The most expensive, most bug-prone behavior is never exercised by the suite.
+**Before:** the offline path was a *different system* than live. `config.source == "fixtures"` took a
+separate branch that loaded small pre-baked CSVs and **bypassed** the universe-scale loop, the
+watermark/incremental logic, the multi-source reconciliation + retry + circuit breaker, and delisting
+detection — all the live-only code was `# pragma: no cover`. The most expensive, most bug-prone
+behavior was never exercised by the suite.
 
-**Target: the only live/offline difference is the transport at the very edge.** Adopt a recorded-
-snapshot ("cassette") fixture model:
+**Now: the only live/offline difference is the transport at the very edge** — a
+`factor_scope.ingest.feed.Feed`. The universe loop and the price reconciliation run **one** code
+path; the feed supplies the raw reads:
 
-1. Fixtures become **recorded raw provider responses** for a **realistic-shape** universe — e.g.
-   ~30–50 on-exchange ETFs, a few hundred funds, multi-quarter holdings, ~800-bar daily histories —
-   committed under `data/fixtures/`. Big enough to exercise the loop and the dedup, small enough to
-   stay deterministic and fast.
-2. The `fake` provider **replays** those recordings instead of hitting the network; the **same**
-   ingest code (universe loop, watermark, reconciliation, dedup, delisting) runs in both modes.
+1. Offline replays **recorded provider responses** ("cassettes") committed under
+   `data/fixtures/cassettes/` (the whole fund universe, multi-quarter holdings, multi-hundred-bar
+   price/valuation/activity histories) through `CassetteFeed`; online, `LiveFeed` delegates to the
+   network adapters. The **same** ingest code — universe loop, watermark, reconciliation, dedup,
+   delisting — runs in both modes, so `make test`/`make system` exercises the expensive live paths.
+2. The seed reads with no live nightly feed — emerging themes (discovery is a separate service), the
+   FRED/EDGAR dials (each pulls only the latest observation live, accruing history over nights), and
+   the prior-call self-scoring seed — stay bundled CSV fixtures loaded offline.
 3. Determinism is preserved: recorded responses + the deterministic `fetched_at_for(as_of)` keep
-   `dashboard.json` byte-for-byte, and the snapshot boundary still freezes the reasoning input.
-
-This is consistent with the snapshot boundary: ingest is the non-deterministic edge;
-everything downstream is deterministic over a frozen snapshot. **Fixtures become a committed frozen
-snapshot at realistic scale**, so `make test`/`make system` actually validates the incremental-ingest
-and dedup paths that production depends on — and the artifact-volume math above gets a regression
-test instead of living only in this document.
+   `dashboard.json` byte-for-byte, and a second ingest over the unchanged snapshot writes ~0 rows
+   (the dedup/watermark regression `make test` now asserts) — the artifact-volume math above is a
+   test, not just a document.
 
 ---
 
@@ -279,8 +278,9 @@ This refactor stands on its own. Ordered by leverage; each is one session / one 
    adds exactly one revision.
 2. **Incremental watermark ingest** (§5.1a) for `trading_activity`, `fundamentals`, holdings,
    universe. Turns quadratic → linear.
-3. **Cassette fixtures + unified ingest path** (§6). Removes the offline/online code fork; gives the
-   expensive live paths real coverage.
+3. **Cassette fixtures + unified ingest path** (§6) — **shipped.** Removed the offline/online code
+   fork; the expensive live paths (universe loop, watermark, reconciliation, delisting) now have
+   real offline coverage.
 4. **Cold-tier partitioned Parquet** (§5.2) via `DuckDBStore.tier_cold` with Hive layout + a recent-window
    policy.
 5. **Read-only serving connection over silver** (§5.4) for time-series endpoints; keep JSON serving

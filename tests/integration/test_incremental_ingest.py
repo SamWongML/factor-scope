@@ -173,6 +173,25 @@ def test_reingest_same_night_writes_nothing(monkeypatch, tmp_path) -> None:
     assert seen[trading_activity.SERIES][-1] == "2026-09-30"  # the watermark, not a re-pull of all
 
 
+def test_offline_reingest_over_unchanged_cassettes_writes_nothing(tmp_path) -> None:
+    # The cassette ingest runs the *same* universe loop + watermark + content dedup as live (no
+    # stubs here — the real offline feed replays the committed recordings). A second ingest over the
+    # unchanged snapshot asks each watermarked series for nothing newer and the dedup drops the
+    # full-snapshot re-pulls (universe / scale / prices), so the append-only log does not grow.
+    paths = {"store_path": tmp_path / "store.duckdb", "graph_path": tmp_path / "graph.duckdb"}
+    first = nightly_ingest(Config(**paths))  # the suite forces offline (FACTOR_SCOPE_OFFLINE=1)
+    second = nightly_ingest(Config(**paths))
+    assert first > 0  # the first ingest fills the store from the recordings
+    assert second == 0  # the re-pull is a pure no-op — watermark + dedup, exercised offline
+
+    store = DuckDBStore(paths["store_path"])
+    try:
+        bars = [r.as_of for r in store.history(trading_activity.SERIES, _FUND)]
+    finally:
+        store.close()
+    assert bars == sorted(bars) and len(bars) == len(set(bars))  # each session stored exactly once
+
+
 def test_a_provisional_spot_bar_does_not_set_the_history_floor(tmp_path) -> None:
     # A spot-board bar is the current session only — were it to set the incremental floor, the next
     # history pull would start past it and never backfill the sessions the outage skipped. Tagged

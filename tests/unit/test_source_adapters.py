@@ -1,4 +1,10 @@
-"""Unit tests for the fixture parsers of the remaining ingestion adapters."""
+"""Unit tests for the live network backends (``fetch_live``) of the CN price + holdings adapters.
+
+The fixture-parser path is gone: offline replays cassettes through the feed (see
+``tests/unit/test_feed.py``); these pin the live AkShare/Baostock/Mootdx/EdgarTools mappings and the
+multi-source NAV reconciliation, plus the seed adapters (FRED / EDGAR / themes) the offline run
+still loads from CSV.
+"""
 
 import logging
 import sys
@@ -15,25 +21,10 @@ from factor_scope.ingest import (
     prices,
     themes,
 )
-from factor_scope.ingest.base import IngestError
 from factor_scope.store import Reading
 from tests.unit._akshare_fakes import FakeFrame, install_fake_akshare
 
 pytestmark = pytest.mark.unit
-
-
-def test_prices_reads_as_of_per_row() -> None:
-    text = "code,as_of,nav\n561010,2026-06-05,1.92\n561160,2026-06-04,0.98\n"
-    readings = prices.parse(text, fetched_at="2026-06-05T22:00:00Z")
-    assert readings[0].series == "prices"
-    assert readings[0].as_of == "2026-06-05"  # the price's own date, not the run date
-    assert readings[1].as_of == "2026-06-04"
-    assert readings[0].payload == {"nav": 1.92, "source": "akshare"}  # provenance on every row
-
-
-def test_prices_rejects_bad_nav() -> None:
-    with pytest.raises(IngestError, match="nav"):
-        prices.parse("code,as_of,nav\n561010,2026-06-05,n/a\n", fetched_at="x")
 
 
 def test_sina_symbol_prefixes_by_listing_exchange() -> None:
@@ -84,13 +75,6 @@ def test_prices_fetch_live_logs_loudly_when_it_falls_back_to_sina(monkeypatch, c
     with caplog.at_level(logging.WARNING):
         prices.fetch_live("561010", fetched_at="t")
     assert any(r.levelno == logging.WARNING and "561010" in r.getMessage() for r in caplog.records)
-
-
-def test_fund_holdings_keys_each_edge() -> None:
-    text = "fund,as_of,holding,weight\n561010,2026-03-31,中际旭创,0.094\n"
-    readings = fund_holdings.parse(text, fetched_at="x")
-    assert readings[0].key == "561010/中际旭创"  # one PIT key per (fund, holding) edge
-    assert readings[0].payload == {"fund": "561010", "holding": "中际旭创", "weight": 0.094}
 
 
 def test_fund_holdings_first_year_is_the_watermark_year_else_the_run_year() -> None:
