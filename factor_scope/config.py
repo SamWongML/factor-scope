@@ -127,6 +127,15 @@ class Config:
     # Where the durable connection graph lives. None → an ephemeral in-memory graph built from the
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None
+    # The medallion cold tier. None → the whole silver log stays hot in the DuckDB file. A path →
+    # readings older than the hot window are tiered to Hive-partitioned Parquet (series=…/year=…)
+    # there after each ingest, and every read unions hot + cold transparently — bounding the hot
+    # file as history accrues (see factor_scope.store).
+    cold_dir: Path | None = None
+    # The hot-window retention: readings dated more than this many days before the run are tiered to
+    # the cold dir. Only consulted when ``cold_dir`` is set; sized to comfortably exceed any ingest
+    # re-fetch lookback so the append-time dedup (which only sees the hot table) stays correct.
+    hot_window_days: int = 365
     # US fund/ETF CIKs whose monthly N-PORT holdings the live path pulls from EDGAR to feed
     # the look-through graph. Empty by default — the fixtures path never reads it.
     edgar_ciks: tuple[str, ...] = ()

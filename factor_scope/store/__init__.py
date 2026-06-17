@@ -8,7 +8,12 @@ disclosure never rewrites an earlier as-of read.
 Reads are point-in-time: :meth:`PointInTimeStore.read_as_of` returns, per key, the latest row with
 ``as_of <= D``. Reasoning tonight sees only what was knowable tonight. The interface is small and a
 :class:`Protocol` so backends stay swappable; the default is :class:`DuckDBStore` (file or
-in-memory). DuckDB is the engine and Parquet the cold export format (``export_parquet``).
+in-memory). DuckDB is the engine.
+
+The silver log is tiered: a recent *hot window* stays in the DuckDB file while older readings are
+exported to **Hive-partitioned Parquet** (``series=…/year=…/``) via :meth:`DuckDBStore.tier_cold`,
+queried in place. Every read unions the hot table with the cold partitions, so tiering keeps the hot
+file bounded as history accrues without moving a single point-in-time result.
 """
 
 from __future__ import annotations
@@ -78,16 +83,39 @@ _COLS = "series, key, as_of, fetched_at, payload"
 
 
 class DuckDBStore:
-    """A DuckDB-backed :class:`PointInTimeStore`. ``path=":memory:"`` for an ephemeral store."""
+    """A DuckDB-backed :class:`PointInTimeStore`. ``path=":memory:"`` for an ephemeral store.
 
-    def __init__(self, path: str | Path = ":memory:") -> None:
+    With ``cold_dir`` set, readings tiered out of the hot file by :meth:`tier_cold` land as
+    Hive-partitioned Parquet there, and every read unions the hot table with those partitions.
+    """
+
+    def __init__(
+        self, path: str | Path = ":memory:", *, cold_dir: str | Path | None = None
+    ) -> None:
         import duckdb  # lazy: the `store` extra is only needed when a store is opened
 
         self._path = str(path)
+        self._cold_dir = Path(cold_dir) if cold_dir is not None else None
         if self._path != ":memory:":
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._con = duckdb.connect(self._path)
         self._con.execute(_SCHEMA)
+
+    def _readings(self) -> str:
+        """The SQL relation reads run over — the hot table, unioned with cold Parquet when present.
+
+        Tiering is invisible to a point-in-time read: a row reads the same whether it lives in the
+        hot DuckDB table or a cold ``series=…/year=…/`` partition.
+        """
+
+        if self._cold_dir is not None and any(self._cold_dir.glob("**/*.parquet")):
+            glob = str(self._cold_dir / "**" / "*.parquet").replace("'", "''")
+            return (
+                f"(SELECT {_COLS} FROM readings "
+                f"UNION ALL "
+                f"SELECT {_COLS} FROM read_parquet('{glob}', hive_partitioning=true))"
+            )
+        return "readings"
 
     def append(self, readings: Iterable[Reading]) -> int:
         rows = [
@@ -137,7 +165,7 @@ class DuckDBStore:
 
     def read_as_of(self, series: str, as_of: str) -> list[Reading]:
         query = f"""
-        SELECT {_COLS} FROM readings
+        SELECT {_COLS} FROM {self._readings()}
         WHERE series = ? AND as_of <= ?
         QUALIFY row_number() OVER (PARTITION BY key ORDER BY as_of DESC, fetched_at DESC) = 1
         ORDER BY key
@@ -146,12 +174,13 @@ class DuckDBStore:
         return [self._to_reading(row) for row in rows]
 
     def history(self, series: str, key: str | None = None) -> list[Reading]:
+        source = self._readings()
         if key is None:
-            query = f"SELECT {_COLS} FROM readings WHERE series = ? ORDER BY key, as_of, fetched_at"
+            query = f"SELECT {_COLS} FROM {source} WHERE series = ? ORDER BY key, as_of, fetched_at"
             params: list[str] = [series]
         else:
             query = (
-                f"SELECT {_COLS} FROM readings WHERE series = ? AND key = ? "
+                f"SELECT {_COLS} FROM {source} WHERE series = ? AND key = ? "
                 "ORDER BY as_of, fetched_at"
             )
             params = [series, key]
@@ -159,11 +188,12 @@ class DuckDBStore:
         return [self._to_reading(row) for row in rows]
 
     def count(self, series: str | None = None) -> int:
+        source = self._readings()
         if series is None:
-            row = self._con.execute("SELECT count(*) FROM readings").fetchone()
+            row = self._con.execute(f"SELECT count(*) FROM {source}").fetchone()
         else:
             row = self._con.execute(
-                "SELECT count(*) FROM readings WHERE series = ?", [series]
+                f"SELECT count(*) FROM {source} WHERE series = ?", [series]
             ).fetchone()
         return int(row[0]) if row is not None else 0
 
@@ -171,7 +201,7 @@ class DuckDBStore:
         excluded = sorted(set(exclude))
         clause = f"AND series NOT IN ({', '.join(['?'] * len(excluded))})" if excluded else ""
         rows = self._con.execute(
-            f"SELECT {_COLS} FROM readings WHERE as_of <= ? {clause} "
+            f"SELECT {_COLS} FROM {self._readings()} WHERE as_of <= ? {clause} "
             "ORDER BY series, key, as_of, fetched_at, payload",
             [as_of, *excluded],
         ).fetchall()
@@ -180,10 +210,35 @@ class DuckDBStore:
         blob = json.dumps(rows, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(blob).hexdigest()
 
-    def export_parquet(self, path: str | Path) -> None:
-        """Export the whole append-only log to Parquet (the cold-storage format)."""
+    def tier_cold(self, cutoff: str) -> int:
+        """Move readings with ``as_of < cutoff`` out of the hot file to cold Parquet; return count.
 
-        self._con.execute("COPY readings TO ? (FORMAT PARQUET)", [str(path)])
+        Old rows are exported to ``cold_dir/series=…/year=…/`` Hive partitions (appended to any that
+        already exist) and then pruned from the hot DuckDB table — a physical relocation, not a
+        logical edit, so the unioned read is byte-for-byte unchanged. Bounds the hot file as history
+        accrues; the recent hot window keyed off the run date stays resident.
+        """
+
+        if self._cold_dir is None:
+            raise ValueError("tier_cold needs a cold_dir; none was configured")
+        row = self._con.execute(
+            "SELECT count(*) FROM readings WHERE as_of < ?", [cutoff]
+        ).fetchone()
+        moved = int(row[0]) if row is not None else 0
+        if moved == 0:
+            return 0
+        self._cold_dir.mkdir(parents=True, exist_ok=True)
+        # The COPY target path is a literal (DuckDB ignores a bound parameter there); the cutoff
+        # stays bound. ``year`` is derived for the partition layout, then recovered from the path on
+        # read, so the cold files carry only the reading columns.
+        target = str(self._cold_dir).replace("'", "''")
+        self._con.execute(
+            f"COPY (SELECT {_COLS}, substr(as_of, 1, 4) AS year FROM readings WHERE as_of < ?) "
+            f"TO '{target}' (FORMAT PARQUET, PARTITION_BY (series, year), APPEND)",
+            [cutoff],
+        )
+        self._con.execute("DELETE FROM readings WHERE as_of < ?", [cutoff])
+        return moved
 
     def close(self) -> None:
         self._con.close()
