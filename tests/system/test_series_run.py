@@ -1,8 +1,8 @@
 """End-to-end: a run materializes the per-fund time-series gold, and nightly publishes a replica.
 
-Ties issue #84 to the entrypoint — ``run`` files each item's night into ``series/<code>.json`` next
-to the artifact, and the CLI ``nightly`` job publishes a read-only store replica for isolated
-ad-hoc queries after the run.
+At the entrypoint, ``run`` files each item's night into ``series/<code>.json`` next to the
+artifact, and the CLI ``nightly`` job publishes a read-only store replica for isolated ad-hoc
+queries after the run.
 """
 
 import pytest

@@ -147,13 +147,13 @@ Ordered by impact on frontend responsiveness under load.
   endpoint is already `immutable`; add `ETag`/gzip/brotli. This makes dashboard throughput effectively
   unbounded and takes the common read entirely off the app.
 
-- **R3 — Serve time-series from a pre-materialized gold tier, not live OLAP — shipped.** At the end
+- **R3 — Serve time-series from a pre-materialized gold tier, not live OLAP.** At the end
   of each run, `factor_scope.series` materializes a compact per-fund trail (`series/<code>.json`, one
   point per night), and `serve.py` serves it from `/series/{code}`. The frontend reads **static,
   cacheable** series with no query in the request path — DuckDB-under-concurrency is out of the
   common charting case entirely, and the read stays flat regardless of store size.
 
-- **R4 — If live/ad-hoc queries are truly needed, isolate and bound them — shipped.**
+- **R4 — If live/ad-hoc queries are truly needed, isolate and bound them.**
   `store.replica.publish_replica` takes a **read-only file replica** after each nightly run, and
   `ReadReplica` opens it **read-only** from a **bounded connection pool** with per-query memory caps,
   a wall-clock timeout (interrupt), and result-row limits — never the writer's handle, so the

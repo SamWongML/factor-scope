@@ -78,7 +78,7 @@ class Proposal:
 
     Deliberately just the call + conviction (+ why): the descriptive fields the artifact carries —
     text, evolution, flip-trigger, invalidation — are rendered deterministically by the
-    orchestrator from the *final* (post-guardrail) action, so they always match the lean shipped.
+    orchestrator from the *final* (post-guardrail) action, so they always match the emitted lean.
     """
 
     action: LeanAction

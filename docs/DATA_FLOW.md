@@ -82,7 +82,7 @@ well as offline** (`markets/base.py:72`), so it changes every night. The origina
 `PRIMARY KEY (series, key, as_of, fetched_at, payload)` with `ON CONFLICT DO NOTHING`: because
 `fetched_at` moved nightly, **re-fetching the same historical bar tomorrow produced a *different*
 primary key** → it was inserted again, and the `ON CONFLICT` guard only deduped *within one run's
-retries*, never across nights. `append` now keys on content instead (see Part 5.1b — **shipped**):
+retries*, never across nights. `append` keys on content instead (see Part 5.1b):
 a reading is written only when its payload differs from the latest revision already held for that
 `(series, key, as_of)`, so an unchanged re-fetch is a cross-night no-op. The figures below are the
 *pre-fix* write volume that change removed.
@@ -187,7 +187,7 @@ immutable JSON serving). Fix the write path; layer storage for growth.
 
 ### 5.1 Two ingest fixes (highest leverage — do these first)
 
-**(a) Incremental ingest (watermarks) — shipped.** Before each per-fund re-pull the universe loop
+**(a) Incremental ingest (watermarks).** Before each per-fund re-pull the universe loop
 reads that `(series, key)`'s latest stored `as_of` and the adapter requests only newer observations
 — `trading_activity` via AkShare's `fund_etf_hist_em` `start_date`, holdings via the disclosure year
 derived from the watermark (the run stamp's year when nothing is stored — never a hard-coded
@@ -197,7 +197,7 @@ watermark as a write-filter and leans on content dedup below for the rest. The w
 `fund_universe`/`etf_scale` snapshots stay full re-pulls — delisting detection needs the complete
 membership each night.
 
-**(b) Store only real revisions (content dedup) — shipped.** `append` skips a row when the most
+**(b) Store only real revisions (content dedup).** `append` skips a row when the most
 recent stored revision for its `(series, key, as_of)` already has an identical `payload`, keeping a
 new row **only when the payload genuinely changed** (a real restatement) — exactly the bitemporal
 contract the docstring promises. This preserves "a later disclosure never rewrites an earlier read"
@@ -234,11 +234,11 @@ single DuckDB file plus the 5.1 fixes is sufficient — adopt DuckLake as a *sea
 
 - **Dashboard reads:** keep serving the immutable `dashboards/<as_of>.json` (cache-forever,
   CDN-able). Already correct.
-- **Time-series reads** (a factor's history, a fund's NAV trail) — **shipped.** A run
-  **pre-materializes** a compact per-fund trail (`series/<code>.json`, one point per night) via
-  `factor_scope.series`; `serve.py` serves it from `/series/{code}` as static, cacheable data with
-  **no query in the request path**, so the read is flat in the store's size.
-- **Isolated ad-hoc queries** — **shipped.** For genuine ad-hoc reads the nightly job publishes a
+- **Time-series reads** (a factor's history, a fund's NAV trail): a run **pre-materializes** a
+  compact per-fund trail (`series/<code>.json`, one point per night) via `factor_scope.series`;
+  `serve.py` serves it from `/series/{code}` as static, cacheable data with **no query in the
+  request path**, so the read is flat in the store's size.
+- **Isolated ad-hoc queries:** for genuine ad-hoc reads the nightly job publishes a
   **read-only file replica** of the store after each run (`store.replica.publish_replica`), and
   `ReadReplica` queries *that* through a **bounded connection pool** with per-query memory / row /
   time caps — never the writer's handle, satisfying the one-RW-or-many-RO rule structurally.
@@ -247,7 +247,7 @@ single DuckDB file plus the 5.1 fixes is sufficient — adopt DuckLake as a *sea
 
 ---
 
-## Part 6 — Make fixtures reflect the live run (cassette ingest) — shipped
+## Part 6 — Make fixtures reflect the live run (cassette ingest)
 
 **Before:** the offline path was a *different system* than live. `config.source == "fixtures"` took a
 separate branch that loaded small pre-baked CSVs and **bypassed** the universe-scale loop, the
@@ -274,28 +274,16 @@ path; the feed supplies the raw reads:
 
 ---
 
-## Part 7 — Migration plan (standalone)
+## Part 7 — Where the leverage is
 
-This refactor stands on its own. Ordered by leverage; each is one session / one PR / `make check` green.
-
-1. **Content-dedup append** (§5.1b). Smallest change, biggest win; kills write amplification
-   immediately. Unit-test that re-appending an unchanged payload is a no-op and a changed payload
-   adds exactly one revision.
-2. **Incremental watermark ingest** (§5.1a) for `trading_activity`, `fundamentals`, holdings,
-   universe. Turns quadratic → linear.
-3. **Cassette fixtures + unified ingest path** (§6) — **shipped.** Removed the offline/online code
-   fork; the expensive live paths (universe loop, watermark, reconciliation, delisting) now have
-   real offline coverage.
-4. **Cold-tier partitioned Parquet** (§5.2) via `DuckDBStore.tier_cold` with Hive layout + a recent-window
-   policy.
-5. **Read-only serving over silver** (§5.4) — **shipped.** Pre-materialized per-fund time-series
-   gold served flat, plus an isolated read-only replica + bounded query pool for ad-hoc reads; JSON
-   serving for dashboards is unchanged.
-6. **DuckLake migration** (§5.3) when multi-process live reads are needed.
-
-Steps 1–3 are the ones that decide whether the system survives a year of nightly runs; 4–6 are the
-durability/scale headroom once the write path is sound. Frontend-delivery scalability under load is
-evaluated separately in `docs/SERVING_EVALUATION.md`.
+The write path carries the survival question. Content-dedup append (§5.1b) and incremental
+watermark ingest (§5.1a) are the smallest changes with the largest effect: together they turn the
+store's quadratic growth linear and end the ~580× write amplification, deciding whether the system
+lasts a year of nightly runs. The cassette-unified ingest path (§6) keeps that write path honest by
+exercising the expensive live code offline. The cold-tier partitioned Parquet (§5.2), the read-only
+serving over silver (§5.4), and the eventual DuckLake split (§5.3) are durability and scale headroom
+once the write path is sound. Frontend-delivery scalability under load is evaluated separately in
+`docs/SERVING_EVALUATION.md`.
 
 ---
 

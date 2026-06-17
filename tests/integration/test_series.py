@@ -1,8 +1,8 @@
 """The pre-materialized time-series gold tier — compact per-fund trails, served flat.
 
 At the end of each run the morning's per-fund readings are appended — one point per night — to a
-small ``<code>.json`` trail, so charting a fund reads only that artifact. The headline property
-(issue #84 acceptance): the served trail's read cost is **flat in the size of the store** behind it.
+small ``<code>.json`` trail, so charting a fund reads only that artifact. The headline property:
+the served trail's read cost is **flat in the size of the store** behind it.
 """
 
 from __future__ import annotations

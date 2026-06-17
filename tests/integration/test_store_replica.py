@@ -1,8 +1,8 @@
 """The isolated read-only query seam — a bounded pool over a post-run store replica.
 
-Issue #84 acceptance: an ad-hoc query opens the store **read-only against a replica**, never the
-writer's handle; per-query memory / time / row caps are enforced; and concurrent reads never block
-the nightly writer (DuckDB's one-RW-or-many-RO rule, satisfied structurally by the separate file).
+The contract: an ad-hoc query opens the store **read-only against a replica**, never the writer's
+handle; per-query memory / time / row caps are enforced; and concurrent reads never block the
+nightly writer (DuckDB's one-RW-or-many-RO rule, satisfied structurally by the separate file).
 """
 
 from __future__ import annotations
