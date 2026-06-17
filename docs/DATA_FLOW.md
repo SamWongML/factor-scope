@@ -234,9 +234,14 @@ single DuckDB file plus the 5.1 fixes is sufficient — adopt DuckLake as a *sea
 
 - **Dashboard reads:** keep serving the immutable `dashboards/<as_of>.json` (cache-forever,
   CDN-able). Already correct.
-- **Time-series reads** (a factor's history, a fund's NAV trail): add read-only endpoints backed by a
-  **read-only** DuckDB/DuckLake connection over silver Parquet. Never the writer's handle. Cache
-  aggressively; tighten the currently-open CORS before public exposure.
+- **Time-series reads** (a factor's history, a fund's NAV trail) — **shipped.** A run
+  **pre-materializes** a compact per-fund trail (`series/<code>.json`, one point per night) via
+  `factor_scope.series`; `serve.py` serves it from `/series/{code}` as static, cacheable data with
+  **no query in the request path**, so the read is flat in the store's size.
+- **Isolated ad-hoc queries** — **shipped.** For genuine ad-hoc reads the nightly job publishes a
+  **read-only file replica** of the store after each run (`store.replica.publish_replica`), and
+  `ReadReplica` queries *that* through a **bounded connection pool** with per-query memory / row /
+  time caps — never the writer's handle, satisfying the one-RW-or-many-RO rule structurally.
 - **Writer discipline:** nightly ingest is a short-lived RW process — open, ingest incrementally,
   commit, close — so the read/write windows don't overlap.
 
@@ -283,8 +288,9 @@ This refactor stands on its own. Ordered by leverage; each is one session / one 
    real offline coverage.
 4. **Cold-tier partitioned Parquet** (§5.2) via `DuckDBStore.tier_cold` with Hive layout + a recent-window
    policy.
-5. **Read-only serving connection over silver** (§5.4) for time-series endpoints; keep JSON serving
-   for dashboards.
+5. **Read-only serving over silver** (§5.4) — **shipped.** Pre-materialized per-fund time-series
+   gold served flat, plus an isolated read-only replica + bounded query pool for ad-hoc reads; JSON
+   serving for dashboards is unchanged.
 6. **DuckLake migration** (§5.3) when multi-process live reads are needed.
 
 Steps 1–3 are the ones that decide whether the system survives a year of nightly runs; 4–6 are the

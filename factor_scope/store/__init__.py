@@ -87,19 +87,30 @@ class DuckDBStore:
 
     With ``cold_dir`` set, readings tiered out of the hot file by :meth:`tier_cold` land as
     Hive-partitioned Parquet there, and every read unions the hot table with those partitions.
+
+    ``read_only`` opens the file for reads alone — the seam an isolated query path uses over a
+    published replica so it never collides with the nightly writer (see
+    :mod:`factor_scope.store.replica`). A read-only handle has no table to create, and refuses
+    writes.
     """
 
     def __init__(
-        self, path: str | Path = ":memory:", *, cold_dir: str | Path | None = None
+        self,
+        path: str | Path = ":memory:",
+        *,
+        cold_dir: str | Path | None = None,
+        read_only: bool = False,
     ) -> None:
         import duckdb  # lazy: the `store` extra is only needed when a store is opened
 
         self._path = str(path)
         self._cold_dir = Path(cold_dir) if cold_dir is not None else None
-        if self._path != ":memory:":
+        self._read_only = read_only
+        if self._path != ":memory:" and not read_only:
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-        self._con = duckdb.connect(self._path)
-        self._con.execute(_SCHEMA)
+        self._con = duckdb.connect(self._path, read_only=read_only)
+        if not read_only:
+            self._con.execute(_SCHEMA)
 
     def _readings(self) -> str:
         """The SQL relation reads run over — the hot table, unioned with cold Parquet when present.

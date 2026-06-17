@@ -124,6 +124,14 @@ class Config:
     # auto-populates from the source, so the entrypoint works standalone. A path → a durable
     # append-only store that `ingest` fills and `run` reads (point-in-time).
     store_path: Path | None = None
+    # Where the pre-materialized per-fund time-series gold lands — one compact ``<code>.json`` trail
+    # per fund, appended one point per night (see factor_scope.series), so a chart serves flat with
+    # no query in the request path. None → a ``series/`` directory next to ``output_path``.
+    series_dir: Path | None = None
+    # Where the nightly job publishes a read-only file replica of the store after each run, so an
+    # ad-hoc query reads the replica — never the writer's handle — satisfying DuckDB's one-RW-or-
+    # many-RO rule structurally (see factor_scope.store.replica). None → no replica is published.
+    replica_path: Path | None = None
     # Where the durable connection graph lives. None → an ephemeral in-memory graph built from the
     # readings store at run time (mirrors store_path). A path → a durable, append-only graph.
     graph_path: Path | None = None

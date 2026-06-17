@@ -18,7 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from factor_scope import history
+from factor_scope import history, series
 from factor_scope.config import TASK_DEBATE, Config
 from factor_scope.contract import (
     BullBearIndex,
@@ -84,6 +84,7 @@ from factor_scope.markets import Market, get_market
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
+from factor_scope.store.replica import publish_replica
 
 
 class SnapshotError(RuntimeError):
@@ -731,6 +732,7 @@ def build_dashboard(
     *,
     digest_failures: list[DigestFailure] | None = None,
     usage_sink: list[Usage] | None = None,
+    series_sink: list[series.SeriesEntry] | None = None,
     market: Market | None = None,
 ) -> Dashboard:
     """Build the morning artifact for one run from the point-in-time store.
@@ -741,10 +743,11 @@ def build_dashboard(
     ``digest_failures`` is an optional sink the nightly job passes to collect any items whose seat
     call raised or was throttled (each degraded to abstain) for the ops run log; it never affects
     the artifact. ``usage_sink`` collects this run's per-call cost (the re-rank + the seats) for the
-    ledger + run log. With ``config.monthly_budget_usd`` set, the seats are capped by the calendar
-    month's spend-to-date (read from ``config.spend_path``) so an over-budget run degrades its
-    lower-priority items to abstain — a partial-but-valid artifact. ``market`` overrides the
-    config-selected adapter (used to drive the pipeline from fake sources).
+    ledger + run log. ``series_sink`` collects this night's per-fund time-series points so ``run``
+    can append them to the pre-materialized gold trails. With ``config.monthly_budget_usd`` set, the
+    seats are capped by the calendar month's spend-to-date (read from ``config.spend_path``) so an
+    over-budget run degrades its lower-priority items to abstain — a partial-but-valid artifact.
+    ``market`` overrides the config-selected adapter (used to drive the pipeline from fake sources).
     """
 
     as_of = _resolve_as_of(config)
@@ -805,6 +808,10 @@ def build_dashboard(
             digest_failures=digest_failures,
             usage_sink=usage_sink,
         )
+        # Project the enriched items into compact per-fund time-series points while the store is
+        # still open (the NAV read is point-in-time); `run` files them into the gold trails.
+        if series_sink is not None:
+            series_sink.extend(series.materialize(pairs, store, as_of))
         items = [item for _, item in pairs]
     finally:
         store.close()
@@ -822,14 +829,21 @@ def run(
     usage_sink: list[Usage] | None = None,
     market: Market | None = None,
 ) -> Dashboard:
-    """Build the dashboard, persist it to ``config.output_path``, and record it in the history."""
+    """Build the dashboard, persist it to ``config.output_path``, record it in the history, and
+    append this night's point to each fund's pre-materialized time-series trail."""
 
+    series_points: list[series.SeriesEntry] = []
     dash = build_dashboard(
-        config, digest_failures=digest_failures, usage_sink=usage_sink, market=market
+        config,
+        digest_failures=digest_failures,
+        usage_sink=usage_sink,
+        series_sink=series_points,
+        market=market,
     )
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     config.output_path.write_text(dash.model_dump_json(indent=2), encoding="utf-8")
     history.record(dash, history.resolve_history_dir(config))
+    series.record(series_points, series.resolve_series_dir(config))
     return dash
 
 
@@ -887,6 +901,11 @@ def nightly(
     usages: list[Usage] = []
     # build + write; logs each lean as a call and collects this run's per-call spend
     dash = run(config, digest_failures=digest_failures, usage_sink=usages, market=market)
+    # Publish a read-only replica of the just-committed store so an ad-hoc query reads it — never
+    # the writer's handle — satisfying DuckDB's one-RW-or-many-RO rule structurally (the writer is
+    # closed by now, so the file is checkpointed).
+    if config.replica_path is not None and config.store_path is not None:
+        publish_replica(config.store_path, config.replica_path)
     ended_at = clock()
     # The ledger is the cross-job budget source: read the month-to-date *before* this run, then book
     # this run's spend (append-only), so the record's month-to-date includes tonight.

@@ -18,12 +18,14 @@ writes three things under `out/` (override with the flags below):
 |----------|--------------|------------|
 | `dashboard.json` | `out/dashboard.json` | the morning artifact you review (the contract) |
 | history | `out/dashboards/` | one immutable `<as_of>.json` per night (below) |
+| series | `out/series/` | one compact `<code>.json` per-fund time-series trail (below) |
 | store | `out/store.duckdb` | the append-only point-in-time store (readings + logged calls) |
+| replica | `out/store.replica.duckdb` | a read-only copy of the store, refreshed after each run (below) |
 | graph | `out/graph.ladybug` | the durable holdings look-through graph |
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
 
-Flags: `--output`, `--history-dir`, `--store-path`, `--graph-path`, `--log-path`, `--provider`,
-`--as-of`, `--offline`, `--quiet`. The job is **online by default** (live sources + the real provider);
+Flags: `--output`, `--history-dir`, `--series-dir`, `--store-path`, `--replica-path`,
+`--graph-path`, `--log-path`, `--provider`, `--as-of`, `--offline`, `--quiet`. The job is **online by default** (live sources + the real provider);
 `--offline` (or `FACTOR_SCOPE_OFFLINE=1`) selects fixtures + the deterministic `fake` provider for a
 demo or test run. Re-running the **same night is idempotent**: positions are stamped
 with the run's `as_of`, so a second run that night re-uses the night's readings — the artifact stays
@@ -72,11 +74,30 @@ factor-scope serve                      # http://127.0.0.1:8765
 # GET /dashboards?limit=&offset= → the index, oldest first (bounded page; X-Total-Count + Link)
 # GET /dashboards/2026-06-05     → that night's artifact (immutable, cacheable forever; ETag)
 # GET /dashboards/latest         → the newest night (revalidates against a strong ETag)
+# GET /series                    → the funds with a materialized trail (revalidates; ETag)
+# GET /series/510300             → that fund's pre-materialized time-series (revalidates; ETag)
 # GET /openapi.json              → the typed schema to generate a frontend client from
 ```
 
 It never ingests or reasons — the snapshot boundary holds. At one small JSON per night
 (~365/year) the history needs no retention machinery.
+
+### The per-fund time-series (gold)
+
+Every run also appends one compact point — NAV, return, gate, factor bands — to each fund's
+`out/series/<code>.json` trail, so a chart serves the whole history from that static, cacheable
+file with **no query in the request path**: the read is flat in the store's size. Like the night
+history, the first point recorded for an `as_of` stands, so a re-run never rewrites it.
+
+### Isolated ad-hoc queries (the read-only replica)
+
+The common charting case is the pre-materialized series above; for genuine ad-hoc reads, the
+nightly job publishes a **read-only file replica** of the store to `--replica-path` after each run
+(the writer is closed by then, so the file is checkpointed). Open it with `ReadReplica`, which
+queries the replica — never the live writer's handle, satisfying DuckDB's one-RW-or-many-RO rule
+structurally — through a bounded connection pool with per-query memory, row, and time caps. The
+replica defaults beside the store (`<store-path>.replica.duckdb`); override its location with
+`--replica-path`.
 
 **Response hygiene.** Every response carries a strong `ETag` (immutable nights are also
 content-addressed by `snapshot_id`) and is gzip-compressed over the wire; `/dashboards` is bounded

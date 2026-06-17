@@ -147,19 +147,20 @@ Ordered by impact on frontend responsiveness under load.
   endpoint is already `immutable`; add `ETag`/gzip/brotli. This makes dashboard throughput effectively
   unbounded and takes the common read entirely off the app.
 
-- **R3 — Serve time-series from a pre-materialized gold tier, not live OLAP.** At the end of the
-  nightly job, precompute compact per-fund / per-factor series (small Parquet or JSON) — the same
-  cadence that produces `dashboard.json`. The frontend then reads **static, cacheable** series with no
-  query in the request path. This removes DuckDB-under-concurrency from the common charting case
-  entirely and keeps latency flat regardless of store size.
+- **R3 — Serve time-series from a pre-materialized gold tier, not live OLAP — shipped.** At the end
+  of each run, `factor_scope.series` materializes a compact per-fund trail (`series/<code>.json`, one
+  point per night), and `serve.py` serves it from `/series/{code}`. The frontend reads **static,
+  cacheable** series with no query in the request path — DuckDB-under-concurrency is out of the
+  common charting case entirely, and the read stays flat regardless of store size.
 
-- **R4 — If live/ad-hoc queries are truly needed, isolate and bound them.** (a) Open the store
-  **read-only** from a **bounded connection pool**; (b) set per-query memory caps, `statement_timeout`,
-  and result-row limits so one query can't starve others or OOM the box; (c) isolate the reader from
-  the writer via a **DuckLake snapshot or a read-only file replica** taken after each nightly run, so
-  the one-RW-or-many-RO rule is satisfied structurally; (d) accept that if concurrency ever becomes
-  genuinely high, DuckDB stays the **batch/analytical** engine and a purpose-built serving store
-  (ClickHouse/Pinot) — or simply more CDN'd static aggregates — is the scalable answer.
+- **R4 — If live/ad-hoc queries are truly needed, isolate and bound them — shipped.**
+  `store.replica.publish_replica` takes a **read-only file replica** after each nightly run, and
+  `ReadReplica` opens it **read-only** from a **bounded connection pool** with per-query memory caps,
+  a wall-clock timeout (interrupt), and result-row limits — never the writer's handle, so the
+  one-RW-or-many-RO rule is satisfied structurally and concurrent reads never block the writer. The
+  caveat stands: if concurrency ever becomes genuinely high, DuckDB stays the **batch/analytical**
+  engine and a purpose-built serving store (ClickHouse/Pinot) — or more CDN'd static aggregates — is
+  the scalable answer.
 
 - **R5 — Hygiene for any list/collection endpoint.** Pagination + field projection, response-size
   caps, compression, and `ETag`s everywhere. Never return an unbounded list.
