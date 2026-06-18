@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>factor-scope · Storage Architecture</title>
+<style>
+  :root{
+    /* base surfaces — deep cyber-monochrome */
+    --bg:#0a0d12; --bg-soft:#0c1017;
+    --panel:#11161e; --panel-2:#151b25; --panel-3:#1a2230;
+    --line:#212a36; --line-2:#2d3845; --code:#080b11;
+    /* type */
+    --ink:#e9eef5; --dim:#9fabba; --faint:#6b7785;
+    /* medallion + semantic accents (each carries meaning) */
+    --bronze:#cf8a43; --silver:#8ba1b7; --gold:#e6bd4a; --cold:#54b0d2;
+    --graph:#b886e2; --serve:#54c08a; --contract:#ec6f9e; --accent:#5aa9ff;
+    --discover:#36c6b0; --red:#f0826d; --green:#5ec27a;
+    /* tokens */
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --maxw:1500px; --r:12px;
+    --shadow:0 1px 0 rgba(255,255,255,.025), 0 14px 34px -18px rgba(0,0,0,.7);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; color:var(--ink); font-family:var(--sans);
+    line-height:1.55; font-size:14px; -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(1100px 560px at 88% -8%, rgba(90,169,255,.07), transparent 60%),
+      radial-gradient(820px 480px at 2% 2%, rgba(184,134,226,.06), transparent 55%),
+      var(--bg);
+  }
+  /* faint blueprint grid, faded out below the masthead */
+  body::before{
+    content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(130,150,180,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(130,150,180,.05) 1px, transparent 1px);
+    background-size:34px 34px;
+    -webkit-mask-image:radial-gradient(ellipse 120% 70% at 50% -6%, #000, transparent 72%);
+            mask-image:radial-gradient(ellipse 120% 70% at 50% -6%, #000, transparent 72%);
+  }
+
+  /* sticky nav */
+  .topbar{position:sticky; top:0; z-index:50; border-bottom:1px solid var(--line);
+    background:rgba(10,13,18,.74); backdrop-filter:blur(12px) saturate(140%);
+    -webkit-backdrop-filter:blur(12px) saturate(140%)}
+  .topbar .inner{max-width:var(--maxw); margin:0 auto; padding:9px 28px;
+    display:flex; align-items:center; gap:18px}
+  .brand{font-weight:700; font-size:13px; white-space:nowrap; letter-spacing:.1px}
+  .brand .d{color:var(--accent)}
+  .brand .sub{color:var(--faint); font-weight:500}
+  .navlinks{display:flex; gap:2px; margin-left:auto; overflow-x:auto; scrollbar-width:none}
+  .navlinks::-webkit-scrollbar{display:none}
+  .navlinks a{font-size:12px; color:var(--dim); padding:5px 9px; border-radius:7px;
+    white-space:nowrap; transition:.15s}
+  .navlinks a:hover{color:var(--ink); background:var(--panel-2)}
+  @media(max-width:900px){.navlinks{display:none}}
+
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:34px 28px 110px; position:relative; z-index:1}
+
+  /* masthead */
+  h1{font-size:32px; margin:0 0 8px; letter-spacing:-.6px; font-weight:760}
+  h1 .v{background:linear-gradient(92deg,var(--accent),var(--graph) 60%,var(--contract));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+  .sub{color:var(--dim); font-size:15.5px; margin:0 0 8px; max-width:920px}
+  .tag{color:var(--faint); font-size:12px; font-family:var(--mono); line-height:1.7}
+  .tag .sep{opacity:.5; padding:0 4px}
+
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono); font-size:12.5px}
+  code{background:#1b2330; padding:1.5px 5px; border-radius:5px; color:#cdd9e5;
+    border:1px solid rgba(255,255,255,.04)}
+
+  h2{font-size:21px; margin:60px 0 6px; padding-bottom:10px; letter-spacing:-.3px;
+    border-bottom:1px solid var(--line); scroll-margin-top:64px; display:flex; align-items:baseline; gap:13px}
+  h2 .num{font-family:var(--mono); font-size:13px; color:var(--bg);
+    background:linear-gradient(135deg,var(--accent),var(--graph));
+    padding:3px 8px; border-radius:7px; font-weight:700; letter-spacing:.4px;
+    transform:translateY(-1px); flex:0 0 auto}
+  h3{font-size:15px; margin:24px 0 10px; color:var(--ink); font-weight:650}
+  .lead{color:var(--dim); margin:8px 0 20px; max-width:1080px; font-size:14px}
+
+  /* fact strip */
+  .facts{display:grid; grid-template-columns:repeat(6,1fr); gap:11px; margin:24px 0 6px}
+  @media(max-width:1100px){.facts{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:620px){.facts{grid-template-columns:repeat(2,1fr)}}
+  .fact{background:linear-gradient(180deg,var(--panel-2),var(--panel)); border:1px solid var(--line);
+    border-radius:10px; padding:12px 14px; transition:.18s; box-shadow:var(--shadow)}
+  .fact:hover{border-color:var(--line-2); transform:translateY(-2px)}
+  .fact b{display:block; font-size:10.5px; color:var(--faint); text-transform:uppercase;
+    letter-spacing:.8px; margin-bottom:5px; font-weight:700}
+  .fact span{font-size:13px; color:var(--ink)}
+
+  /* legend */
+  .legend{display:flex; flex-wrap:wrap; gap:8px 18px; margin:18px 0 0; font-size:12.5px; color:var(--dim)}
+  .legend span{display:inline-flex; align-items:center; gap:7px}
+  .legend i{width:11px; height:11px; border-radius:3px; box-shadow:0 0 10px -2px currentColor}
+
+  /* generic panels */
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+    padding:18px 20px; box-shadow:var(--shadow)}
+  .grid{display:grid; gap:16px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:980px){.g2,.g3{grid-template-columns:1fr}}
+
+  /* tier left-borders */
+  .b-bronze{border-left:3px solid var(--bronze)}
+  .b-silver{border-left:3px solid var(--silver)}
+  .b-gold{border-left:3px solid var(--gold)}
+  .b-cold{border-left:3px solid var(--cold)}
+  .b-graph{border-left:3px solid var(--graph)}
+  .b-serve{border-left:3px solid var(--serve)}
+  .b-contract{border-left:3px solid var(--contract)}
+  .b-accent{border-left:3px solid var(--accent)}
+  .b-discover{border-left:3px solid var(--discover)}
+
+  /* horizontal flow / pipeline rail */
+  .flow{background:linear-gradient(180deg,var(--panel),var(--bg-soft));
+    border:1px solid var(--line); border-radius:14px; padding:22px 18px; overflow-x:auto;
+    box-shadow:var(--shadow)}
+  .scrollhint{font-size:11px; color:var(--faint); font-family:var(--mono); margin:0 0 8px; text-align:right}
+  .lane{display:flex; align-items:stretch; gap:0; min-width:1460px}
+  .stage{display:flex; flex-direction:column; gap:10px; flex:1; min-width:0; padding:0 5px}
+  .arrow{display:flex; align-items:center; justify-content:center; color:var(--faint);
+    font-size:20px; flex:0 0 26px}
+  .arrow svg{width:22px; height:22px; opacity:.7}
+  .lbl{font-size:10.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.9px;
+    font-weight:700; text-align:center; padding-bottom:4px; border-bottom:1px dashed var(--line)}
+  .node{border:1px solid var(--line); border-left-width:3px; border-radius:10px;
+    padding:11px 12px; background:var(--panel-2); font-size:12px; transition:.16s;
+    overflow-wrap:anywhere; word-break:break-word}
+  .node:hover{background:var(--panel-3); border-color:var(--line-2); transform:translateY(-1px)}
+  .node .t{font-weight:700; font-size:12.5px; display:block; margin-bottom:4px; color:var(--ink)}
+  .node .d{color:var(--dim); font-size:11px; line-height:1.45; overflow-wrap:anywhere}
+  .node .d code{font-size:10.5px; white-space:normal; word-break:break-all}
+  .node .f{color:var(--faint); font-family:var(--mono); font-size:10px; margin-top:6px;
+    display:block; overflow-wrap:anywhere}
+  .node br{line-height:1}
+
+  /* code blocks */
+  pre{background:var(--code); border:1px solid var(--line); border-radius:10px; padding:14px 16px;
+    overflow-x:auto; margin:10px 0; font-family:var(--mono); font-size:12px; line-height:1.6; color:#c9d4e0}
+  pre .k{color:#ff7b72} pre .s{color:#a5d6a3} pre .c{color:#6e7681; font-style:italic}
+  pre .f{color:#d2a8ff} pre .n{color:#79c0ff}
+
+  /* tables */
+  .tablewrap{border:1px solid var(--line); border-radius:11px; overflow:hidden; margin:10px 0; box-shadow:var(--shadow)}
+  table{border-collapse:collapse; width:100%; font-size:12.5px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  thead th{color:var(--faint); text-transform:uppercase; font-size:10.5px; letter-spacing:.6px;
+    font-weight:700; background:var(--panel-2)}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr{transition:.12s}
+  tr:hover td{background:#11161d}
+  td code{font-size:11.5px; white-space:nowrap}
+  .src{color:var(--faint); font-family:var(--mono); font-size:11px; white-space:nowrap}
+
+  /* containment tree — white-space:pre is the fix */
+  .tree{font-family:var(--mono); font-size:12.5px; line-height:1.7; color:#c9d4e0;
+    background:var(--code); border:1px solid var(--line); border-radius:10px; padding:16px 18px;
+    overflow-x:auto; white-space:pre}
+  .tree .root{color:var(--contract); font-weight:700}
+  .tree .mdl{color:#d2a8ff} .tree .fld{color:#79c0ff} .tree .ty{color:#a5d6a3}
+  .tree .en{color:var(--gold)} .tree .cm{color:var(--faint)} .tree .br{color:#475061}
+
+  /* chips */
+  .chips{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0}
+  .chip{font-family:var(--mono); font-size:11px; background:#1b2330; border:1px solid var(--line);
+    border-radius:20px; padding:3px 11px; color:#cdd9e5}
+  .chip.on{border-color:var(--gold); color:var(--gold); box-shadow:0 0 12px -4px var(--gold)}
+  .chip.stack{border-color:var(--discover); color:#aef0e4}
+
+  /* callouts */
+  .callout{border-left:3px solid var(--accent); background:#0f1e2c; border-radius:0 9px 9px 0;
+    padding:13px 17px; margin:14px 0; font-size:13px; color:#bcd}
+  .callout.warn{border-left-color:var(--red); background:#241412; color:#f3c5bb}
+  .callout.ok{border-left-color:var(--green); background:#0f2118; color:#bfe6cd}
+  .callout b{color:var(--ink)}
+
+  ul.tight{margin:8px 0; padding-left:20px}
+  ul.tight li{margin:5px 0; color:var(--dim)}
+  ul.tight li b{color:var(--ink)}
+  hr.soft{border:0; border-top:1px dashed var(--line); margin:18px 0}
+  .small{font-size:11.5px; color:var(--faint)}
+  .pin{color:var(--green); font-family:var(--mono); font-size:11.5px}
+
+  /* svg diagram frame */
+  .figure{background:var(--code); border:1px solid var(--line); border-radius:12px;
+    padding:18px 16px 12px; margin:14px 0; box-shadow:var(--shadow)}
+  .figure svg{display:block; width:100%; height:auto}
+  .figcap{font-size:11.5px; color:var(--faint); text-align:center; margin-top:8px; font-family:var(--mono)}
+
+  footer{margin-top:48px; padding-top:18px; border-top:1px dashed var(--line);
+    color:var(--faint); font-size:11.5px; font-family:var(--mono); text-align:center; line-height:1.8}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="inner">
+    <span class="brand">factor-scope <span class="d">·</span> <span class="sub">Storage Architecture</span></span>
+    <nav class="navlinks">
+      <a href="#flow">Flow</a>
+      <a href="#tiering">Tiering</a>
+      <a href="#reading">Reading</a>
+      <a href="#api">Store API</a>
+      <a href="#guarantees">Guarantees</a>
+      <a href="#contract">Contract</a>
+      <a href="#discovery">Discovery</a>
+      <a href="#stack">Stack</a>
+      <a href="#determinism">Determinism</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <h1>factor-scope &middot; <span class="v">Storage Architecture</span></h1>
+  <p class="sub">Local-first, single-user, nightly-batch data layer for an A-share / funds &amp; ETFs portfolio.</p>
+  <p class="tag">append-only<span class="sep">·</span>point-in-time<span class="sep">·</span>byte-for-byte deterministic<span class="sep">·</span>medallion-tiered (DuckDB hot &rarr; Parquet cold)<span class="sep">·</span>one artifact: <code>out/dashboard.json</code></p>
+
+  <div class="facts">
+    <div class="fact"><b>Hot store</b><span>DuckDB single-file <code>readings</code> log</span></div>
+    <div class="fact"><b>Cold tier</b><span>Hive-partitioned Parquet <span class="small">(series=/year=)</span></span></div>
+    <div class="fact"><b>Graph</b><span>LadybugDB embedded openCypher</span></div>
+    <div class="fact"><b>Contract</b><span>Pydantic v2 &rarr; <code>Dashboard</code></span></div>
+    <div class="fact"><b>Discovery</b><span>BERTopic + embeddings &rarr; themes</span></div>
+    <div class="fact"><b>Serve</b><span>FastAPI read-only history API</span></div>
+  </div>
+
+  <div class="legend">
+    <span style="color:var(--bronze)"><i></i><span style="color:var(--dim)">Bronze · raw ingest</span></span>
+    <span style="color:var(--silver)"><i></i><span style="color:var(--dim)">Silver · the store (Readings)</span></span>
+    <span style="color:var(--cold)"><i></i><span style="color:var(--dim)">Cold · Parquet tier</span></span>
+    <span style="color:var(--graph)"><i></i><span style="color:var(--dim)">Graph · LadybugDB</span></span>
+    <span style="color:var(--gold)"><i></i><span style="color:var(--dim)">Gold · derived JSON</span></span>
+    <span style="color:var(--contract)"><i></i><span style="color:var(--dim)">Contract · pydantic spine</span></span>
+    <span style="color:var(--discover)"><i></i><span style="color:var(--dim)">Research · discovery engine</span></span>
+    <span style="color:var(--serve)"><i></i><span style="color:var(--dim)">Serve · read API</span></span>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="flow"><span class="num">01</span>End-to-end data flow</h2>
+  <p class="lead">One nightly run flows left&rarr;right. Every layer <b>only adds</b> to the artifact, so a partial pipeline still emits a valid <code>dashboard.json</code>. The store is the pivot: <span class="mono">ingest</span> writes <code>Reading</code> rows in; the pipeline reads them back <em>point-in-time</em> and emits a <code>Dashboard</code>.</p>
+
+  <div class="flow">
+    <p class="scrollhint">scroll →</p>
+    <div class="lane">
+
+      <div class="stage">
+        <div class="lbl">Sources</div>
+        <div class="node b-bronze"><span class="t">Live network</span><span class="d">AkShare · Baostock · Mootdx · EDGAR · FRED</span><span class="f">source="live"</span></div>
+        <div class="node b-bronze"><span class="t">Fixtures / cassettes</span><span class="d">committed JSON recordings + positions.csv</span><span class="f">source="fixtures"</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage">
+        <div class="lbl">Ingest adapters</div>
+        <div class="node b-bronze"><span class="t">ingest/*.py <span class="small">(18 files)</span></span><span class="d">prices, holdings, fundamentals, fred, edgar, demand, positions, themes…</span><span class="f">fetch_live() | load_fixture()</span></div>
+        <div class="node b-bronze"><span class="t">Feed seam</span><span class="d">LiveFeed vs CassetteFeed picked by config</span><span class="f">get_feed(config) → Feed</span></div>
+        <div class="node b-bronze"><span class="t">Market.gather()</span><span class="d">AShareMarket orchestrates all adapters, watermarked vs store</span><span class="f">markets/ashare.py:265</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage">
+        <div class="lbl">Write seam</div>
+        <div class="node b-silver"><span class="t">Reading[]</span><span class="d">frozen pydantic wire format: series · key · as_of · fetched_at · payload</span><span class="f">store/__init__.py:32</span></div>
+        <div class="node b-silver"><span class="t">store.append()</span><span class="d">batch insert + content-addressed dedup → rows written</span><span class="f">pipeline.ingest():137</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage">
+        <div class="lbl">The store</div>
+        <div class="node b-silver"><span class="t">DuckDBStore · HOT</span><span class="d"><code>readings</code> table, one file <code>out/store.duckdb</code></span><span class="f">PointInTimeStore Protocol</span></div>
+        <div class="node b-cold"><span class="t">Parquet · COLD</span><span class="d">as_of &lt; hot window → tier_cold(); reads UNION hot+cold</span><span class="f">cold_dir, hot_window_days=365</span></div>
+        <div class="node b-graph"><span class="t">LadybugGraphStore</span><span class="d">(:Fund)-[:HOLDS]→(:Security) edges, [valid_from, valid_to)</span><span class="f">graph/store.py</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage">
+        <div class="lbl">Read + reason</div>
+        <div class="node b-silver"><span class="t">read_as_of / history</span><span class="d">point-in-time per key (QUALIFY window)</span><span class="f">store/__init__.py:176</span></div>
+        <div class="node b-accent"><span class="t">build_dashboard()</span><span class="d">snapshot → factors → graph → emerging → scoring → digest</span><span class="f">pipeline.py:730</span></div>
+        <div class="node b-contract"><span class="t">Dashboard</span><span class="d">pydantic contract, the spine</span><span class="f">contract/__init__.py:179</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage">
+        <div class="lbl">Persist (gold)</div>
+        <div class="node b-gold"><span class="t">out/dashboard.json</span><span class="d">latest, overwritten each run</span></div>
+        <div class="node b-gold"><span class="t">out/dashboards/&lt;as_of&gt;.json</span><span class="d">immutable per-night + index.json catalog</span><span class="f">history.py</span></div>
+        <div class="node b-gold"><span class="t">out/series/&lt;code&gt;.json</span><span class="d">per-fund append-only NAV/factor trail</span><span class="f">series.py</span></div>
+        <div class="node b-silver"><span class="t">*.replica.duckdb</span><span class="d">read-only file replica for ad-hoc queries</span><span class="f">store/replica.py</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage">
+        <div class="lbl">Serve</div>
+        <div class="node b-serve"><span class="t">FastAPI app</span><span class="d">read-only; /dashboards, /latest, /{as_of}, /series</span><span class="f">serve.py · :8765</span></div>
+        <div class="node b-serve"><span class="t">Frontend</span><span class="d">consumes raw artifacts + /openapi.json</span></div>
+      </div>
+
+    </div>
+  </div>
+  <p class="small" style="margin-top:10px">The store has a <b>second writer</b>: the weekly <code>discover</code> research job appends <code>themes</code> Readings on the research side of the snapshot boundary — see <a href="#discovery">§09</a>.</p>
+
+  <div class="figure">
+    <svg viewBox="0 0 960 210" role="img" aria-label="Snapshot boundary timeline">
+      <defs>
+        <marker id="ah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#6b7785"/>
+        </marker>
+        <linearGradient id="incl" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#54c08a" stop-opacity=".14"/>
+          <stop offset="1" stop-color="#54c08a" stop-opacity=".05"/>
+        </linearGradient>
+      </defs>
+      <!-- included / excluded regions -->
+      <rect x="56" y="38" width="564" height="116" fill="url(#incl)" rx="6"/>
+      <rect x="640" y="38" width="264" height="116" fill="#f0826d" fill-opacity=".05" rx="6"/>
+      <!-- axis -->
+      <line x1="56" y1="132" x2="912" y2="132" stroke="#3a4452" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="900" y="152" fill="#6b7785" font-family="var(--mono)" font-size="11" text-anchor="end">time · as_of →</text>
+      <!-- boundary -->
+      <line x1="630" y1="30" x2="630" y2="160" stroke="#5aa9ff" stroke-width="1.6" stroke-dasharray="5 4"/>
+      <text x="630" y="24" fill="#5aa9ff" font-family="var(--mono)" font-size="12" font-weight="700" text-anchor="middle">D = run date (as_of)</text>
+      <!-- included readings -->
+      <g fill="#8ba1b7">
+        <circle cx="120" cy="118" r="6"/><circle cx="210" cy="126" r="6"/><circle cx="300" cy="112" r="6"/>
+        <circle cx="395" cy="124" r="6"/><circle cx="490" cy="116" r="6"/><circle cx="575" cy="122" r="6"/>
+      </g>
+      <!-- excluded future disclosures -->
+      <g fill="none" stroke="#f0826d" stroke-width="1.4" stroke-dasharray="3 3">
+        <circle cx="710" cy="120" r="6"/><circle cx="805" cy="116" r="6"/>
+      </g>
+      <text x="757" y="150" fill="#f0826d" font-family="var(--mono)" font-size="10.5" text-anchor="middle">as_of &gt; D · excluded</text>
+      <!-- snapshot chip -->
+      <rect x="120" y="56" width="392" height="26" rx="13" fill="#11161e" stroke="#2d3845"/>
+      <text x="135" y="73" fill="#a5d6a3" font-family="var(--mono)" font-size="11.5">snapshot_id = SHA-256( readings where as_of ≤ D )</text>
+      <!-- brace label -->
+      <text x="316" y="180" fill="#9fabba" font-family="var(--mono)" font-size="11" text-anchor="middle">folded in, canonical order — a later disclosure can never move it</text>
+    </svg>
+    <p class="figcap">The snapshot boundary — what the run could see, fingerprinted</p>
+  </div>
+
+  <div class="callout"><b>The snapshot boundary.</b> <code>ingest</code> (write) and <code>run</code> (read) are separate phases. <code>snapshot_id</code> = SHA-256 over every reading with <code>as_of ≤ D</code> in canonical order — it fingerprints exactly the store state the run could see, and a later disclosure (<code>as_of &gt; D</code>) can never move it. This boundary, plus a wall-clock-free <code>generated_at</code>, is what makes <code>dashboard.json</code> reproduce byte-for-byte.</div>
+
+  <!-- ============================================================ -->
+  <h2 id="tiering"><span class="num">02</span>Medallion tiering — where every byte lives</h2>
+  <p class="lead">A single conceptual log, physically split across four media. Callers only ever touch the <code>PointInTimeStore</code> Protocol — tiering, Parquet, and the replica are all invisible behind it.</p>
+
+  <div class="grid g2">
+    <div class="panel b-silver">
+      <h3 style="margin-top:0">🟦 SILVER · hot store <span class="small">— <code>DuckDBStore</code>, <code>out/store.duckdb</code></span></h3>
+      <ul class="tight">
+        <li>One DuckDB file, one <code>readings</code> table, one connection per instance (not pooled, not a singleton).</li>
+        <li><b>One writer or many readers</b> — DuckDB's hard rule; bridged by the replica (§06).</li>
+        <li><code>:memory:</code> default → ephemeral; <code>run</code> auto-populates it standalone. A real path → durable, <code>ingest</code> fills it.</li>
+        <li>No PRAGMAs on the writer; the only tuning is on replica connections.</li>
+      </ul>
+    </div>
+    <div class="panel b-cold">
+      <h3 style="margin-top:0">🟦 COLD · Parquet tier <span class="small">— <code>cold_dir/series=…/year=…/*.parquet</code></span></h3>
+      <ul class="tight">
+        <li>After each ingest, <code>tier_cold(cutoff)</code> <b>moves</b> rows with <code>as_of &lt; cutoff</code> out of the hot table to Hive-partitioned Parquet via DuckDB <code>COPY … (FORMAT PARQUET, PARTITION_BY (series, year), APPEND)</code>.</li>
+        <li>Bounds the hot file as years of history accrue.</li>
+        <li><code>_readings()</code> transparently <code>UNION ALL</code>s hot rows with <code>read_parquet(glob, hive_partitioning=true)</code> — <b>reads are unchanged</b>, snapshot stays identical.</li>
+        <li><code>None</code> → whole log stays hot (default).</li>
+      </ul>
+    </div>
+    <div class="panel b-graph">
+      <h3 style="margin-top:0">🟪 GRAPH · LadybugDB <span class="small">— <code>out/graph.ladybug</code></span></h3>
+      <ul class="tight">
+        <li>Embedded on-disk openCypher graph DB (<b>not</b> the daylighting library — it's <a href="https://ladybugdb.com">ladybugdb.com</a>).</li>
+        <li>Schema: <code>Fund(code PK)</code>, <code>Security(code PK)</code>, <code>HOLDS</code> rel with <code>weight, as_of, source, valid_from, valid_to</code>.</li>
+        <li>Point-in-time via half-open <code>[valid_from, valid_to)</code> windows on edges.</li>
+        <li>Built from <code>store.history("fund_holdings"|"edgar")</code>; powers look-through connections.</li>
+      </ul>
+    </div>
+    <div class="panel b-gold">
+      <h3 style="margin-top:0">🟨 GOLD · derived JSON <span class="small">— <code>out/dashboards/</code>, <code>out/series/</code></span></h3>
+      <ul class="tight">
+        <li>Not DuckDB at all — flat per-file JSON, atomically written (stage file + <code>os.replace</code>).</li>
+        <li><b>Immutable per-night</b> dashboards + a materialized <code>index.json</code> catalog (a cache, never the source of truth).</li>
+        <li><b>Append-only per-fund</b> NAV/factor trails — first point per <code>as_of</code> stands.</li>
+        <li>This is what <code>serve.py</code> reads; the store is never exposed over HTTP.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="reading"><span class="num">03</span>The <code>Reading</code> — the one fact, and the one table</h2>
+  <p class="lead">Every fact in the system is a <code>Reading</code>: a stamped, append-only row. <code>series</code> is the logical table, <code>key</code> the entity, <code>as_of</code> the disclosure date (point-in-time), <code>fetched_at</code> when it was pulled (never the artifact's clock), <code>payload</code> the values (schema-on-read JSON).</p>
+
+  <div class="grid g2">
+    <div>
+      <h3>Python model <span class="src">store/__init__.py:32–41</span></h3>
+<pre><span class="k">class</span> <span class="f">Reading</span>(BaseModel):
+    <span class="c">"""One stamped, append-only fact in the store."""</span>
+    model_config = ConfigDict(frozen=<span class="k">True</span>)   <span class="c"># immutable</span>
+
+    series: <span class="f">str</span>       <span class="c"># source/table: "prices","fred"…</span>
+    key: <span class="f">str</span>          <span class="c"># entity within series: fund code…</span>
+    as_of: <span class="f">str</span>        <span class="c"># ISO date the fact was true (PIT)</span>
+    fetched_at: <span class="f">str</span>   <span class="c"># ISO ts pulled — never the clock</span>
+    payload: <span class="f">dict</span>[<span class="f">str</span>, Any]  <span class="c"># the row's values</span></pre>
+      <p class="small">Series seen in the wild: <span class="mono">positions · prices · fund_universe · etf_scale · fund_holdings · fundamentals · trading_activity · fred · edgar · demand · themes · theme_map · textstream · calls · debate_cache</span></p>
+    </div>
+    <div>
+      <h3>DuckDB schema <span class="src">store/__init__.py:71–80</span></h3>
+<pre><span class="k">CREATE TABLE IF NOT EXISTS</span> readings (
+    series     VARCHAR <span class="k">NOT NULL</span>,
+    key        VARCHAR <span class="k">NOT NULL</span>,
+    as_of      VARCHAR <span class="k">NOT NULL</span>,
+    fetched_at VARCHAR <span class="k">NOT NULL</span>,
+    payload    VARCHAR <span class="k">NOT NULL</span>,   <span class="c"># json.dumps(sort_keys)</span>
+    <span class="k">PRIMARY KEY</span> (series, key, as_of, fetched_at)
+);</pre>
+      <ul class="tight">
+        <li>Exactly <b>one table</b>, one composite PK, no secondary indexes, no FKs, no persisted views.</li>
+        <li><code>payload</code> is canonical sorted-key JSON text → deterministic serialization &amp; hashing.</li>
+        <li>The cold "view" is an <em>ad-hoc</em> SQL string in <code>_readings()</code>, not a DuckDB <code>VIEW</code> object.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="api"><span class="num">04</span>Store API surface — <code>PointInTimeStore</code> Protocol</h2>
+  <p class="lead">A <code>@runtime_checkable</code> Protocol (<span class="src">store/__init__.py:44–68</span>) is the <b>only</b> dependency the rest of the engine (pipeline, factors, scoring, graph) holds — the DuckDB backend stays swappable. No module outside <code>store/</code> imports <code>duckdb</code> or writes SQL.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Method</th><th>Signature</th><th>Returns</th><th>Role</th><th>Src</th></tr></thead>
+    <tbody>
+      <tr><td><b>append</b></td><td><code>append(readings: Iterable[Reading])</code></td><td><code>int</code></td><td>Batch insert + content-addressed dedup. Returns rows actually written.</td><td class="src">:130</td></tr>
+      <tr><td><b>read_as_of</b></td><td><code>read_as_of(series, as_of)</code></td><td><code>list[Reading]</code></td><td>Point-in-time: latest row per <code>key</code> where <code>as_of ≤ D</code>.</td><td class="src">:176</td></tr>
+      <tr><td><b>history</b></td><td><code>history(series, key=None)</code></td><td><code>list[Reading]</code></td><td>Full append-only audit trail, oldest first.</td><td class="src">:186</td></tr>
+      <tr><td><b>count</b></td><td><code>count(series=None)</code></td><td><code>int</code></td><td>Row count, optionally per series.</td><td class="src">:200</td></tr>
+      <tr><td><b>snapshot_id</b></td><td><code>snapshot_id(as_of, *, exclude=())</code></td><td><code>str</code></td><td>SHA-256 fingerprint of all readings <code>≤ D</code>, canonical order.</td><td class="src">:210</td></tr>
+      <tr><td><b>tier_cold</b></td><td><code>tier_cold(cutoff)</code></td><td><code>int</code></td><td>Move <code>as_of &lt; cutoff</code> rows to Parquet, delete from hot.</td><td class="src">:223</td></tr>
+      <tr><td><b>close</b></td><td><code>close()</code> · also <code>__enter__/__exit__</code></td><td><code>None</code></td><td>Release the connection.</td><td class="src">:253</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout"><b>Layered write/read helpers funnel through the Protocol</b>, never around it: <code>scoring.calls.log_call()</code>/<code>read_calls()</code> (the self-scoring loop), <code>pipeline._DebateCache</code> (debate_cache series), <code>graph.build_graph_from_store()</code>, and the <code>factors/window.py</code> readers (<code>price_navs</code>, <code>fred_values</code>, <code>turnovers</code>, <code>valuation_pes</code>, <code>lead_chain</code>…), each filtering <code>history()</code> to <code>r.as_of ≤ as_of</code>.</div>
+
+  <!-- ============================================================ -->
+  <h2 id="guarantees"><span class="num">05</span>The two guarantees: append-only &amp; point-in-time</h2>
+
+  <div class="grid g2">
+    <div>
+      <h3>Write side — content-addressed revisions <span class="src">append() :130</span></h3>
+<pre><span class="c"># write only if payload DIFFERS from the latest</span>
+<span class="c"># revision held for (series, key, as_of)</span>
+<span class="k">INSERT INTO</span> readings (...)
+<span class="k">SELECT</span> i.* <span class="k">FROM</span> _incoming i
+<span class="k">LEFT JOIN</span> (
+  <span class="k">SELECT</span> series,key,as_of,payload <span class="k">FROM</span> readings
+  <span class="k">QUALIFY</span> row_number() <span class="k">OVER</span> (
+    <span class="k">PARTITION BY</span> series,key,as_of
+    <span class="k">ORDER BY</span> fetched_at <span class="k">DESC</span>) = <span class="n">1</span>
+) latest <span class="k">USING</span> (series,key,as_of)
+<span class="k">WHERE</span> latest.payload <span class="k">IS NULL</span>
+   <span class="k">OR</span> latest.payload &lt;&gt; i.payload
+<span class="k">ON CONFLICT DO NOTHING</span></pre>
+      <ul class="tight">
+        <li>Nightly re-pulls the <b>full history</b>; an unchanged bar arriving again under a fresh <code>fetched_at</code> writes <b>zero rows</b> (dedup is on content, not the fetch stamp — cross-night, not just within a run).</li>
+        <li>A genuine restatement (changed payload, same <code>as_of</code>) lands as a <b>new revision</b> — the old row is never edited.</li>
+        <li>No <code>UPDATE</code>/<code>DELETE</code> anywhere except the physical relocation inside <code>tier_cold</code>.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Read side — point-in-time selection <span class="src">read_as_of() :176</span></h3>
+<pre><span class="k">SELECT</span> series,key,as_of,fetched_at,payload
+<span class="k">FROM</span> <span class="f">{hot ∪ cold}</span>
+<span class="k">WHERE</span> series = ? <span class="k">AND</span> as_of &lt;= ?
+<span class="k">QUALIFY</span> row_number() <span class="k">OVER</span> (
+  <span class="k">PARTITION BY</span> key
+  <span class="k">ORDER BY</span> as_of <span class="k">DESC</span>, fetched_at <span class="k">DESC</span>) = <span class="n">1</span>
+<span class="k">ORDER BY</span> key</pre>
+      <div class="callout ok"><b>First write wins / no rewriting history.</b> A future disclosure (<code>as_of &gt; D</code>) is excluded by the <code>WHERE</code> before the window even runs — it <em>structurally cannot</em> influence a past-dated read, regardless of when the row was inserted. Among same-<code>as_of</code> revisions, latest <code>fetched_at</code> wins.</div>
+      <p class="small">Reasoning sees only what was knowable as-of the run date — enforced by the query, not by discipline. Verified by <code>test_a_later_disclosure_does_not_rewrite_history</code>.</p>
+    </div>
+  </div>
+
+  <div class="callout warn"><b>Invalid inputs degrade, never raise.</b> A stale/short/missing reading becomes a <code>FactorState(valid=False)</code> (band <code>neutral</code>, "missing ≠ bad") and is kept, not dropped. <b>The trend gate is the one hard cap:</b> below the 200-day MA → <code>GateState.CAPPED</code>, and nothing — not even an overconfident model — may open a capped gate.</div>
+
+  <!-- ============================================================ -->
+  <h2 id="replica"><span class="num">06</span>Read replica — bridging "one writer or many readers"</h2>
+  <p class="lead">DuckDB allows one read-write <em>or</em> many read-only handles per file. The nightly writer holds the live store RW, so ad-hoc queries can't open it. Solution: after the run closes the writer, publish a separate read-only <b>file replica</b>.</p>
+
+  <div class="grid g2">
+    <div class="panel b-silver">
+      <h3 style="margin-top:0"><code>publish_replica()</code> <span class="src">replica.py:29</span></h3>
+      <p class="small" style="margin-top:0"><code>publish_replica(store_path, replica_path) → Path</code></p>
+      <ul class="tight">
+        <li>Copies the hot file to <code>&lt;name&gt;.staging</code>, then <code>os.replace()</code> for atomicity — a concurrent reader never sees a half-written replica.</li>
+        <li>Only the hot DuckDB file is copied; cold Parquet is queried in place.</li>
+        <li>Called by <code>nightly()</code> right after the writer is closed &amp; checkpointed.</li>
+      </ul>
+    </div>
+    <div class="panel b-silver">
+      <h3 style="margin-top:0"><code>ReadReplica</code> pool <span class="src">replica.py:50</span></h3>
+      <p class="small" style="margin-top:0"><code>ReadReplica(path, pool_size=4, memory_limit="256MB", row_limit=10_000, timeout_s=5.0)</code></p>
+      <ul class="tight">
+        <li>Opens N read-only connections up front; each bounded by <code>SET memory_limit</code> (the only PRAGMA tuning in the layer).</li>
+        <li><code>query(sql, params)</code> checks a connection out of a <code>queue.Queue</code> (blocks → bounds concurrency).</li>
+        <li>Per-query caps: <code>fetchmany(row_limit)</code>, worker thread + <code>join(timeout)</code> → <code>con.interrupt()</code> raising <code>QueryTimeout</code>. One heavy query can't starve the box.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="contract"><span class="num">07</span>The contract — the pydantic spine</h2>
+  <p class="lead">One file, <code>contract/__init__.py</code> (284 lines), is "the spine": the data model for <code>dashboard.json</code>. Defaults make an <em>under-construction</em> item still valid, which is what keeps the entrypoint runnable at any build stage. Every closed vocabulary is a <code>StrEnum</code>; persisted artifacts each carry their own <code>schema_version</code>.</p>
+
+  <div class="grid g2">
+    <div>
+      <h3>Containment tree</h3>
+<div class="tree"><span class="root">Dashboard</span> <span class="cm">(schema_version=2)</span>
+<span class="br">├─</span> <span class="fld">as_of</span> · <span class="fld">generated_at</span> · <span class="fld">snapshot_id</span> <span class="ty">: str</span>
+<span class="br">└─</span> <span class="fld">items</span><span class="ty">: list[</span><span class="mdl">DashboardItem</span><span class="ty">]</span>
+   <span class="br">├─</span> <span class="fld">item</span><span class="ty">: str</span>  ·  <span class="fld">list</span><span class="ty">:</span> <span class="en">ListName</span>
+   <span class="br">├─</span> <span class="fld">gain</span> · <span class="fld">gate</span><span class="ty">:</span> <span class="en">GateState</span>
+   <span class="br">├─</span> <span class="fld">states</span><span class="ty">: list[</span><span class="mdl">FactorState</span><span class="ty">]</span>
+   <span class="br">│   └─</span> factor · <span class="fld">level</span>:<span class="en">Band</span> · direction · evidence · <span class="fld">valid</span>:bool
+   <span class="br">├─</span> <span class="fld">lean</span><span class="ty">:</span> <span class="mdl">Lean</span> <span class="cm">(action:</span><span class="en">LeanAction</span><span class="cm">, confidence[0..1], text)</span>
+   <span class="br">├─</span> <span class="fld">index</span><span class="ty">:</span> <span class="mdl">BullBearIndex</span> <span class="cm">(bull≥0, bear≥0, net, rubric[])</span>
+   <span class="br">├─</span> <span class="fld">connections</span><span class="ty">: list[</span><span class="mdl">Connection</span><span class="ty">]</span> <span class="cm">(shared, also_in, lookthrough_wt)</span>
+   <span class="br">├─</span> <span class="fld">scorecard</span><span class="ty">:</span> <span class="mdl">Scorecard</span> <span class="cm">(brier, reliability[], weak_patterns)</span>
+   <span class="br">├─</span> <span class="fld">evidence</span><span class="ty">: list[</span><span class="mdl">Evidence</span><span class="ty">]</span> <span class="cm">(src, as_of, one_line)</span>
+   <span class="br">└─</span> evolution · flip_trigger · invalidation · connections_flag
+
+<span class="cm">— sibling artifacts (same file, NOT nested) —</span>
+<span class="root">FundSeries</span> <span class="cm">(v1)</span> → points[]: <span class="mdl">SeriesPoint</span>(as_of, nav, gain, gate, factors[])
+<span class="root">SeriesIndex</span> <span class="cm">(v1)</span> → codes[]
+<span class="root">DashboardIndex</span> <span class="cm">(v1)</span> → entries[]: <span class="mdl">DashboardIndexEntry</span></div>
+    </div>
+    <div>
+      <h3>Closed vocabularies (StrEnum)</h3>
+      <p class="small" style="margin:6px 0 2px"><b>Band</b> <span class="src">:26</span> — ranked vs the factor's <em>own</em> history</p>
+      <div class="chips">
+        <span class="chip">extreme_low</span><span class="chip">low</span><span class="chip">neutral</span><span class="chip">high</span><span class="chip">extreme_high</span>
+      </div>
+      <p class="small" style="margin:12px 0 2px"><b>GateState</b> <span class="src">:39</span> — the 200-day MA cap</p>
+      <div class="chips">
+        <span class="chip">open</span><span class="chip on">capped</span><span class="chip">unknown</span>
+      </div>
+      <p class="small" style="margin:12px 0 2px"><b>LeanAction</b> <span class="src">:47</span></p>
+      <div class="chips">
+        <span class="chip">buy_early</span><span class="chip">hold</span><span class="chip">trim</span><span class="chip">exit</span><span class="chip">avoid</span><span class="chip">abstain</span>
+      </div>
+      <p class="small" style="margin:12px 0 2px"><b>ListName</b> <span class="src">:18</span></p>
+      <div class="chips">
+        <span class="chip">holdings</span><span class="chip">watchlist</span><span class="chip">emerging</span>
+      </div>
+
+      <hr class="soft" />
+      <h3 style="margin-top:6px">Schema export &amp; versioning</h3>
+      <ul class="tight">
+        <li><code>dashboard_json_schema()</code> <span class="src">:256</span> = <code>Dashboard.model_json_schema()</code>; surfaced by CLI <code>factor-scope schema [-o file]</code>.</li>
+        <li>Also drives FastAPI <code>/openapi.json</code> via <code>response_model=</code>.</li>
+        <li>Each persisted artifact versions <b>independently</b> (no global version). An old <code>v1</code> night parses and is <b>never silently upgraded</b> — history is immutable.</li>
+        <li><code>FactorContext</code> (the factor input) is <em>not</em> here — it's a frozen dataclass in <code>factors/battery.py:45</code> wrapping <code>(code, as_of, store)</code>.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="gold"><span class="num">08</span>Gold artifacts &amp; the serve layer</h2>
+
+  <div class="grid g2">
+    <div class="panel b-gold">
+      <h3 style="margin-top:0">history.py — immutable per-night</h3>
+      <ul class="tight">
+        <li><code>record(dash, dir) → Path</code> writes <code>&lt;as_of&gt;.json</code>; <span class="pin">if path.exists(): return path</span> — <b>first write wins</b>, a later run never rewrites a night.</li>
+        <li>Same <code>Dashboard</code> object is also written to <code>out/dashboard.json</code> (always overwritten = "latest") — verified byte-identical content (same <code>snapshot_id</code>).</li>
+        <li><code>index.json</code> catalog maintained at write time (<code>_catalog_night</code>, <code>dict.setdefault</code>); a missing/corrupt catalog degrades to <code>_rebuild_index()</code> globbing <code>*.json</code> — never an error.</li>
+        <li>All writes atomic: staging file + <code>os.replace</code>.</li>
+      </ul>
+    </div>
+    <div class="panel b-gold">
+      <h3 style="margin-top:0">series.py — per-fund gold trail</h3>
+      <ul class="tight">
+        <li>Reads only <code>store.read_as_of("prices", as_of)</code> for NAV; <b>not</b> DuckDB-backed itself.</li>
+        <li><code>materialize()</code> → <code>list[SeriesEntry]</code> = <code>(code, name, SeriesPoint)</code>.</li>
+        <li><code>record()</code> appends a point per fund; <b>first point per <code>as_of</code> stands</b>, mirroring the append-only store. Atomic rewrite per fund file.</li>
+        <li><code>list_codes()</code> globs the dir live for the <code>/series</code> catalog (no index file).</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>serve.py — FastAPI read-only history API <span class="src">lazy-imported in create_app · CLI <code>serve</code> :8765</span></h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Endpoint</th><th>Returns</th><th>Caching</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /dashboards</code></td><td><code>DashboardIndex</code></td><td>revalidate + ETag</td><td>paginated (<code>limit≤500</code>, <code>offset</code>); <code>X-Total-Count</code> + RFC-5988 <code>Link</code>.</td></tr>
+      <tr><td><code>GET /dashboards/latest</code></td><td><code>Dashboard</code></td><td>revalidate + ETag</td><td>pointer to last catalog entry; 404 if none recorded.</td></tr>
+      <tr><td><code>GET /dashboards/{as_of}</code></td><td><code>Dashboard</code></td><td><b>immutable</b> 1yr + ETag</td><td><code>as_of</code> regex-validated (date IS the filename → forecloses path traversal).</td></tr>
+      <tr><td><code>GET /series</code> <span class="small">(if series_dir)</span></td><td><code>SeriesIndex</code></td><td>revalidate</td><td>live dir glob.</td></tr>
+      <tr><td><code>GET /series/{code}</code></td><td><code>FundSeries</code></td><td>revalidate</td><td>code regex-validated → path-traversal-safe.</td></tr>
+      <tr><td><code>GET /openapi.json</code></td><td>OpenAPI schema</td><td>—</td><td>typed schema a frontend client is generated from.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout"><b>Seam = raw passthrough.</b> Dashboard/series bodies are the exact recorded artifact re-emitted as JSON (FastAPI <code>response_model</code> re-serializes the same pydantic model loaded from disk). The only projection is <code>DashboardIndex</code>, a pre-summarized catalog. The store is <b>never</b> reachable over HTTP — read-only by construction, so the snapshot boundary holds. CORS opens <code>*</code> on loopback, closed otherwise; <code>GZip</code> over 500 bytes.</div>
+
+  <!-- ============================================================ -->
+  <h2 id="discovery"><span class="num">09</span>Theme discovery — the research-side data pipeline</h2>
+  <p class="lead">The store has a <b>second writer</b>. Apart from the nightly <code>ingest</code>, a separate <code>discover</code> job (weekly by convention) turns a rolling Chinese-language text stream into candidate <code>themes</code> Readings. It runs the engine's only heavy <b>data-processing stack</b> — sentence embeddings, an online topic model, and a cost-stratified LLM — entirely on the host (a Mac mini; no paid topic-model API), on the <b>research side of the snapshot boundary</b>: it only <em>appends</em> dated Readings, so the nightly's deterministic reasoning is untouched. The next <code>ingest</code> maps the discovered themes to funds; <code>run</code> surfaces them in the <code>emerging</code> list.</p>
+
+  <div class="flow">
+    <p class="scrollhint">scroll →</p>
+    <div class="lane">
+
+      <div class="stage" style="flex:1.05">
+        <div class="lbl">Corpus</div>
+        <div class="node b-bronze"><span class="t">textstream</span><span class="d">dated docs <code>{doc_id, as_of, source, text}</code> — news / research notes / filings, point-in-time</span><span class="f">ingest/textstream.py</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage" style="flex:1.15">
+        <div class="lbl">Embed</div>
+        <div class="node b-discover"><span class="t">Sentence embeddings</span><span class="d">sentence-transformers <code>paraphrase-multilingual-MiniLM-L12-v2</code> — local, multilingual, MPS/CPU, free; normalized vectors</span><span class="f">discovery/topics.py:227</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage" style="flex:1.3">
+        <div class="lbl">Cluster (online BERTopic)</div>
+        <div class="node b-discover"><span class="t">BERTopicModel</span><span class="d">jieba segmentation → IncrementalPCA → MiniBatchKMeans (pinned random_state) → OnlineCountVectorizer (decay); <code>partial_fit</code> over chronological mini-batches</span><span class="f">discovery/topics.py:194</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage" style="flex:1.1">
+        <div class="lbl">Trajectory</div>
+        <div class="node b-discover"><span class="t">classify_trajectory</span><span class="d">per-topic descriptive read: acceleration · base_level · breadth · crowding · signal — <b>noise / weak / strong</b> (BERTrend pattern)</span><span class="f">discovery/topics.py:97</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage" style="flex:1.25">
+        <div class="lbl">Assess (LLM)</div>
+        <div class="node b-discover"><span class="t">LLMAssessor · 2-tier</span><span class="d">DeepSeek <b>draft</b> (v4-flash) digests → <b>judge</b> (v4-pro) renders 4 cited booleans: broad-adoption · path-to-profit · fad-resistance · lead-chain. Pydantic-AI</span><span class="f">discovery/assess.py:143</span></div>
+      </div>
+
+      <div class="arrow">&rarr;</div>
+
+      <div class="stage" style="flex:1.05">
+        <div class="lbl">Write</div>
+        <div class="node b-silver"><span class="t">themes Readings</span><span class="d">noise dropped; surviving topics appended to the store (append-only) with their evidence</span><span class="f">discovery/service.py:42</span></div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-top:16px">
+    <div class="panel b-discover">
+      <h3 style="margin-top:0">TopicModel seam — the quantitative half <span class="src">topics.py</span></h3>
+      <p class="small" style="margin-top:0">A <code>@runtime_checkable</code> Protocol: <code>discover(docs, *, as_of) → list[TopicTrajectory]</code>.</p>
+      <ul class="tight">
+        <li><b>Production</b> <code>BERTopicModel</code>: local embeddings + jieba + scikit-learn (<code>IncrementalPCA</code> → <code>MiniBatchKMeans</code>) + <code>OnlineCountVectorizer</code>, fit mini-batch-by-mini-batch in publish-date order so recent attention is up-weighted.</li>
+        <li><b>Offline</b> <code>FakeTopicModel</code>: a no-model frequency grouping the suite swaps in — same <code>_trajectory</code> reader, so the quantitative contract is identical on both sides.</li>
+        <li><b>Reproducible</b>: <code>random_state=42</code> + fixed input order → a re-run over the same corpus reproduces. Economic-meaning constants only — <b>never tuned to P&amp;L</b>.</li>
+      </ul>
+    </div>
+    <div class="panel b-discover">
+      <h3 style="margin-top:0">ThemeAssessor seam — the judgment half <span class="src">assess.py</span></h3>
+      <p class="small" style="margin-top:0">Protocol: <code>assess(topic, evidence_docs) → ThemeAssessment</code> (four <code>FieldVerdict</code>s).</p>
+      <ul class="tight">
+        <li><b>Production</b> <code>LLMAssessor</code>: two Pydantic-AI agents stratified by cost — a cheap <b>draft</b> extracts the brief, a strong <b>judge</b> renders the structured verdict. Each field carries a boolean <em>and</em> a cited <code>Evidence</code>.</li>
+        <li>Any OpenAI-compatible endpoint via <code>ModelSpec</code> (<code>base_url</code> + key env) — DeepSeek / Qwen / GLM / Kimi. No fallback chain, no per-model code.</li>
+        <li><b>Metered</b>: each call books tokens + USD into the spend ledger; a <code>BudgetGuard</code> (monthly ceiling) stops assessing once spent — partial but valid. <b>Offline</b> <code>FakeAssessor</code> reads cues, meters nothing.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="chips" style="margin-top:14px">
+    <span class="chip stack">sentence-transformers</span><span class="chip stack">BERTopic (online)</span><span class="chip stack">jieba</span>
+    <span class="chip stack">scikit-learn · IncrementalPCA</span><span class="chip stack">MiniBatchKMeans</span><span class="chip stack">OnlineCountVectorizer</span>
+    <span class="chip stack">Pydantic-AI</span><span class="chip stack">DeepSeek v4 · flash→pro</span>
+  </div>
+
+  <div class="callout"><b>One Protocol, two engines, never in CI.</b> Each seam is a Protocol with a production engine behind the pinned <code>discovery</code> extra and a deterministic fake the offline suite swaps in — so the whole data-processing stack (BERTopic / sentence-transformers / scikit-learn / jieba / pydantic-ai) is <b>imported lazily inside the engine</b> and never loads in the test mode, which stays byte-for-byte deterministic on the fakes. <span class="small">Config knobs: <code>discovery_embedding_model</code> (default <code>paraphrase-multilingual-MiniLM-L12-v2</code>), <code>discovery_n_topics</code> (12), <code>textstream_feed_url</code>, <code>monthly_budget_usd</code> — <span class="src">config.py:183–193</span>.</span></div>
+
+  <!-- ============================================================ -->
+  <h2 id="stack"><span class="num">10</span>Tech stack &amp; lazy-import boundaries</h2>
+  <p class="lead">Core deps are tiny (<code>pydantic</code>, <code>typer</code>). Everything heavy is a <b>pinned optional extra</b>, imported <b>lazily inside the function that needs it</b> — so the offline/fixtures path and the test suite never load (or require) <code>duckdb</code> / <code>ladybug</code> / <code>fastapi</code> / the discovery models.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Extra</th><th>Package · pin</th><th>Role</th><th>Lazy import site</th></tr></thead>
+    <tbody>
+      <tr><td><code>core</code></td><td><code>pydantic &gt;=2.6</code> · <code>typer &gt;=0.12</code></td><td>Serialization spine (every model) + the CLI that wires paths into <code>Config</code>.</td><td>top-level (always)</td></tr>
+
+      <tr><td rowspan="6"><code>live</code></td><td><code>akshare &gt;=1.18,&lt;2</code></td><td>A-share prices / fund universe / ETF scale / holdings.</td><td rowspan="6">ingest adapters' <code>fetch_live()</code> · <code>Market.gather</code></td></tr>
+      <tr><td><code>baostock &gt;=0.9,&lt;1</code></td><td>Adjusted price history (NAV trail).</td></tr>
+      <tr><td><code>mootdx &gt;=0.9,&lt;1</code></td><td>Trading-activity / turnover feed.</td></tr>
+      <tr><td><code>edgartools &gt;=5.35,&lt;6</code></td><td>EDGAR filings → look-through holdings.</td></tr>
+      <tr><td><code>fredapi &gt;=0.5,&lt;1</code></td><td>FRED macro series (the demand/lead chain).</td></tr>
+      <tr><td><code>httpx &gt;=0.27,&lt;1</code></td><td>Plain-HTTP feeds (e.g. the textstream corpus).</td></tr>
+
+      <tr><td rowspan="3"><code>store</code></td><td><code>duckdb &gt;=1,&lt;2</code> <span class="small">(1.5.3)</span></td><td>The point-in-time <code>readings</code> store engine + Parquet I/O via SQL.</td><td><code>DuckDBStore.__init__</code>, <code>ReadReplica.__init__</code></td></tr>
+      <tr><td><code>pyarrow &gt;=15,&lt;25</code> <span class="small">(24.0.0)</span></td><td>Backs DuckDB's <code>COPY/read_parquet</code>; <b>never imported directly</b> (no <code>import pyarrow</code> anywhere).</td><td>— (engine-internal)</td></tr>
+      <tr><td><code>ladybug &gt;=0.17,&lt;0.18</code> <span class="small">(0.17.1)</span></td><td>Embedded openCypher graph DB for the holdings graph.</td><td><code>LadybugGraphStore.__init__</code></td></tr>
+
+      <tr><td rowspan="5"><code>discovery</code></td><td><code>sentence-transformers &gt;=3,&lt;6</code></td><td><b>Embedding model</b> — local multilingual sentence vectors feeding the topic model.</td><td rowspan="4"><code>BERTopicModel.discover</code> <span class="small">(topics.py)</span></td></tr>
+      <tr><td><code>bertopic &gt;=0.16,&lt;0.17</code></td><td>Online topic model over the text stream (the quantitative trajectory).</td></tr>
+      <tr><td><code>scikit-learn &gt;=1.4,&lt;2</code></td><td><code>IncrementalPCA</code> + <code>MiniBatchKMeans</code> — the online dim-reduction &amp; clustering.</td></tr>
+      <tr><td><code>jieba &gt;=0.42,&lt;1</code></td><td>Chinese word segmentation for the corpus &amp; vectorizer.</td></tr>
+      <tr><td><code>pydantic-ai-slim[openai] &gt;=1,&lt;2</code></td><td>Two-tier theme assessor over any OpenAI-compatible LLM (DeepSeek / Qwen / GLM / Kimi).</td><td><code>LLMAssessor._agent</code> <span class="small">(assess.py)</span></td></tr>
+
+      <tr><td rowspan="2"><code>serve</code></td><td><code>fastapi &gt;=0.115,&lt;1</code></td><td>The read-only history API.</td><td><code>serve.create_app</code></td></tr>
+      <tr><td><code>uvicorn &gt;=0.30,&lt;1</code></td><td>ASGI server for the CLI <code>serve</code> command.</td><td>CLI <code>serve</code> body</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Storage-relevant <code>Config</code> <span class="src">config.py</span></h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>source</code></td><td><code>"fixtures" if offline else "live"</code></td><td>fixtures/cassettes vs live network.</td></tr>
+      <tr><td><code>store_path</code></td><td><code>None → :memory:</code> · CLI <code>out/store.duckdb</code></td><td>Hot DuckDB file; None = ephemeral, run self-populates.</td></tr>
+      <tr><td><code>cold_dir</code></td><td><code>None</code></td><td>Parquet cold tier dir; None = whole log stays hot.</td></tr>
+      <tr><td><code>hot_window_days</code></td><td><code>365</code></td><td>Retention before tiering to cold.</td></tr>
+      <tr><td><code>graph_path</code></td><td><code>None</code> · CLI <code>out/graph.ladybug</code></td><td>LadybugDB graph file.</td></tr>
+      <tr><td><code>replica_path</code></td><td><code>None → store_path.with_suffix(".replica.duckdb")</code></td><td>Published read-only replica.</td></tr>
+      <tr><td><code>history_dir</code></td><td><code>None → out/dashboards/</code></td><td>Immutable per-night artifacts + catalog.</td></tr>
+      <tr><td><code>series_dir</code></td><td><code>None → out/series/</code></td><td>Per-fund gold trails.</td></tr>
+      <tr><td><code>output_path</code></td><td><code>out/dashboard.json</code></td><td>Latest artifact (overwritten each run).</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="seams"><span class="num">11</span>Seam contracts — the type boundaries</h2>
+  <p class="lead">Wire formats cross the storage seams; everything between is the Protocol surface, so backends stay swappable. The discovery seams (bottom) write the <em>second</em> path into the same <code>readings</code> log.</p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Producer</th><th>Wire type</th><th>Consumer</th></tr></thead>
+    <tbody>
+      <tr><td>ingest adapters · <code>Market.gather</code></td><td><code>Iterable[Reading]</code></td><td><code>store.append()</code></td></tr>
+      <tr><td><code>store.append</code></td><td><code>int</code> (rows written)</td><td><code>pipeline.ingest / discover</code></td></tr>
+      <tr><td><code>store.read_as_of / history</code></td><td><code>list[Reading]</code></td><td>factors · scoring · graph builder · series · book</td></tr>
+      <tr><td><code>store.snapshot_id</code></td><td><code>str</code> (SHA-256)</td><td><code>Dashboard.snapshot_id</code> &amp; HTTP ETag</td></tr>
+      <tr><td><code>build_graph_from_store</code></td><td><code>Edge</code> (fund, security, weight, valid_from/to)</td><td><code>GraphStore</code> → lookthrough → <code>Connection</code></td></tr>
+      <tr><td><code>_build_items / _build_emerging</code></td><td><code>list[tuple[str, DashboardItem]]</code></td><td><code>build_dashboard</code> → <code>Dashboard.items</code></td></tr>
+      <tr><td><code>build_dashboard</code></td><td><code>Dashboard</code> (pydantic)</td><td><code>history.record</code> · <code>out/dashboard.json</code> · serve</td></tr>
+      <tr><td><code>series.materialize</code></td><td><code>list[SeriesEntry] = (code,name,SeriesPoint)</code></td><td><code>series.record</code> → <code>FundSeries</code> JSON</td></tr>
+      <tr><td><code>publish_replica</code></td><td>file copy → <code>Path</code></td><td><code>ReadReplica</code> (read-only pool)</td></tr>
+      <tr><td>serve endpoints</td><td><code>Dashboard·DashboardIndex·FundSeries·SeriesIndex</code></td><td>HTTP frontend</td></tr>
+      <tr style="background:#0f1c1a"><td>textstream <code>fetch_live/load_fixture</code></td><td><code>list[Reading]</code> (textstream)</td><td><code>build_stream_docs</code> → <code>StreamDoc</code></td></tr>
+      <tr style="background:#0f1c1a"><td><code>TopicModel.discover</code></td><td><code>list[TopicTrajectory]</code></td><td><code>discover_themes</code></td></tr>
+      <tr style="background:#0f1c1a"><td><code>ThemeAssessor.assess</code></td><td><code>ThemeAssessment</code> (4 cited verdicts)</td><td><code>discover_themes</code></td></tr>
+      <tr style="background:#0f1c1a"><td><code>discover_themes</code></td><td><code>list[Reading]</code> (themes)</td><td><code>store.append()</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="determinism"><span class="num">12</span>Determinism &amp; the offline switch</h2>
+  <div class="grid g2">
+    <div class="panel b-accent">
+      <h3 style="margin-top:0">No wall clock in the artifact path</h3>
+      <ul class="tight">
+        <li>Fixtures <code>fetched_at_for(as_of)</code> = <code>f"{as_of}T22:00:00Z"</code> <span class="src">ingest/base.py:21</span>.</li>
+        <li><code>Dashboard.generated_at</code> = <code>f"{as_of}T22:00:00Z"</code> <span class="src">pipeline.py:821</span> — identical pattern.</li>
+        <li>Wall-clock time appears <b>only</b> in ops telemetry (run log / spend ledger), never in <code>dashboard.json</code>.</li>
+        <li>Result: <code>dashboard.json</code> reproduces <b>byte-for-byte</b>; a second ingest over an unchanged snapshot writes ~0 rows.</li>
+      </ul>
+    </div>
+    <div class="panel b-accent">
+      <h3 style="margin-top:0">Online by default; offline is the test mode</h3>
+      <ul class="tight">
+        <li><code>FACTOR_SCOPE_OFFLINE=1</code> (or <code>--offline</code>) flips <code>source→fixtures</code> &amp; <code>provider→fake</code> (incl. the discovery fakes).</li>
+        <li><code>get_feed(config)</code> returns <code>LiveFeed</code> vs <code>CassetteFeed(fixtures/cassettes)</code>.</li>
+        <li><code>tests/conftest.py</code> sets the env var at <b>import time</b>, before <code>config</code> is imported — so the whole suite + CI are hermetic and deterministic, preserved by the snapshot boundary + mocks, not by avoiding the network.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    Generated from a read-only sweep over
+    <code>store/ · contract/ · history.py · serve.py · series.py · pipeline.py · ingest/ · discovery/ · config.py · pyproject.toml</code><br>
+    line refs are clickable in source · single self-contained file, no external dependencies
+  </footer>
+
+</div>
+</body>
+</html>
