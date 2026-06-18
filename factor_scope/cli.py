@@ -7,6 +7,7 @@ only enriches what fills the artifact, never the shape of the contract.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import typer
@@ -415,14 +416,25 @@ def schedule(
     stderr_path: Path = typer.Option(
         Path("out") / "nightly.err.log", help="Where the job's stderr is appended."
     ),
+    env: list[str] = typer.Option(
+        [],
+        "--env",
+        help="KEY=VALUE to put in the scheduled job's environment (repeatable; a missing '=' or "
+        "empty VALUE is rejected). The live source keys (e.g. FRED_API_KEY) reach the job only "
+        "this way — launchd/cron source no shell rc files. On launchd these become "
+        "EnvironmentVariables; in cron they prefix the command, shell-quoted.",
+    ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Write the rendered config here instead of stdout."
     ),
 ) -> None:
     """Emit the scheduler config for the nightly job — a launchd plist (default) or a cron line.
 
-    Pure render: install the plist under ``~/Library/LaunchAgents`` and
-    ``launchctl load`` it, or add the cron line to your crontab. See ``docs/ops/RUNBOOK.md``.
+    The job's executable is baked in by absolute path — launchd and cron run with a minimal
+    ``PATH`` — and ``--env KEY=VALUE`` injects the live source keys into its environment, the only
+    way they reach the job, which sources no shell rc files. Review the output, then install the
+    plist under ``~/Library/LaunchAgents`` and ``launchctl load`` it, or add the cron line to your
+    crontab. See ``docs/ops/RUNBOOK.md``.
     """
 
     from factor_scope.schedule import (
@@ -440,14 +452,32 @@ def schedule(
     else:
         raise typer.BadParameter(f"unknown --job {job!r}; use 'nightly' or 'discover'")
 
+    # launchd and cron run with a minimal PATH from a different cwd, so bake in the absolute path to
+    # the executable (which() can resolve relative against a relative PATH entry — resolve it).
+    found = shutil.which(program[0])
+    if found is None:
+        raise typer.BadParameter(
+            f"{program[0]!r} is not on PATH — install factor-scope so the scheduled job can "
+            "invoke it by absolute path (launchd/cron run with a minimal PATH)"
+        )
+    executable = str(Path(found).resolve())
+
+    environment: dict[str, str] = {}
+    for item in env:
+        key, sep, value = item.partition("=")
+        if not sep or not key or not value:
+            raise typer.BadParameter(f"--env must be KEY=VALUE; got {item!r}")
+        environment[key] = value
+
     spec = ScheduleSpec(
         label=label,
-        program_arguments=program,
+        program_arguments=(executable, *program[1:]),
         hour=hour,
         minute=minute,
         working_directory=working_dir.resolve(),
         stdout_path=stdout_path,
         stderr_path=stderr_path,
+        environment=environment or None,
     )
     if kind == "cron":
         text = render_cron_line(spec)

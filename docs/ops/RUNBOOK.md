@@ -164,6 +164,7 @@ installing). It is **not** a daemon: it fires the one-shot job once a day.
 
 ```bash
 factor-scope schedule --hour 22 --minute 0 --working-dir "$PWD" \
+  --env FRED_API_KEY="$FRED_API_KEY" \
   -o ~/Library/LaunchAgents/com.factor-scope.nightly.plist
 launchctl load ~/Library/LaunchAgents/com.factor-scope.nightly.plist   # enable
 launchctl start com.factor-scope.nightly                               # optional: run now
@@ -172,18 +173,25 @@ launchctl unload ~/Library/LaunchAgents/com.factor-scope.nightly.plist # disable
 
 The plist sets `RunAtLoad=false` (a scheduled batch, not a service) and `StartCalendarInterval` to
 the given hour/minute. 22:00 local is the default — after the close, matching the artifact's
-`generated_at` stamp.
+`generated_at` stamp. `factor-scope` is baked in by **absolute path** (resolved at render time), so
+launchd's minimal `PATH` finds it.
 
 ### Linux — cron
 
 ```bash
-factor-scope schedule --kind cron --hour 22 --minute 0 --working-dir "$PWD"
-# → 0 22 * * * cd <dir> && factor-scope nightly >> out/nightly.out.log 2>> out/nightly.err.log
+factor-scope schedule --kind cron --hour 22 --minute 0 --working-dir "$PWD" \
+  --env FRED_API_KEY="$FRED_API_KEY"
+# → 0 22 * * * cd <dir> && FRED_API_KEY=… /abs/path/factor-scope nightly >> out/nightly.out.log 2>> out/nightly.err.log
 # add that line with: crontab -e
 ```
 
-The scheduled job is **live** (online by default), so supply the source API keys (e.g.
-`FRED_API_KEY`) via the launchd plist's `EnvironmentVariables` or the cron shell env. For a
+The scheduled job is **live** (online by default) and **sources no shell rc files** — neither
+launchd nor cron read `~/.zshrc` (it is interactive-only) or `~/.zshenv`, so an exported key the
+nightly host can see at the terminal does **not** reach the job. Supply each source API key (e.g.
+`FRED_API_KEY`) with `--env KEY=VALUE` (repeatable): on launchd it lands in the plist's
+`EnvironmentVariables`, in cron it prefixes the command inline (shell-quoted, so a value with a
+space like the EDGAR identity stays one token). A missing key fails loudly — `--env KEY=` (e.g. an
+unset `"$FRED_API_KEY"` expanding to empty) is rejected, not baked in as an empty value. For a
 fixtures-only dry run, add `--offline` to the generated command.
 
 ### Fund lifecycle dates on live data

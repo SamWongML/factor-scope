@@ -9,6 +9,7 @@ Mac-mini production path; cron is the Linux alternative.
 from __future__ import annotations
 
 import plistlib
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -37,12 +38,21 @@ class ScheduleSpec:
 
 
 def render_cron_line(spec: ScheduleSpec) -> str:
-    """A single crontab line (5-field schedule) that runs the job, appending its streams to logs."""
+    """A single crontab line (5-field schedule) that runs the job, appending its streams to logs.
 
+    cron sources no shell rc files, so any ``environment`` rides inline as ``KEY=VALUE`` assignments
+    prefixing the command (the live source keys, e.g. ``FRED_API_KEY``, reach the job this way).
+    Values are shell-quoted, so one with a space (the EDGAR identity is ``Name email``) stays a
+    single token instead of being read as the command.
+    """
+
+    assignments = "".join(
+        f"{key}={shlex.quote(value)} " for key, value in (spec.environment or {}).items()
+    )
     command = " ".join(spec.program_arguments)
     return (
         f"{spec.minute} {spec.hour} * * * "
-        f"cd {spec.working_directory} && {command} "
+        f"cd {spec.working_directory} && {assignments}{command} "
         f">> {spec.stdout_path} 2>> {spec.stderr_path}"
     )
 

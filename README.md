@@ -99,10 +99,12 @@ factor-scope schema   # print the dashboard.json JSON schema
 
 ```bash
 factor-scope nightly                                              # run once now
-factor-scope schedule -o ~/Library/LaunchAgents/com.factor-scope.nightly.plist  # macOS
+factor-scope schedule --env FRED_API_KEY=… -o ~/Library/LaunchAgents/com.factor-scope.nightly.plist  # macOS
 factor-scope schedule --kind cron --working-dir "$PWD"           # Linux: prints a crontab line
 ```
 
+The job sources no shell rc files, so `--env KEY=VALUE` (repeatable) is how the live source keys
+reach it; the `factor-scope` path is baked in absolute so the minimal scheduler `PATH` finds it.
 Ops guide (install/enable, run log, provider budget): `docs/ops/RUNBOOK.md`.
 
 ---
