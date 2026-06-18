@@ -69,6 +69,7 @@ markers = [
     "unit: fast, pure-function tests (no IO, no network)",
     "integration: tests that touch the local store / fixtures on disk",
     "system: end-to-end runs of the `factor-scope run` entrypoint over fixtures",
+    "perf: scalability guardrails — a multi-year synthetic history asserting bounded store growth and flat serving work (offline, deterministic)",
 ]
 filterwarnings = ["error::DeprecationWarning"]
 
