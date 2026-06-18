@@ -54,6 +54,24 @@ def _snapshot(nights: list[str], funds: list[str], fetched_at: str) -> list[Read
     ]
 
 
+def _count_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the basename of every artifact a request opens, returning the growing list.
+
+    Counting the files a read touches — rather than timing it — is the deterministic, offline proxy
+    for its latency as the history grows: the budget is held only if that count stays flat in N.
+    """
+
+    opened: list[str] = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        opened.append(self.name)
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    return opened
+
+
 def test_store_growth_is_linear_and_resnapshotting_writes_nothing() -> None:
     # The headline write-path guarantee: as the history scales, the append-only log grows in the
     # distinct facts it holds — not in the nightly re-pulls of them.
@@ -95,15 +113,7 @@ def test_index_and_latest_serving_stay_flat_as_history_grows(tmp_path, monkeypat
     for as_of in nights:
         record(_dash(as_of), history)
     client = TestClient(create_app(history))
-
-    opened: list[str] = []
-    real_read_text = Path.read_text
-
-    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
-        opened.append(self.name)
-        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    opened = _count_reads(monkeypatch)
 
     # `/dashboards` answers from the materialized catalog — one file read, never the 750 per-night
     # artifacts — so the index stays O(1) as the history grows. The response itself is a bounded
@@ -123,7 +133,7 @@ def test_index_and_latest_serving_stay_flat_as_history_grows(tmp_path, monkeypat
     assert opened == ["index.json", f"{nights[-1]}.json"]
 
 
-def test_a_fund_trail_serves_flat_as_the_trail_grows_over_years(tmp_path, monkeypatch) -> None:
+def test_a_fund_trail_serves_flat_as_the_history_and_universe_grow(tmp_path, monkeypatch) -> None:
     pytest.importorskip("fastapi", reason="the serve extra is not installed")
     from fastapi.testclient import TestClient
 
@@ -140,19 +150,16 @@ def test_a_fund_trail_serves_flat_as_the_trail_grows_over_years(tmp_path, monkey
             factors=[SeriesFactor(factor="trend", level=Band.HIGH)],
         )
         series.record([("513100", "GF Nasdaq", point)], series_dir)
+    # The store behind the gold grows with the whole universe, not just this fund — give the other
+    # funds trails too, so the served read is exercised against breadth as well as length.
+    for other in ("159915", "510300", "588000"):
+        series.record([(other, other, SeriesPoint(as_of=nights[-1], nav=1.0))], series_dir)
     client = TestClient(create_app(tmp_path / "dashboards", series_dir=series_dir))
 
-    opened: list[str] = []
-    real_read_text = Path.read_text
+    opened = _count_reads(monkeypatch)
 
-    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
-        opened.append(self.name)
-        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(Path, "read_text", counting_read_text)
-
-    # Charting a fund reads only its own trail artifact — one file, whatever its length — so the
-    # time-series endpoint stays flat as the trail (and the store behind it) grows over the years.
+    # Charting a fund reads only its own trail artifact — one file, whatever its length and however
+    # many other funds the universe holds — so the time-series endpoint stays flat over the years.
     opened.clear()
     resp = client.get("/series/513100")
     assert resp.status_code == 200
