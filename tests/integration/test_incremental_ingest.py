@@ -127,6 +127,13 @@ def _counts(store_path) -> dict[str, int]:
 
 def test_second_ingest_pulls_only_newer_bars(monkeypatch, tmp_path) -> None:
     seen = _stub_adapters(monkeypatch)
+    # A live pull stamps the real wall clock; pin it to each night's run date so the date-driven
+    # stubs (which read the source's latest from ``fetched_at[:10]``) model a source grown to the
+    # run date — the production case where the host clock tracks the trading day it ingests.
+    monkeypatch.setattr(
+        ashare, "fetched_at_now",
+        iter(["2026-06-30T22:00:00Z", "2026-09-30T22:00:00Z"]).__next__,
+    )
     paths = {"store_path": tmp_path / "store.duckdb", "graph_path": tmp_path / "graph.duckdb"}
 
     # Night one: the store is empty, so every series is pulled from scratch (no watermark).
@@ -162,6 +169,9 @@ def test_second_ingest_pulls_only_newer_bars(monkeypatch, tmp_path) -> None:
 
 def test_reingest_same_night_writes_nothing(monkeypatch, tmp_path) -> None:
     seen = _stub_adapters(monkeypatch)
+    # Pin the live pull's wall clock to the run date so the date-driven stubs see the source's
+    # latest as that night (see the note in test_second_ingest_pulls_only_newer_bars).
+    monkeypatch.setattr(ashare, "fetched_at_now", lambda: "2026-09-30T22:00:00Z")
     paths = {"store_path": tmp_path / "store.duckdb", "graph_path": tmp_path / "graph.duckdb"}
 
     nightly_ingest(Config(source="live", as_of="2026-09-30", **paths))

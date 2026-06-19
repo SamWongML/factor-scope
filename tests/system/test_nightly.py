@@ -8,6 +8,8 @@ production entrypoint.
 """
 
 import json
+from dataclasses import replace
+from datetime import date
 
 import pytest
 from typer.testing import CliRunner
@@ -18,6 +20,7 @@ from factor_scope.contract import Dashboard, LeanAction, ListName
 from factor_scope.cost import Usage
 from factor_scope.digest import Case, DigestInput, Proposal, Side
 from factor_scope.history import read_index
+from factor_scope.markets.ashare import AShareMarket
 from factor_scope.pipeline import build_dashboard, nightly
 from factor_scope.scoring import read_calls
 from factor_scope.store import DuckDBStore
@@ -118,6 +121,77 @@ def test_nightly_is_rerunnable_without_double_logging(tmp_path) -> None:
 
     # Two nights of ops history, though (the log is append-only).
     assert len(p["log"].read_text(encoding="utf-8").splitlines()) == 2
+
+
+class _FixturesAtRunDate:
+    """A stand-in *live* market: deterministic fixture data, stamped at whatever date the run froze.
+
+    Lets a ``source="live"`` nightly run hermetically (no network) while still taking the live
+    branch of run-date resolution — so the freeze can be observed against an advancing wall clock.
+    """
+
+    name = "ashare"
+
+    def gather(self, config, *, as_of, store=None):
+        return AShareMarket().gather(replace(config, source="fixtures"), as_of=as_of, store=store)
+
+
+def _stub_live_reranker(monkeypatch) -> None:
+    # ``source="live"`` also selects the host-only LLM re-rank; the deterministic fake stands in so
+    # a live-source nightly runs hermetically (the run-date resolution is what these tests pin).
+    from factor_scope.emerging.shortlist import FakeReranker
+
+    monkeypatch.setattr("factor_scope.pipeline.get_reranker", lambda config: FakeReranker())
+
+
+def test_nightly_freezes_the_live_run_date_once_across_the_whole_run(tmp_path, monkeypatch) -> None:
+    # A live nightly resolves the run date ONCE and freezes it. The live universe pull is multi-hour
+    # and can cross midnight; ingest, the artifact, and the logged calls must all carry the one
+    # frozen as_of — never a per-step wall-clock re-read that split-brains the night.
+    _stub_live_reranker(monkeypatch)
+    p = _paths(tmp_path)
+    cfg = Config(
+        source="live",
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+    )
+    # An advancing clock: a frozen run consumes today() once, so the run date stays the first value.
+    today = iter([date(2026, 6, 19), date(2026, 6, 20), date(2026, 6, 21)]).__next__
+    dash, record = nightly(cfg, market=_FixturesAtRunDate(), today=today)
+
+    assert dash.as_of == "2026-06-19"  # frozen at the first read, not the advancing clock
+    assert record.as_of == "2026-06-19"
+    store = DuckDBStore(p["store"])
+    try:
+        ingested = {r.as_of for r in store.history("positions")}
+        tonight = [c for c in read_calls(store, "2026-06-19") if c.as_of == "2026-06-19"]
+    finally:
+        store.close()
+    assert ingested == {"2026-06-19"}  # ingest stamped the same frozen date
+    assert tonight and all(c.as_of == "2026-06-19" for c in tonight)  # so did the logged calls
+
+
+def test_a_live_nightly_rerun_on_the_same_day_is_byte_for_byte_idempotent(
+    tmp_path, monkeypatch
+) -> None:
+    # Real wall-clock fetched_at makes a *fresh* live snapshot pull-time-sensitive, but a same-day
+    # rerun must stay stable: the idempotent-night skip means ingest never re-stamps, so the
+    # snapshot id (which hashes fetched_at) — and the whole artifact — reproduce byte-for-byte.
+    _stub_live_reranker(monkeypatch)
+    p = _paths(tmp_path)
+    cfg = Config(
+        source="live",
+        output_path=p["output"],
+        store_path=p["store"],
+        graph_path=p["graph"],
+        log_path=p["log"],
+    )
+    mkt = _FixturesAtRunDate()
+    first, _ = nightly(cfg, market=mkt, today=lambda: date(2026, 6, 19))
+    second, _ = nightly(cfg, market=mkt, today=lambda: date(2026, 6, 19))
+    assert first.model_dump_json(indent=2) == second.model_dump_json(indent=2)
 
 
 class _BoomProvider:

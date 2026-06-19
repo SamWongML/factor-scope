@@ -37,7 +37,7 @@ from factor_scope.ingest import (
     themes,
     trading_activity,
 )
-from factor_scope.ingest.base import fetched_at_for
+from factor_scope.ingest.base import fetched_at_for, fetched_at_now
 from factor_scope.ingest.feed import get_feed
 from factor_scope.store import PointInTimeStore, Reading
 
@@ -265,7 +265,10 @@ class AShareMarket:
     def gather(
         self, config: Config, *, as_of: str, store: PointInTimeStore | None = None
     ) -> list[Reading]:
-        fetched_at = fetched_at_for(as_of)
+        # A live pull stamps the real wall-clock instant it was fetched (ops telemetry); a fixtures
+        # pull derives a deterministic stamp from ``as_of`` so the offline artifact stays byte-for-
+        # byte. Either way ``fetched_at`` never reaches the artifact (which is keyed on ``as_of``).
+        fetched_at = fetched_at_now() if config.source == "live" else fetched_at_for(as_of)
         readings = AShareUniverse().gather(
             config, as_of=as_of, fetched_at=fetched_at, store=store
         )

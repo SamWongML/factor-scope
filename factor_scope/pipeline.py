@@ -14,7 +14,9 @@ lean, and the emerging list — without changing this entrypoint's contract.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -86,6 +88,8 @@ from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, sc
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 from factor_scope.store.replica import publish_replica
 
+logger = logging.getLogger(__name__)
+
 
 class SnapshotError(RuntimeError):
     """``run`` was asked to reason over a snapshot that does not exist yet.
@@ -96,11 +100,20 @@ class SnapshotError(RuntimeError):
     """
 
 
-def _resolve_as_of(config: Config) -> str:
-    """The point-in-time date the engine reasons on: the CLI override, else the fixture stamp."""
+def _resolve_as_of(config: Config, *, today: Callable[[], date] = date.today) -> str:
+    """The point-in-time date the engine reasons on.
+
+    An explicit ``--as-of`` always wins. Otherwise the default tracks the source: a *live* run reads
+    the moving, append-only store, so its ceiling defaults to the **run date** (today); a *fixtures*
+    run is a frozen committed snapshot, so it defaults to the manifest stamp — keeping the offline
+    artifact byte-for-byte deterministic (no wall clock on the fixtures path). ``today`` is injected
+    so the live default is testable, mirroring ``nightly``'s ``clock``.
+    """
 
     if config.as_of:
         return config.as_of
+    if config.source == "live":
+        return today().isoformat()
     manifest = config.fixtures_dir / "manifest.json"
     if not manifest.exists():
         raise FileNotFoundError(
@@ -109,6 +122,25 @@ def _resolve_as_of(config: Config) -> str:
         )
     data: dict[str, str] = json.loads(manifest.read_text(encoding="utf-8"))
     return data["as_of"]
+
+
+def _warn_if_future_dated(readings: list[Reading], as_of: str) -> None:
+    """Warn (never drop) when a freshly-fetched reading is dated after the run's ``as_of``.
+
+    A clock/timezone skew can hand back a bar dated past today's local run date. Such a row is kept
+    — the store is append-only and a row's ``as_of`` is its disclosure date — and the point-in-time
+    ceiling already excludes it from tonight's reasoning, so it simply surfaces once a later night's
+    ``as_of`` reaches it. The warning makes that deferral visible rather than silent.
+    """
+
+    future = sum(1 for r in readings if r.as_of > as_of)
+    if future:
+        logger.warning(
+            "%d reading(s) dated after as_of %s (clock/TZ skew?); "
+            "kept but deferred until the ceiling reaches them",
+            future,
+            as_of,
+        )
 
 
 def _open_store(config: Config) -> DuckDBStore:
@@ -144,7 +176,9 @@ def ingest(config: Config, *, market: Market | None = None) -> int:
     try:
         # Pass the store so each per-fund re-pull is watermarked against what prior nights already
         # wrote — gather reads it before tonight's rows land, so the floor is last night's latest.
-        n = store.append(mkt.gather(config, as_of=as_of, store=store))
+        readings = mkt.gather(config, as_of=as_of, store=store)
+        _warn_if_future_dated(readings, as_of)
+        n = store.append(readings)
         # A fund the universe feed stopped listing is disclosed delisted as of tonight — the only
         # way an append-only store learns of a death no feed announces.
         n += store.append(
@@ -882,6 +916,7 @@ def nightly(
     config: Config,
     *,
     clock: Callable[[], str] = _utc_now_iso,
+    today: Callable[[], date] = date.today,
     market: Market | None = None,
 ) -> tuple[Dashboard, RunRecord]:
     """The one-shot nightly job: ingest → compute → digest → artifact → run log.
@@ -890,9 +925,15 @@ def nightly(
     calls — tomorrow's self-scoring loop scores them. Appends one structured :class:`RunRecord` to
     the append-only ops log. The artifact stays byte-for-byte deterministic; the run log carries the
     wall-clock timing (operations telemetry, not the decision artifact).
+
+    The run date is resolved **once and frozen** onto the config before ``ingest``/``run``: a live
+    pull is multi-hour and can cross midnight, and ``ingest`` and ``build_dashboard`` each resolve
+    ``as_of`` independently, so without freezing they could disagree — the data would be stamped one
+    day and reasoned over / logged the next. ``today`` is injected for the same reason ``clock`` is.
     """
 
-    as_of = _resolve_as_of(config)
+    as_of = _resolve_as_of(config, today=today)
+    config = replace(config, as_of=as_of)  # freeze the run date so ingest/run can't re-resolve it
     started_at = clock()
     if not _night_already_ingested(config, as_of):
         # append the night's readings into the durable store + materialise the graph

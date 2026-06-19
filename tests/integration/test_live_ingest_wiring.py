@@ -207,6 +207,77 @@ def test_gather_live_pulls_no_edgar_filers_by_default(monkeypatch) -> None:
     assert not [r for r in readings if r.series == "edgar"]
 
 
+def test_live_gather_stamps_a_real_fetched_at_not_the_fixtures_derived_one(monkeypatch) -> None:
+    # `fetched_at` is "when we pulled it" — telemetry, never the artifact's clock. Fixtures derive
+    # it from as_of (deterministic); a live pull stamps the real wall-clock instant of the pull.
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr(
+        "factor_scope.markets.ashare.fetched_at_now", lambda: "2026-06-05T13:45:00Z"
+    )
+    readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    pulled = [r for r in readings if r.series == "prices"]
+    assert pulled and all(r.fetched_at == "2026-06-05T13:45:00Z" for r in pulled)
+    # not the fixtures-derived "{as_of}T22:00:00Z" stamp
+    assert all(r.fetched_at != "2026-06-05T22:00:00Z" for r in readings)
+
+
+def test_live_ingest_warns_when_a_reading_is_dated_after_the_run(monkeypatch, tmp_path, caplog):
+    # Clock/TZ-skew safety net: a feed reading dated past the run's as_of is kept (append-only) but
+    # excluded by the point-in-time ceiling, and surfaced as a warning — never silently dropped.
+    from factor_scope.pipeline import ingest as nightly_ingest
+    from factor_scope.store import DuckDBStore
+
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr(
+        demand,
+        "fetch_live",
+        lambda *, fetched_at: [
+            Reading(series="demand", key=demand.KEY, as_of="2026-06-07", fetched_at=fetched_at,
+                    payload={"revision": 0.08})  # dated two days AFTER the run
+        ],
+    )
+    paths = {"store_path": tmp_path / "s.duckdb", "graph_path": tmp_path / "g.ladybug"}
+    with caplog.at_level(logging.WARNING, logger="factor_scope.pipeline"):
+        nightly_ingest(Config(source="live", as_of="2026-06-05", **paths))
+    assert any("dated after as_of 2026-06-05" in m for m in caplog.messages)
+
+    store = DuckDBStore(tmp_path / "s.duckdb")
+    try:
+        # The ceiling excludes the future-dated row from tonight's reasoning…
+        assert store.read_as_of("demand", "2026-06-05") == []
+        # …but it is retained (append-only) and surfaces once a later night's as_of reaches it.
+        assert any(r.as_of == "2026-06-07" for r in store.history("demand"))
+    finally:
+        store.close()
+
+
+def test_a_same_day_live_re_ingest_keeps_the_snapshot_stable(monkeypatch, tmp_path) -> None:
+    # snapshot_id hashes fetched_at, so a real wall-clock stamp could perturb it. The content-
+    # addressed dedup means a same-day re-pull of unchanged facts writes nothing, so the snapshot —
+    # fetched_at included — is stable across reruns even though each pull reads a different clock.
+    from factor_scope.pipeline import ingest as nightly_ingest
+    from factor_scope.store import DuckDBStore
+
+    _stub_adapters(monkeypatch)
+    clock = iter(["2026-06-05T13:00:00Z", "2026-06-05T19:30:00Z"]).__next__
+    monkeypatch.setattr("factor_scope.markets.ashare.fetched_at_now", clock)
+    paths = {"store_path": tmp_path / "s.duckdb", "graph_path": tmp_path / "g.ladybug"}
+
+    def _snapshot() -> str:
+        store = DuckDBStore(tmp_path / "s.duckdb")
+        try:
+            return store.snapshot_id("2026-06-05")
+        finally:
+            store.close()
+
+    nightly_ingest(Config(source="live", as_of="2026-06-05", **paths))
+    first = _snapshot()
+    nightly_ingest(Config(source="live", as_of="2026-06-05", **paths))  # re-pull, later wall clock
+    # unchanged facts re-pulled → dedup no-op → fetched_at not re-stamped, so the snapshot holds
+    assert _snapshot() == first
+
+
 def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     # AkShare and Baostock agree → one corroborated price per held fund (not one per source)

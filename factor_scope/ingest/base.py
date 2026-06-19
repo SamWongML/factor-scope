@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 
 class IngestError(ValueError):
@@ -25,6 +26,18 @@ def fetched_at_for(as_of: str) -> str:
     """
 
     return f"{as_of}T22:00:00Z"
+
+
+def fetched_at_now() -> str:
+    """The real wall-clock instant of a *live* pull — telemetry, never the artifact's clock.
+
+    A live read records when it was actually fetched (the live counterpart to the fixtures-only
+    :func:`fetched_at_for`); ``fetched_at`` never reaches ``dashboard.json``, so this stays off the
+    determinism path. The append-only store's content-addressed dedup keys on payload, not this
+    stamp, so a same-day re-pull of unchanged facts is still a no-op.
+    """
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def read_rows(

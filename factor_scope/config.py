@@ -115,7 +115,10 @@ class Config:
     # ``source``: the market owns *which* sources, ``source`` owns fixtures-vs-live for each.
     market: str = "ashare"
     fixtures_dir: Path = field(default=DEFAULT_FIXTURES_DIR)
-    as_of: str | None = None  # None → take the as-of stamped in the fixtures (deterministic)
+    # None → the default tracks the source: a fixtures run takes the committed manifest stamp
+    # (deterministic, byte-for-byte); a live run takes the run date (today), since the live store is
+    # a moving append-only log whose point-in-time ceiling must advance. An explicit date wins.
+    as_of: str | None = None
     output_path: Path = field(default=Path("out") / "dashboard.json")
     # Where the per-night dashboard history accumulates — one immutable ``<as_of>.json`` per run
     # plus an ``index.json`` manifest (see factor_scope.history). None → a ``dashboards/``

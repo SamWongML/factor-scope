@@ -194,6 +194,12 @@ space like the EDGAR identity stays one token). A missing key fails loudly — `
 unset `"$FRED_API_KEY"` expanding to empty) is rejected, not baked in as an empty value. For a
 fixtures-only dry run, add `--offline` to the generated command.
 
+A scheduled live job runs with no `--as-of`, so it reasons as-of the **run date** — the host's
+**local** date (resolved once per run and frozen, so a multi-hour pull that crosses midnight stays
+one consistent night). Run the Mac-mini in the market's timezone (Asia/Shanghai) so the run date
+matches the trading day; the 22:00 fire time is already local. Pass `--as-of YYYY-MM-DD` only to
+backfill a specific night.
+
 ### Fund lifecycle dates on live data
 
 No AkShare feed announces fund lifecycle events, so the two dates the guardrails read are sourced
