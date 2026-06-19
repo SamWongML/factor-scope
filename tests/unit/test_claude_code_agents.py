@@ -6,17 +6,20 @@ provider's system-prompt text comes from those files (so the committed agents ca
 from the prompts actually used). The subprocess turn is stubbed, so nothing shells out.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 
-from factor_scope.contract import Band, Evidence, FactorState, GateState, ListName
+from factor_scope.contract import Band, Evidence, FactorState, GateState, LeanAction, ListName
 from factor_scope.cost import Usage
 from factor_scope.digest.claude_code import (
     ClaudeCodeProvider,
     _brief_prompt,
+    _case_schema,
     _load_seat_prompt,
-    _parse_stream_json,
+    _parse_result,
+    _proposal_schema,
 )
 from factor_scope.digest.provider import Case, DigestInput, Side
 
@@ -115,7 +118,9 @@ def test_loader_returns_the_agent_file_body() -> None:
 def test_argue_uses_the_seat_agent_files_as_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     provider = ClaudeCodeProvider()
-    monkeypatch.setattr(provider, "_complete", lambda system, prompt: seen.append(system) or {})
+    monkeypatch.setattr(
+        provider, "_complete", lambda system, prompt, schema: seen.append(system) or {}
+    )
 
     provider.argue(Side.BULL, _brief())
     provider.argue(Side.BEAR, _brief())
@@ -129,7 +134,9 @@ def test_seats_runs_both_sides_and_returns_them_in_fixed_slots(
     # seats() argues bull and bear (concurrently) and always returns (bull, bear) in that order.
     seen: list[str] = []
     provider = ClaudeCodeProvider()
-    monkeypatch.setattr(provider, "_complete", lambda system, prompt: seen.append(system) or {})
+    monkeypatch.setattr(
+        provider, "_complete", lambda system, prompt, schema: seen.append(system) or {}
+    )
 
     bull, bear = provider.seats(_brief())
 
@@ -142,7 +149,9 @@ def test_synthesize_uses_the_synthesis_agent_file_as_system_prompt(
 ) -> None:
     seen: list[str] = []
     provider = ClaudeCodeProvider()
-    monkeypatch.setattr(provider, "_complete", lambda system, prompt: seen.append(system) or {})
+    monkeypatch.setattr(
+        provider, "_complete", lambda system, prompt, schema: seen.append(system) or {}
+    )
 
     empty = Case(side=Side.BULL, strength=0.0, confidence=0.0, points=())
     provider.synthesize(_brief(), empty, Case(side=Side.BEAR, strength=0.0, confidence=0.0))
@@ -156,7 +165,9 @@ def test_synthesis_prompt_order_flips_with_present_bear_first(
     # The swap-and-average de-bias presents the cases in both orders; the prompt must honour it.
     prompts: list[str] = []
     provider = ClaudeCodeProvider()
-    monkeypatch.setattr(provider, "_complete", lambda system, prompt: prompts.append(prompt) or {})
+    monkeypatch.setattr(
+        provider, "_complete", lambda system, prompt, schema: prompts.append(prompt) or {}
+    )
     bull = Case(side=Side.BULL, strength=2.0, confidence=0.7, points=("up",))
     bear = Case(side=Side.BEAR, strength=1.0, confidence=0.6, points=("down",))
 
@@ -179,7 +190,7 @@ def test_synthesize_parses_the_optional_rubric(monkeypatch: pytest.MonkeyPatch) 
             {"criterion": "trend/gate posture", "score": 0.6},
         ],
     }
-    monkeypatch.setattr(provider, "_complete", lambda system, prompt: payload)
+    monkeypatch.setattr(provider, "_complete", lambda system, prompt, schema: payload)
 
     bull = Case(side=Side.BULL, strength=0.0, confidence=0.0)
     bear = Case(side=Side.BEAR, strength=0.0, confidence=0.0)
@@ -194,7 +205,7 @@ def test_seats_clamp_out_of_range_model_output(monkeypatch: pytest.MonkeyPatch) 
     # ValidationError when the pipeline builds the bounded artifact models (invalid never raises).
     provider = ClaudeCodeProvider()
     monkeypatch.setattr(
-        provider, "_complete", lambda system, prompt: {"strength": -3.0, "confidence": 1.5}
+        provider, "_complete", lambda system, prompt, schema: {"strength": -3.0, "confidence": 1.5}
     )
     case = provider.argue(Side.BULL, _brief())
     assert case.strength == 0.0  # a negative case strength clamps up to the floor
@@ -203,7 +214,7 @@ def test_seats_clamp_out_of_range_model_output(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         provider,
         "_complete",
-        lambda system, prompt: {
+        lambda system, prompt, schema: {
             "action": "trim",
             "confidence": 9.0,
             "rubric": [
@@ -221,35 +232,98 @@ def test_seats_clamp_out_of_range_model_output(monkeypatch: pytest.MonkeyPatch) 
     assert proposal.rubric == (("valuation", 1.0), ("crowding", 0.0))
 
 
-# A minimal `--output-format stream-json` transcript: JSONL system/assistant lines then the final
-# `result` message carrying the call cost and the assistant's parsed JSON under "result".
-_STREAM_JSON = "\n".join(
-    [
-        '{"type":"system","subtype":"init","session_id":"s1"}',
-        '{"type":"assistant","message":{"content":[{"type":"text","text":"thinking"}]}}',
-        '{"type":"result","subtype":"success","is_error":false,"duration_ms":1234,'
-        '"result":"{\\"strength\\": 2.0, \\"confidence\\": 0.7, \\"points\\": [\\"a\\"]}",'
-        '"total_cost_usd":0.0123,"usage":{"input_tokens":150,"output_tokens":40}}',
-    ]
-)
+def _result_envelope(
+    *,
+    structured: object = None,
+    result: object = None,
+    cost: float = 0.0123,
+    usage: dict[str, int] | None = None,
+) -> str:
+    """A ``--output-format json`` single-object envelope, as the headless CLI emits it.
+
+    ``structured_output`` is the validated object (present once the reply passes ``--json-schema``
+    validation); ``result`` is the assistant's free-text answer. The provider prefers the former.
+    """
+    envelope: dict[str, object] = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "total_cost_usd": cost,
+        "usage": usage if usage is not None else {"input_tokens": 150, "output_tokens": 40},
+    }
+    if structured is not None:
+        envelope["structured_output"] = structured
+    if result is not None:
+        envelope["result"] = result
+    return json.dumps(envelope)
 
 
-def test_parse_stream_json_extracts_the_result_and_cost() -> None:
-    parsed, input_tokens, output_tokens, cost_usd = _parse_stream_json(_STREAM_JSON)
+def test_parse_result_prefers_the_validated_structured_output() -> None:
+    # A validated reply lands in ``structured_output``; that is the authoritative field, taken even
+    # when the free-text ``result`` mirror is fenced/prose (it can't defeat us).
+    parsed, input_tokens, output_tokens, cost_usd = _parse_result(
+        _result_envelope(
+            structured={"strength": 2.0, "confidence": 0.7, "points": ["a"]},
+            result="```json\n{\"strength\": 9.9}\n```",
+        )
+    )
     assert parsed == {"strength": 2.0, "confidence": 0.7, "points": ["a"]}
     assert (input_tokens, output_tokens, cost_usd) == (150, 40, 0.0123)
 
 
-def test_parse_stream_json_rejects_a_transcript_with_no_result_message() -> None:
-    with pytest.raises(ValueError, match="result"):
-        _parse_stream_json('{"type":"system","subtype":"init"}')
+@pytest.mark.parametrize(
+    "result_text",
+    [
+        # Fallback layer: an older CLI (or a path that didn't populate structured_output) returns
+        # only the free-text result. A capable model still wraps it in a Markdown fence or prose —
+        # a bare json.loads on that raises at char 0, so we slice to the outermost object instead.
+        '```json\n{"strength": 2.0, "confidence": 0.7, "points": ["a"]}\n```',
+        '```\n{"strength": 2.0, "confidence": 0.7, "points": ["a"]}\n```',
+        'Here is my assessment:\n{"strength": 2.0, "confidence": 0.7, "points": ["a"]}',
+    ],
+)
+def test_parse_result_falls_back_to_unwrapping_the_free_text_result(result_text: str) -> None:
+    parsed, input_tokens, output_tokens, cost_usd = _parse_result(
+        _result_envelope(
+            result=result_text, cost=0.01, usage={"input_tokens": 10, "output_tokens": 5}
+        )
+    )
+    assert parsed == {"strength": 2.0, "confidence": 0.7, "points": ["a"]}
+    assert (input_tokens, output_tokens, cost_usd) == (10, 5, 0.01)
+
+
+def test_parse_result_rejects_an_envelope_with_no_usable_object() -> None:
+    # Neither a structured_output object nor a brace-bearing result (the model refused / returned
+    # prose) → raise, so the orchestrator degrades the item to abstain rather than guess a lean.
+    with pytest.raises(ValueError, match="object"):
+        _parse_result(_result_envelope(result="I cannot answer that."))
+
+
+def test_case_schema_requires_the_case_fields_and_leaves_extras_open() -> None:
+    # The schema requires exactly the Case fields the provider reads, but does not pin
+    # additionalProperties: a chatty extra key is left to the coercers, not turned into a retry.
+    schema = _case_schema()
+    assert "additionalProperties" not in schema
+    assert set(schema["required"]) == {"strength", "confidence", "points"}
+    assert set(schema["properties"]) == {"strength", "confidence", "points"}
+
+
+def test_proposal_schema_action_enum_tracks_the_lean_action_contract() -> None:
+    # The synthesis action is pinned to the contract's LeanAction values (single source of truth),
+    # so a validated reply's action can't fall out of the vocabulary LeanAction(...) expects;
+    # additionalProperties stays open so an extra key degrades via the coercers, not a retry.
+    schema = _proposal_schema()
+    assert "additionalProperties" not in schema
+    assert set(schema["required"]) == {"action", "confidence", "rationale", "rubric"}
+    assert schema["properties"]["action"]["enum"] == [a.value for a in LeanAction]
 
 
 def test_argue_records_a_usage_tagged_with_its_provider_and_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = ClaudeCodeProvider(model="opus")
-    monkeypatch.setattr(provider, "_invoke", lambda cmd: _STREAM_JSON)
+    envelope = _result_envelope(structured={"strength": 2.0, "confidence": 0.7, "points": ["a"]})
+    monkeypatch.setattr(provider, "_invoke", lambda cmd: envelope)
 
     case = provider.argue(Side.BULL, _brief())
 
@@ -266,13 +340,20 @@ def test_argue_records_a_usage_tagged_with_its_provider_and_model(
     ]
 
 
-def test_seats_run_on_the_configured_deep_think_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_seats_run_with_schema_validation_on_the_configured_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = ClaudeCodeProvider(model="opus")
     seen: list[list[str]] = []
-    monkeypatch.setattr(provider, "_invoke", lambda cmd: seen.append(cmd) or _STREAM_JSON)
+    envelope = _result_envelope(structured={"strength": 2.0, "confidence": 0.7, "points": ["a"]})
+    monkeypatch.setattr(provider, "_invoke", lambda cmd: seen.append(cmd) or envelope)
 
     provider.argue(Side.BULL, _brief())
 
-    assert seen and seen[0][-2:] == ["--model", "opus"]
-    assert "--output-format" in seen[0]
-    assert seen[0][seen[0].index("--output-format") + 1] == "stream-json"
+    cmd = seen[0]
+    assert cmd[-2:] == ["--model", "opus"]
+    # The live invocation asks for a single JSON envelope validated against the seat's schema.
+    assert cmd[cmd.index("--output-format") + 1] == "json"
+    assert "--json-schema" in cmd
+    schema = json.loads(cmd[cmd.index("--json-schema") + 1])
+    assert schema == _case_schema()

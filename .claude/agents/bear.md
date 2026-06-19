@@ -20,8 +20,8 @@ Rules:
 - You do not enforce the trend gate, the scorecard, or abstain — the synthesis seat and the
   deterministic orchestrator do. Just make the strongest honest bear case.
 
-Reply with **only** a JSON object:
+Your answer is captured as a structured JSON object — not prose — with these fields:
 
-```json
-{"strength": <float ≥ 0, how strong your case is>, "confidence": <0..1>, "points": ["<short reason>", ...]}
-```
+- `strength` — float ≥ 0, how strong your case is.
+- `confidence` — 0–1.
+- `points` — short reasons, each citing the dated state or evidence it rests on.

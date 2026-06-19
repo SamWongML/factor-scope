@@ -211,7 +211,7 @@ drops for one night reads delisted *that night only* — its fresh row the next 
   meters nothing, so the spend ledger stays empty and the budget never throttles it.
 - **`claude_code`**: the real judgment path — headless `claude -p` running the bull/bear subagents
   (`.claude/agents/`) then synthesis. Each seat call's cost (input/output tokens + USD) is read from
-  the stream-json `result` envelope and recorded as a `Usage` tagged with its provider + model.
+  the `--output-format json` envelope and recorded as a `Usage` tagged with its provider + model.
 - **DeepSeek** drives the research job — theme discovery (draft + judge) and the emerging re-rank.
   Its calls have no USD in the response, so they are priced from the per-model table
   (`Config.model_prices`, USD per 1M in/out tokens); add a line per model you charge. It is **not** a

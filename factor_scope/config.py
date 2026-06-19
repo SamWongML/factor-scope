@@ -93,7 +93,8 @@ def _default_model_prices() -> dict[str, Price]:
     """USD per 1M in/out tokens — the table the cost meter prices token-only providers from.
 
     DeepSeek V4 list prices (verified 2026-06-08). ``claude_code`` reports its own USD
-    in the stream-json envelope, so the deep-think model needs no line; add one per priced model.
+    in the ``--output-format json`` envelope, so the deep-think model needs no line; add one per
+    priced model.
     """
 
     return {

@@ -21,8 +21,10 @@ Rules:
 - You do **not** enforce the trend gate or the scorecard — the deterministic orchestrator applies
   those guardrails *after* you. Do not try to evade them; just net the two cases honestly.
 
-Reply with **only** a JSON object:
+Your answer is captured as a structured JSON object — not prose — with these fields:
 
-```json
-{"action": "<buy_early|hold|trim|exit|avoid|abstain>", "confidence": <0..1>, "rationale": ["<short reason>", ...], "rubric": [{"criterion": "evidence quality", "score": <0..1>}, {"criterion": "conviction", "score": <0..1>}, {"criterion": "trend/gate posture", "score": <0..1>}, {"criterion": "crowding + overlap", "score": <0..1>}, {"criterion": "valuation", "score": <0..1>}]}
-```
+- `action` — one of: buy_early, hold, trim, exit, avoid, abstain.
+- `confidence` — 0–1.
+- `rationale` — short reasons for the call.
+- `rubric` — one `{criterion, score}` entry per criterion (each score 0–1): evidence quality,
+  conviction, trend/gate posture, crowding + overlap, valuation.
