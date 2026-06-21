@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from functools import lru_cache
 from typing import Any
 
+from factor_scope.ingest.base import EASTMONEY_KLINE, host_breaker
 from factor_scope.store import Reading
 
 logger = logging.getLogger(__name__)
@@ -61,10 +62,14 @@ def fetch_live(
 
     import akshare as ak
 
+    if host_breaker.is_open(EASTMONEY_KLINE):  # host known-blocked → skip it, use the spot board
+        return _spot_bar(code, fetched_at=fetched_at, since=since)
     kwargs = {"start_date": _start_date(since)} if since is not None else {}
     try:
         frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="", **kwargs)
+        host_breaker.record_success(EASTMONEY_KLINE)
     except Exception as exc:
+        host_breaker.record_failure(EASTMONEY_KLINE)
         logger.warning(
             "trading_activity: EastMoney history refused %s (%s); falling back to the spot board",
             code,

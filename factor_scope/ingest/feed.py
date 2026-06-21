@@ -14,6 +14,8 @@ Determinism is preserved: recorded responses plus the deterministic ``fetched_at
 from __future__ import annotations
 
 import json
+import random
+import time
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -32,6 +34,20 @@ from factor_scope.ingest import (
 from factor_scope.store import Reading
 
 _SCORECARD = ("fee", "tracking_error", "top10_weight")
+
+
+def pace_between_calls(seconds: float) -> None:
+    """Pause a jittered ``[0, seconds]`` between sequential live per-fund calls (live path only).
+
+    The full-universe loop hits one rate-limited EastMoney host hundreds of times in a row; a small
+    randomised pace keeps the request rate under the IP limiter that otherwise drops the connection,
+    without lengthening the nightly run materially. Full jitter (not a fixed delay) avoids a
+    metronomic request cadence. ``seconds <= 0`` disables it. Only :class:`LiveFeed` calls this;
+    the offline cassette replay never sleeps, so the suite stays fast and deterministic.
+    """
+
+    if seconds > 0:
+        time.sleep(random.uniform(0.0, seconds))
 
 
 @runtime_checkable
@@ -59,7 +75,9 @@ class Feed(Protocol):
         self, code: str, *, fetched_at: str, since: str | None = None
     ) -> list[Reading]: ...
 
-    def price_sources(self, code: str, *, fetched_at: str) -> list[list[Reading]]: ...
+    def price_sources(
+        self, code: str, *, fetched_at: str, since: str | None = None
+    ) -> list[list[Reading]]: ...
 
 
 class LiveFeed:
@@ -67,8 +85,13 @@ class LiveFeed:
 
     Every method delegates to the adapter's ``fetch_live`` backend, so the live transport (and its
     retry/timeout/failover resilience) stays in one place and is exercised against real sources by
-    ``tests/integration/test_adapters_live.py`` under ``FACTOR_SCOPE_LIVE=1``.
+    ``tests/integration/test_adapters_live.py`` under ``FACTOR_SCOPE_LIVE=1``. Each *per-fund* call
+    is preceded by a jittered pace (``pace_seconds``) so the full-universe loop's hundreds of
+    sequential hits to the one rate-limited EastMoney host stay under its IP limiter.
     """
+
+    def __init__(self, pace_seconds: float = 0.0) -> None:
+        self._pace_seconds = pace_seconds
 
     def universe(self, *, as_of: str, fetched_at: str) -> list[Reading]:
         return fund_universe.fetch_live(as_of=as_of, fetched_at=fetched_at)
@@ -77,24 +100,36 @@ class LiveFeed:
         return etf_scale.fetch_live(fetched_at=fetched_at)
 
     def holdings(self, fund: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        pace_between_calls(self._pace_seconds)
         return fund_holdings.fetch_live(fund, fetched_at=fetched_at, since=since)
 
     def activity(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        pace_between_calls(self._pace_seconds)
         return trading_activity.fetch_live(code, fetched_at=fetched_at, since=since)
 
     def valuation(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        pace_between_calls(self._pace_seconds)
         return fundamentals.fetch_live(code, fetched_at=fetched_at, since=since)
 
-    def price_sources(self, code: str, *, fetched_at: str) -> list[list[Reading]]:
+    def price_sources(
+        self, code: str, *, fetched_at: str, since: str | None = None
+    ) -> list[list[Reading]]:
         # Each leg runs behind the resilience boundary (retry + wall-clock deadline + logged
         # failover), so a blocked or hung scraper contributes an empty read and the surviving legs
-        # are reconciled, rather than killing the run.
+        # are reconciled, rather than killing the run. The ``since`` watermark threads through so a
+        # nightly re-pull fetches only sessions past the store's floor (cold start seeds a window).
+        pace_between_calls(self._pace_seconds)
+        bao = baostock.fetch_live
         return [
-            _live_or_empty(prices.fetch_live, code, source=prices.SOURCE, fetched_at=fetched_at),
             _live_or_empty(
-                baostock.fetch_live, code, source=baostock.SOURCE, fetched_at=fetched_at
+                prices.fetch_live, code, source=prices.SOURCE, fetched_at=fetched_at, since=since
             ),
-            _live_or_empty(mootdx.fetch_live, code, source=mootdx.SOURCE, fetched_at=fetched_at),
+            _live_or_empty(
+                bao, code, source=baostock.SOURCE, fetched_at=fetched_at, since=since
+            ),
+            _live_or_empty(
+                mootdx.fetch_live, code, source=mootdx.SOURCE, fetched_at=fetched_at, since=since
+            ),
         ]
 
 
@@ -196,10 +231,14 @@ class CassetteFeed:
             if since is None or r["as_of"] > since
         ]
 
-    def price_sources(self, code: str, *, fetched_at: str) -> list[list[Reading]]:
+    def price_sources(
+        self, code: str, *, fetched_at: str, since: str | None = None
+    ) -> list[list[Reading]]:
         bars = self._by_key("prices.json", code)
         # One recorded NAV history, replayed as each of the three corroborating legs, so the
         # per-date reconciliation runs offline exactly as it does live (the legs agree → no flag).
+        # The ``since`` watermark trims to sessions past the floor, honouring the same incremental
+        # contract the live adapters do, so an offline re-pull is a no-op like the other series.
         return [
             [
                 Reading(
@@ -210,6 +249,7 @@ class CassetteFeed:
                     payload={"nav": r["nav"], "source": source},
                 )
                 for r in bars
+                if since is None or r["as_of"] > since
             ]
             for source in (prices.SOURCE, baostock.SOURCE, mootdx.SOURCE)
         ]
@@ -219,5 +259,5 @@ def get_feed(config: Config) -> Feed:
     """The online network adapters by default; the committed recordings in the offline test mode."""
 
     if config.source == "live":
-        return LiveFeed()
+        return LiveFeed(pace_seconds=config.live_pacing_seconds)
     return CassetteFeed(config.fixtures_dir / "cassettes")

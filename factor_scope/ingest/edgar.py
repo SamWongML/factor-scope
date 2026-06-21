@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from factor_scope.credentials import resolve_credential
 from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
 
@@ -51,10 +52,18 @@ def fetch_live(
     fund/ETF's monthly portfolio (``investment_data``) keyed by security name into ``{filer,
     holding, weight}`` (``pct_value`` → fraction of net assets), so US fund/ETF holdings become
     look-through ``HOLDS`` edges alongside the CN funds.
+
+    The SEC requires a User-Agent identity or it refuses the request; it is resolved
+    env-then-Keychain (:func:`factor_scope.credentials.resolve_credential`) and set on EdgarTools
+    here, so the launchd nightly — which never sees ``.zshrc`` — is self-sufficient rather than
+    trusting an ambient var.
     """
 
-    from edgar import Company
+    from edgar import Company, set_identity
 
+    identity = resolve_credential("EDGAR_IDENTITY")
+    if identity:
+        set_identity(identity)
     filing = Company(cik).get_filings(form=form).latest(1)
     obj = filing.obj()
     as_of = str(filing.filing_date)

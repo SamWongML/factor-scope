@@ -136,11 +136,13 @@ class _FixturesAtRunDate:
         return AShareMarket().gather(replace(config, source="fixtures"), as_of=as_of, store=store)
 
 
-def _stub_live_reranker(monkeypatch) -> None:
-    # ``source="live"`` also selects the host-only LLM re-rank; the deterministic fake stands in so
-    # a live-source nightly runs hermetically (the run-date resolution is what these tests pin).
+def _stub_live_dependencies(monkeypatch) -> None:
+    # ``source="live"`` selects the host-only LLM re-rank and runs the credential preflight; the
+    # deterministic fake reranker + a stub key let a live-source nightly run hermetically (the
+    # run-date resolution is what these tests pin).
     from factor_scope.emerging.shortlist import FakeReranker
 
+    monkeypatch.setenv("FRED_API_KEY", "stub-key")
     monkeypatch.setattr("factor_scope.pipeline.get_reranker", lambda config: FakeReranker())
 
 
@@ -148,7 +150,7 @@ def test_nightly_freezes_the_live_run_date_once_across_the_whole_run(tmp_path, m
     # A live nightly resolves the run date ONCE and freezes it. The live universe pull is multi-hour
     # and can cross midnight; ingest, the artifact, and the logged calls must all carry the one
     # frozen as_of — never a per-step wall-clock re-read that split-brains the night.
-    _stub_live_reranker(monkeypatch)
+    _stub_live_dependencies(monkeypatch)
     p = _paths(tmp_path)
     cfg = Config(
         source="live",
@@ -179,7 +181,7 @@ def test_a_live_nightly_rerun_on_the_same_day_is_byte_for_byte_idempotent(
     # Real wall-clock fetched_at makes a *fresh* live snapshot pull-time-sensitive, but a same-day
     # rerun must stay stable: the idempotent-night skip means ingest never re-stamps, so the
     # snapshot id (which hashes fetched_at) — and the whole artifact — reproduce byte-for-byte.
-    _stub_live_reranker(monkeypatch)
+    _stub_live_dependencies(monkeypatch)
     p = _paths(tmp_path)
     cfg = Config(
         source="live",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from factor_scope.credentials import resolve_credential
 from factor_scope.ingest.base import as_float, read_rows, required_str
 from factor_scope.store import Reading
 
@@ -44,11 +45,17 @@ def load_fixture(path: Path, *, fetched_at: str) -> list[Reading]:
 def fetch_live(
     series_id: str, *, fetched_at: str, api_key: str | None = None
 ) -> list[Reading]:  # pragma: no cover - live path
-    """Pull the latest observation of one FRED series. Requires `live` + an API key + network."""
+    """Pull the latest observation of one FRED series. Requires `live` + an API key + network.
+
+    The key is resolved env-then-Keychain (:func:`factor_scope.credentials.resolve_credential`)
+    rather than left to fredapi's own env read, so the launchd nightly — which never sees
+    ``.zshrc`` — finds the key in the Keychain exactly as the interactive ``live-check`` does.
+    """
 
     from fredapi import Fred
 
-    series = Fred(api_key=api_key).get_series(series_id).dropna()
+    series = Fred(api_key=api_key or resolve_credential("FRED_API_KEY")).get_series(series_id)
+    series = series.dropna()
     return [
         Reading(
             series=SERIES,

@@ -4,6 +4,11 @@ These hit the network and are **skipped unless ``FACTOR_SCOPE_LIVE=1``**, so CI 
 source. They are the canary `make live-check` runs after any dependency/adapter change: each asserts
 the adapter's *full* payload schema (keys, types, plausible ranges), so an upstream API/schema drift
 fails here loudly before a nightly trusts it — not silently at runtime.
+
+Beyond schema, the per-fund price legs assert the **windowed + incremental return contract** the
+offline cassettes can only simulate: a cold pull seeds a *window* of bars (not just the latest — the
+regression that returning one bar caused), and a re-pull with a ``since`` watermark returns only the
+sessions past it. These are the live-path behaviors offline mode bypasses entirely via the cassette.
 """
 
 import math
@@ -33,26 +38,79 @@ skip_unless_live = pytest.mark.skipif(not _LIVE, reason="set FACTOR_SCOPE_LIVE=1
 # A held on-exchange ETF used as the per-code probe across the price/holdings/valuation adapters.
 _PROBE = "561010"
 
+# A real run stamp (not the ``"t"`` sentinel) so the price legs derive a dated seed window rather
+# than degrading to the backend's default full range — to exercise the seeded-window contract.
+_RUN_STAMP = "2026-06-05T22:00:00Z"
+
 
 @skip_unless_live
 def test_prices_live_smoke() -> None:
-    reading = prices.fetch_live(_PROBE, fetched_at="t")[0]
-    assert reading.key == _PROBE
-    assert reading.payload.keys() == {"nav", "source"}
-    assert reading.payload["nav"] > 0
-    assert reading.payload["source"] == prices.SOURCE
+    readings = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
+    # The cold pull seeds a *window* of bars, not just the latest, so the trend gate's 200-day MA
+    # has its own-history distribution from night one — the regression returning one bar caused.
+    assert len(readings) > 1
+    assert all(r.key == _PROBE for r in readings)
+    assert all(r.payload.keys() == {"nav", "source"} for r in readings)
+    assert all(r.payload["nav"] > 0 for r in readings)
+    assert all(r.payload["source"] == prices.SOURCE for r in readings)
+    # Bars arrive oldest-first: select_reconciled takes r[-1] as the latest, so the order matters.
+    stamps = [r.as_of for r in readings]
+    assert stamps == sorted(stamps)
+    # The window is bounded to the ~400-trading-day seed floor, not the fund's full history.
+    floor = prices._floor(_RUN_STAMP, None)
+    assert floor is not None and all(r.as_of > floor for r in readings)
+
+
+@skip_unless_live
+def test_prices_incremental_since_live_smoke() -> None:
+    # The other half of the contract: a re-pull past a watermark returns only newer sessions, so a
+    # nightly re-pull is linear, not a full re-fetch. Offline this is cassette-simulated; here it is
+    # the real EastMoney ``start_date`` path, the leg that tripped the rate limiter when unbounded.
+    cold = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
+    assert len(cold) > 1
+    since = cold[len(cold) // 2].as_of  # a real session mid-window becomes the watermark
+    incremental = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP, since=since)
+    assert all(r.as_of > since for r in incremental)  # only sessions strictly past the watermark
+    assert len(incremental) < len(cold)  # a strict subset of the window, not a whole re-fetch
+    assert all(r.payload.keys() == {"nav", "source"} for r in incremental)
 
 
 @skip_unless_live
 def test_baostock_live_smoke() -> None:
-    reading = baostock.fetch_live(_PROBE, fetched_at="t")[0]  # the Baostock cross-validation leg
-    assert reading.payload["nav"] > 0
+    # the Baostock cross-validation leg — a window matching the AkShare leg, not just the latest bar
+    readings = baostock.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
+    assert len(readings) > 1
+    assert all(r.payload.keys() == {"nav", "source"} for r in readings)
+    assert all(r.payload["nav"] > 0 for r in readings)
 
 
 @skip_unless_live
 def test_mootdx_live_smoke() -> None:
-    reading = mootdx.fetch_live(_PROBE, fetched_at="t")[0]  # the third (TDX) cross-validation leg
-    assert reading.payload["nav"] > 0
+    # the third (TDX) cross-validation leg — a count-based window matching the other two legs. This
+    # is the canary for the hardened client: a pinned server + bounded socket means it returns fast
+    # or degrades, never wedging the run (the live-ingest hang this leg used to cause).
+    readings = mootdx.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
+    assert len(readings) > 1
+    assert all(r.key == _PROBE for r in readings)
+    assert all(r.payload.keys() == {"nav", "source"} for r in readings)
+    assert all(r.payload["nav"] > 0 for r in readings)
+    assert all(r.payload["source"] == mootdx.SOURCE for r in readings)
+    # Bars arrive oldest-first: select_reconciled takes r[-1] as the latest, so the order matters.
+    stamps = [r.as_of for r in readings]
+    assert stamps == sorted(stamps)
+
+
+@skip_unless_live
+def test_mootdx_incremental_since_live_smoke() -> None:
+    # The other half of the contract, matching the AkShare/Baostock legs: a re-pull past a watermark
+    # returns only newer sessions, so the nightly re-pull stays a strict subset, not a re-fetch.
+    cold = mootdx.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
+    assert len(cold) > 1
+    since = cold[len(cold) // 2].as_of  # a real session mid-window becomes the watermark
+    incremental = mootdx.fetch_live(_PROBE, fetched_at=_RUN_STAMP, since=since)
+    assert all(r.as_of > since for r in incremental)  # only sessions strictly past the watermark
+    assert len(incremental) < len(cold)  # a strict subset of the window, not a whole re-fetch
+    assert all(r.payload.keys() == {"nav", "source"} for r in incremental)
 
 
 @skip_unless_live
@@ -66,7 +124,7 @@ def test_fred_live_smoke() -> None:
 @skip_unless_live
 def test_fund_holdings_live_smoke() -> None:
     # AkShare queries holdings per calendar year, derived from the run stamp — pass a real one.
-    reading = fund_holdings.fetch_live(_PROBE, fetched_at="2026-06-05T22:00:00Z")[0]
+    reading = fund_holdings.fetch_live(_PROBE, fetched_at=_RUN_STAMP)[0]
     assert reading.payload.keys() == {"fund", "holding", "weight"}
     assert reading.payload["fund"] == _PROBE
     assert 0.0 <= reading.payload["weight"] <= 1.0
@@ -83,9 +141,11 @@ def test_fund_universe_live_smoke() -> None:
 @skip_unless_live
 def test_etf_scale_live_smoke() -> None:
     reading = etf_scale.fetch_live(fetched_at="t")[0]
-    assert reading.payload.keys() == {"exchange", "aum", "shares"}
+    # ``amount`` (成交额, the liquidity leg of the universe tier) rides on the same spot board
+    assert reading.payload.keys() == {"exchange", "aum", "shares", "amount"}
     assert reading.payload["exchange"] in {"sse", "szse"}
     assert reading.payload["aum"] > 0 and reading.payload["shares"] > 0
+    assert reading.payload["amount"] >= 0  # a fund can trade nothing on a given day
 
 
 @skip_unless_live

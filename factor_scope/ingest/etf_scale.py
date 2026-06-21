@@ -20,11 +20,12 @@ SERIES = "etf_scale"
 
 
 def _from_rows(rows: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
-    """Map AkShare's ETF spot rows (代码 / 数据日期 / 总市值 in 元 / 最新份额 in 份) to Readings.
+    """Map AkShare's ETF spot rows (代码 / 数据日期 / 总市值 / 最新份额 / 成交额) to Readings.
 
-    The pure core of live: ``aum``/``shares`` are rebased to 亿 (the unit the scorecard reads), the
-    feed's timestamp is truncated to its date, and the exchange is read off the code prefix (5… is
-    Shanghai, otherwise Shenzhen).
+    The pure core of live: ``aum``/``shares``/``amount`` are rebased to 亿 (the unit the scorecard
+    and the tier screen read), the feed's timestamp is truncated to its date, and the exchange is
+    read off the code prefix (5… is Shanghai, otherwise Shenzhen). ``amount`` is the day's traded
+    value (成交额) — the liquidity leg of the universe tier, free on the same once-per-run board.
     """
 
     return [
@@ -37,6 +38,7 @@ def _from_rows(rows: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Re
                 "exchange": "sse" if str(row["代码"]).startswith("5") else "szse",
                 "aum": float(row["总市值"]) / 1e8,
                 "shares": float(row["最新份额"]) / 1e8,
+                "amount": float(row["成交额"]) / 1e8,
             },
         )
         for row in rows

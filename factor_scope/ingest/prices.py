@@ -10,8 +10,12 @@ feed and reconciled across the three corroborating legs by :func:`select_reconci
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping
+from datetime import timedelta
 from statistics import median
+from typing import Any
 
+from factor_scope.ingest.base import EASTMONEY_KLINE, day_after, host_breaker, run_date
 from factor_scope.store import Reading
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,14 @@ SOURCE = "akshare"  # this adapter's provenance tag; its live backend is AkShare
 # Two same-day reads within this fraction corroborate each other; the default is the
 # SEC/CSSF NAV-error materiality baseline (0.5%). Callers pass a per-run override (Config).
 _CORROBORATION_TOLERANCE = 0.005
+
+# The cold-start seed window: the trend gate's 200-day MA (the one hard cap) plus a warm-up margin —
+# ~400 trading days, so the gate ranks against a stable own-history distribution from night one
+# rather than accruing one bar a night for ~200 nights. The A-share calendar runs ~243 trading
+# days/year, so ~400 trading days spans ~650 calendar days once holiday clusters are counted; the
+# EastMoney/Sina date range is calendar, so we ask for the wider calendar span and keep what lands.
+_SEED_TRADING_DAYS = 400
+_SEED_CALENDAR_DAYS = 650
 
 
 def _flag(reading: Reading, peer_nav: float) -> Reading:
@@ -78,8 +90,13 @@ def select_reconciled(
     return [canonical]
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:
-    """Pull the latest daily raw-close NAV for one ETF via AkShare. Requires `live` + network.
+def fetch_live(code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+    """Pull one ETF's daily raw-close NAV history via AkShare. Requires `live` + network.
+
+    Returns a *window* of bars, not just the latest: the trend/reversal/low-vol factors read the
+    full stored NAV history, so the cold (``since`` is None) pull seeds ~400 trading days and each
+    later night pulls only the sessions after the watermark — the same incremental contract the
+    other per-fund series use, turning the nightly re-pull from quadratic to linear.
 
     EastMoney is the primary backend; when its history host refuses the request, Sina serves the
     same unadjusted daily close, so a block on one host can't unprice the book. The provenance tag
@@ -88,23 +105,74 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:
 
     import akshare as ak
 
+    floor = _floor(fetched_at, since)
+    if host_breaker.is_open(EASTMONEY_KLINE):
+        return _sina(ak, code, fetched_at=fetched_at, floor=floor)  # host known-blocked → skip it
     try:
-        frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="")  # adjust="" → raw close
-        last = frame.iloc[-1]
-        as_of, nav = str(last["日期"]), float(last["收盘"])
+        start = _em_start(fetched_at, since)
+        kwargs = {"start_date": start} if start else {}
+        frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="", **kwargs)
+        bars = [{"as_of": str(r["日期"]), "nav": float(r["收盘"])} for _, r in frame.iterrows()]
+        host_breaker.record_success(EASTMONEY_KLINE)
     except Exception as exc:
+        host_breaker.record_failure(EASTMONEY_KLINE)
         logger.warning("prices: EastMoney history refused %s (%s); falling back to Sina", code, exc)
-        frame = ak.fund_etf_hist_sina(symbol=_sina_symbol(code))  # same raw daily close, via Sina
-        last = frame.iloc[-1]
-        as_of, nav = str(last["date"]), float(last["close"])
+        return _sina(ak, code, fetched_at=fetched_at, floor=floor)
+    return _to_readings(code, bars, fetched_at=fetched_at, floor=floor)
+
+
+def _sina(ak: object, code: str, *, fetched_at: str, floor: str | None) -> list[Reading]:
+    """The Sina fallback: full history (no date range), trimmed client-side to the same window."""
+
+    frame = ak.fund_etf_hist_sina(symbol=_sina_symbol(code))  # type: ignore[attr-defined]
+    bars = ({"as_of": str(r["date"]), "nav": float(r["close"])} for _, r in frame.iterrows())
+    return _to_readings(code, bars, fetched_at=fetched_at, floor=floor)
+
+
+def _em_start(fetched_at: str, since: str | None) -> str | None:
+    """EastMoney's ``start_date`` (``YYYYMMDD``): watermark+1 incrementally, else the seed floor.
+
+    Returns ``None`` when there is no watermark and the run stamp is not a real date (the unit
+    fakes), so the seed degrades to EastMoney's default full range rather than raising.
+    """
+
+    if since is not None:
+        return day_after(since).strftime("%Y%m%d")
+    anchor = run_date(fetched_at)
+    if anchor is None:
+        return None
+    return (anchor - timedelta(days=_SEED_CALENDAR_DAYS)).strftime("%Y%m%d")
+
+
+def _floor(fetched_at: str, since: str | None) -> str | None:
+    """The client-side lower bound (``YYYY-MM-DD``) bars must clear — kept for the Sina path.
+
+    EastMoney honours ``start_date`` server-side, but the Sina fallback always returns full history,
+    so the same window is enforced here: strictly past the watermark incrementally, else the seed
+    floor (or ``None`` — no bound — when the run stamp is not a real date).
+    """
+
+    if since is not None:
+        return since
+    anchor = run_date(fetched_at)
+    return (anchor - timedelta(days=_SEED_CALENDAR_DAYS)).isoformat() if anchor else None
+
+
+def _to_readings(
+    code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str, floor: str | None
+) -> list[Reading]:
+    """Map ``{as_of, nav}`` bars to Readings, keeping only those strictly past the window floor."""
+
     return [
         Reading(
             series=SERIES,
             key=code,
-            as_of=as_of,
+            as_of=str(bar["as_of"]),
             fetched_at=fetched_at,
-            payload={"nav": nav, "source": SOURCE},
+            payload={"nav": float(bar["nav"]), "source": SOURCE},
         )
+        for bar in bars
+        if floor is None or str(bar["as_of"]) > floor
     ]
 
 

@@ -17,10 +17,10 @@ import threading
 import time
 from collections.abc import Callable
 
-from factor_scope.ingest.base import IngestError
+from factor_scope.ingest.base import EASTMONEY_KLINE, IngestError, host_breaker
 from factor_scope.store import Reading
 
-__all__ = ["IngestError"]
+__all__ = ["IngestDeadline", "IngestError"]
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +30,40 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BASE_SECONDS = 1.0
 _RETRY_CAP_SECONDS = 30.0
 
-# Per-attempt wall-clock deadline. The CN scraper libraries wrap sockets and expose no timeout, so a
-# hung server could otherwise stall the whole nightly run. Each retry gets a fresh deadline, so the
-# worst-case time per source is bounded by _RETRY_ATTEMPTS × this + backoff.
+# Per-attempt wall-clock deadline — a backstop above each adapter's own socket timeout (the Mootdx
+# leg sets one explicitly). Each retry gets a fresh deadline, so the worst-case time per source is
+# bounded by _RETRY_ATTEMPTS × this + backoff.
 _TIMEOUT_SECONDS = 20.0
 
 # Data circuit breaker: an isolated divergence flags-and-continues, but if more than this fraction
 # of funds are unreconciled the failure is systemic (e.g. a source switched to adjusted prices) —
 # fail the whole run loudly rather than ship a wall of suspect NAVs.
 _DEGRADED_RUN_THRESHOLD = 0.5
+
+
+class IngestDeadline:
+    """An overall wall-clock budget for one ingest run — the run-level backstop above the per-read
+    deadline (:func:`_with_timeout`). It bounds the *whole* gather so no single wedged leg can
+    stall a nightly run indefinitely.
+
+    ``seconds`` is the budget measured from run start; ``None`` (the default everywhere but an
+    explicit ``--deadline``) means unbounded, so the offline suite and the byte-for-byte artifact
+    stay unaffected. Checked at the top of the per-fund/per-code ingest loops; on expiry the loop
+    stops and the partial-but-valid readings gathered so far still ship. ``clock`` is injectable for
+    tests; it is wall-clock time used only for control flow, never written into the artifact.
+    """
+
+    def __init__(
+        self, seconds: float | None, *, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._budget = seconds
+        self._clock = clock
+        self._start = clock()
+
+    def exceeded(self) -> bool:
+        """True once elapsed wall-clock has reached the budget (never, when unbounded)."""
+
+        return self._budget is not None and (self._clock() - self._start) >= self._budget
 
 
 def _with_retries(thunk: Callable[[], list[Reading]]) -> list[Reading]:
@@ -60,13 +85,16 @@ def _with_retries(thunk: Callable[[], list[Reading]]) -> list[Reading]:
 
 
 def _with_timeout(thunk: Callable[[], list[Reading]], seconds: float) -> list[Reading]:
-    """Bound a blocking source read with a wall-clock deadline.
+    """Bound a blocking source read with a wall-clock deadline — the per-read backstop.
 
-    The CN scraper libraries wrap sockets and expose no timeout, so a hung server could otherwise
-    stall the whole nightly run. The read runs on a daemon thread and we wait at most ``seconds``.
-    Python cannot kill a thread, so on a timeout the worker is *abandoned* — but it is a daemon, so
-    it never blocks process exit — and a :class:`TimeoutError` propagates to the retry/fallback
-    boundary. Ingestion is sequential, so at most one such thread can leak at a time.
+    The read runs on a daemon thread and we wait at most ``seconds``. Python cannot kill a thread,
+    so on a timeout the worker is *abandoned* — but it is a daemon, so it never blocks process exit
+    — and a :class:`TimeoutError` propagates to the retry/fallback boundary. Ingestion is
+    sequential, so at most one such thread can leak at a time.
+
+    This is a backstop: the adapters that wrap raw sockets set their own connect/read socket timeout
+    (e.g. the Mootdx/TDX leg), so a read self-bounds and the abandoned-thread case is the exception,
+    not the rule. The run-level :class:`IngestDeadline` caps the whole gather above this.
     """
 
     result: list[list[Reading]] = []
@@ -145,4 +173,23 @@ def _check_price_health(n_funds: int, degraded: list[str]) -> None:
         raise IngestError(
             f"prices: {len(degraded)}/{n_funds} funds unreconciled "
             f"(> {_DEGRADED_RUN_THRESHOLD:.0%}) — a price source likely broke systemically"
+        )
+
+
+def _check_eastmoney_health() -> None:
+    """Surface one run-level alarm when the EastMoney K-line host blocked the run.
+
+    The per-host breaker collapses a blocked host into a single summary line instead of the wall of
+    per-call warnings a full-universe burst would emit — the price/activity legs that fell back are
+    already individually degraded; this is the run-level signal an operator scans each morning. The
+    block is transient (an IP cooldown), so it is a warning, not a failure: the artifact is still
+    valid, the trend/crowding surfaces provisional for the affected funds until the host clears.
+    """
+
+    if host_breaker.is_open(EASTMONEY_KLINE):
+        logger.warning(
+            "ingest: EastMoney K-line host blocked this run after %d refusals — price/activity "
+            "legs fell back to Sina/the spot board; those funds' trend/crowding surfaces are "
+            "provisional until the IP cooldown passes",
+            host_breaker.failures(EASTMONEY_KLINE),
         )

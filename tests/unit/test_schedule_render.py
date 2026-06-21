@@ -46,21 +46,6 @@ def test_cron_line_runs_the_command_in_the_working_directory_with_logs() -> None
     assert ">> /var/log/fs.out 2>> /var/log/fs.err" in line
 
 
-def test_cron_line_prefixes_environment_assignments_before_the_command() -> None:
-    # cron sources no shell rc files, so live source keys ride inline on the command itself.
-    line = render_cron_line(_spec(environment={"FRED_API_KEY": "x"}))
-    assert "&& FRED_API_KEY=x factor-scope nightly" in line
-    # no environment given → no assignments, the line is unchanged.
-    assert "FRED_API_KEY" not in render_cron_line(_spec())
-
-
-def test_cron_line_shell_quotes_values_so_a_space_stays_one_token() -> None:
-    # The EDGAR identity is "Name email" — it has a space. Unquoted, the shell would read the
-    # second word as the command (not part of the value) and the nightly would never run.
-    line = render_cron_line(_spec(environment={"EDGAR_IDENTITY": "Jane Doe jane@x.com"}))
-    assert "EDGAR_IDENTITY='Jane Doe jane@x.com'" in line
-
-
 def test_launchd_plist_is_valid_xml_that_schedules_the_one_shot_job() -> None:
     xml = render_launchd_plist(_spec(hour=22, minute=0))
     parsed = plistlib.loads(xml.encode("utf-8"))  # round-trips → it is a valid plist
@@ -73,10 +58,10 @@ def test_launchd_plist_is_valid_xml_that_schedules_the_one_shot_job() -> None:
     assert parsed["RunAtLoad"] is False
 
 
-def test_launchd_plist_includes_environment_only_when_given() -> None:
+def test_launchd_plist_carries_no_environment_variables() -> None:
+    # Live keys come from the macOS Keychain at runtime, so no secret is ever rendered into the
+    # plist — there is no EnvironmentVariables key to leak one.
     assert "EnvironmentVariables" not in plistlib.loads(render_launchd_plist(_spec()).encode())
-    with_env = render_launchd_plist(_spec(environment={"FRED_API_KEY": "x"}))
-    assert plistlib.loads(with_env.encode())["EnvironmentVariables"] == {"FRED_API_KEY": "x"}
 
 
 def test_renders_are_deterministic() -> None:
@@ -105,30 +90,11 @@ def test_schedule_bakes_an_absolute_path_even_when_which_resolves_relative(monke
     assert Path(program[0]).is_absolute() and Path(program[0]).name == "factor-scope"
 
 
-def test_schedule_command_injects_env_into_launchd_environment_variables() -> None:
-    # Live source keys (e.g. FRED_API_KEY) reach the launchd job only via EnvironmentVariables —
-    # it sources no shell rc files. Repeatable --env builds that dict.
-    result = runner.invoke(
-        app, ["schedule", "--env", "FRED_API_KEY=abc", "--env", "PATH=/opt/bin"]
-    )
-    assert result.exit_code == 0, result.output
-    parsed = plistlib.loads(result.stdout.encode("utf-8"))
-    assert parsed["EnvironmentVariables"] == {"FRED_API_KEY": "abc", "PATH": "/opt/bin"}
-
-
 def test_schedule_command_can_emit_a_cron_line() -> None:
     result = runner.invoke(app, ["schedule", "--kind", "cron", "--hour", "3", "--minute", "15"])
     assert result.exit_code == 0, result.output
     assert result.stdout.strip().startswith("15 3 * * *")
     assert "factor-scope nightly" in result.stdout
-
-
-def test_schedule_command_injects_env_into_cron_line() -> None:
-    result = runner.invoke(app, ["schedule", "--kind", "cron", "--env", "FRED_API_KEY=abc"])
-    assert result.exit_code == 0, result.output
-    # the key rides inline before the command, which is the absolute factor-scope path.
-    assert "FRED_API_KEY=abc " in result.stdout
-    assert "/factor-scope nightly" in result.stdout
 
 
 def test_schedule_command_writes_to_a_file_when_asked(tmp_path) -> None:
@@ -150,17 +116,4 @@ def test_schedule_can_target_the_discover_job() -> None:
 
 def test_schedule_rejects_an_unknown_job() -> None:
     result = runner.invoke(app, ["schedule", "--job", "weekly"])
-    assert result.exit_code != 0
-
-
-def test_schedule_rejects_malformed_env() -> None:
-    # A bare token with no '=' is never a silent no-op — it fails loudly.
-    result = runner.invoke(app, ["schedule", "--env", "NOEQUALS"])
-    assert result.exit_code != 0
-
-
-def test_schedule_rejects_an_empty_env_value() -> None:
-    # `--env KEY=` would silently bake an empty credential (e.g. an unset `"$FRED_API_KEY"`
-    # expanding to nothing), masking a missing key. An empty value fails loudly instead.
-    result = runner.invoke(app, ["schedule", "--env", "FRED_API_KEY="])
     assert result.exit_code != 0

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from factor_scope.config import Config
+from factor_scope.ingest import feed as feed_mod
 from factor_scope.ingest.feed import CassetteFeed, LiveFeed, get_feed
 
 pytestmark = pytest.mark.unit
@@ -64,3 +65,34 @@ def test_price_sources_replays_three_corroborating_legs() -> None:
 
 def test_price_sources_is_empty_for_an_unpriced_fund() -> None:
     assert _feed().price_sources("510300", fetched_at=FETCHED_AT) == [[], [], []]
+
+
+def test_live_feed_paces_between_per_fund_calls(monkeypatch) -> None:
+    # Live, sequential per-fund calls to the rate-limited host are paced so the burst doesn't trip
+    # the IP limiter; the delay is config-driven. (Offline cassettes never pace — see below.)
+    paced: list[float] = []
+    monkeypatch.setattr(feed_mod, "pace_between_calls", lambda seconds: paced.append(seconds))
+    monkeypatch.setattr(
+        "factor_scope.ingest.trading_activity.fetch_live",
+        lambda code, *, fetched_at, since=None: [],
+    )
+    live = get_feed(Config(source="live", live_pacing_seconds=0.7))
+    assert isinstance(live, LiveFeed)
+    live.activity("561010", fetched_at=FETCHED_AT)
+    assert paced == [0.7]  # paced once with the configured delay, before the per-fund network call
+
+
+def test_cassette_feed_never_paces() -> None:
+    # Offline replay is the deterministic test mode — it must not sleep. CassetteFeed simply has no
+    # pacing call; constructing the offline feed and reading from it never touches the pacer.
+    assert not hasattr(_feed(), "_pace_seconds")
+
+
+def test_price_sources_honour_the_since_watermark() -> None:
+    # Prices are watermarked like the other per-fund series: a re-pull replays only sessions past
+    # the floor, so the nightly re-pull stays incremental, not re-streaming the whole history.
+    feed = _feed()
+    full = feed.price_sources("561010", fetched_at=FETCHED_AT)[0]
+    floor = full[-2].as_of
+    incremental = feed.price_sources("561010", fetched_at=FETCHED_AT, since=floor)
+    assert all([r.as_of for r in leg] == [full[-1].as_of] for leg in incremental)  # newer-only

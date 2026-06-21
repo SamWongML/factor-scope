@@ -11,13 +11,44 @@ from __future__ import annotations
 import pytest
 
 from factor_scope.ingest import etf_scale, fund_universe
-from factor_scope.ingest.fund_universe import delisting_disclosures, still_listed
+from factor_scope.ingest.fund_universe import classify_tier, delisting_disclosures, still_listed
 from factor_scope.store import Reading
 
 pytestmark = pytest.mark.unit
 
 AS_OF = "2026-06-05"
 FETCHED_AT = "2026-06-05T22:00:00Z"
+_SEASONED = "2021-01-20"  # well past the seasoning window as of AS_OF
+
+
+def test_classify_tier_core_is_seasoned_liquid_and_sizeable() -> None:
+    # The deep-fetch tier: a fund that is seasoned, above the investability floor, and trades enough
+    # to exit — only these pay the per-fund holdings/activity/valuation + deep-price pull nightly.
+    assert classify_tier(aum=68.0, amount=3.0, inception=_SEASONED, as_of=AS_OF) == "core"
+
+
+def test_classify_tier_dead_is_a_seasoned_zombie() -> None:
+    # The CSRC zombie-fund floor: a seasoned fund under ~5000万 AUM with near-zero turnover is
+    # dead — recorded for audit but never fetched, so the burst shrinks.
+    assert classify_tier(aum=0.3, amount=0.0, inception=_SEASONED, as_of=AS_OF) == "dead"
+
+
+def test_classify_tier_a_new_listing_stays_in_probation_regardless_of_size() -> None:
+    # Never gate a fresh listing on size — that is exactly the uncrowded fund the discovery system
+    # must keep watching. A < 180d fund is probation even when tiny, so it can be promoted later.
+    assert classify_tier(aum=0.1, amount=0.0, inception="2026-05-01", as_of=AS_OF) == "probation"
+
+
+def test_classify_tier_small_but_trading_fund_is_probation_not_dead() -> None:
+    # Below the core bar but clearly alive (real turnover): probation, not dead — a candidate to
+    # promote on momentum, not a zombie to drop.
+    assert classify_tier(aum=3.0, amount=1.0, inception=_SEASONED, as_of=AS_OF) == "probation"
+
+
+def test_classify_tier_missing_inputs_degrade_to_probation_never_dead() -> None:
+    # Absence is not evidence of death: a missing AUM/turnover disclosure keeps the fund in
+    # probation (still re-screened nightly), never silently classified dead.
+    assert classify_tier(aum=None, amount=None, inception=_SEASONED, as_of=AS_OF) == "probation"
 
 
 def test_still_listed_excludes_a_fund_once_delisted() -> None:
@@ -109,14 +140,16 @@ def test_etf_scale_maps_the_akshare_spot_columns() -> None:
     # is read off the code prefix (5… is Shanghai, otherwise Shenzhen).
     rows = [
         {"代码": "561010", "数据日期": "2026-06-15 00:00:00", "总市值": 6_800_000_000.0,
-         "最新份额": 4_000_000_000.0},
+         "最新份额": 4_000_000_000.0, "成交额": 800_000_000.0},
         {"代码": "159755", "数据日期": "2026-06-15 00:00:00", "总市值": 4_600_000_000.0,
-         "最新份额": 4_200_000_000.0},
+         "最新份额": 4_200_000_000.0, "成交额": 50_000_000.0},
     ]
     sse, szse = etf_scale._from_rows(rows, fetched_at=FETCHED_AT)
     assert sse.series == etf_scale.SERIES
     assert sse.key == "561010"
     assert sse.as_of == "2026-06-15"  # the feed's own date, time component dropped
-    assert sse.payload == {"exchange": "sse", "aum": 68.0, "shares": 40.0}
+    # 成交额 (traded value, 元) is rebased to 亿 like AUM — the liquidity leg of the tier screen,
+    # carried on the same once-per-run spot board so the universe re-screens at no extra cost
+    assert sse.payload == {"exchange": "sse", "aum": 68.0, "shares": 40.0, "amount": 8.0}
     assert szse.key == "159755"
-    assert szse.payload == {"exchange": "szse", "aum": 46.0, "shares": 42.0}
+    assert szse.payload == {"exchange": "szse", "aum": 46.0, "shares": 42.0, "amount": 0.5}

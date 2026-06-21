@@ -16,7 +16,10 @@ forces offline).
 
 from __future__ import annotations
 
-from factor_scope.ingest.prices import SERIES
+from datetime import timedelta
+
+from factor_scope.ingest.base import day_after, run_date
+from factor_scope.ingest.prices import _SEED_CALENDAR_DAYS, SERIES
 from factor_scope.store import Reading
 
 SOURCE = "baostock"  # this adapter's provenance tag
@@ -29,15 +32,37 @@ def _market_code(code: str) -> str:
     return f"sh.{code}" if code.startswith("5") else f"sz.{code}"
 
 
-def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
-    """Pull the latest daily close for one ETF via Baostock. Requires the `live` extra + network."""
+def _start_date(fetched_at: str, since: str | None) -> str | None:
+    """Baostock's ``start_date`` (``YYYY-MM-DD``): watermark+1 incrementally, else the seed floor.
+
+    ``None`` when there is no watermark and the run stamp is not a real date (the unit fakes), so
+    the seed degrades to Baostock's default full range rather than raising.
+    """
+
+    if since is not None:
+        return day_after(since).isoformat()
+    anchor = run_date(fetched_at)
+    return (anchor - timedelta(days=_SEED_CALENDAR_DAYS)).isoformat() if anchor else None
+
+
+def fetch_live(  # pragma: no cover - live path
+    code: str, *, fetched_at: str, since: str | None = None
+) -> list[Reading]:
+    """Pull one ETF's daily-close history via Baostock. Requires the `live` extra + network.
+
+    Returns the same windowed/incremental contract as the AkShare leg: a ~400-trading-day seed when
+    cold (``since`` is None), only sessions past the watermark thereafter, so the price series is
+    corroborated across the full window, not just the latest bar.
+    """
 
     import baostock as bs
 
+    start = _start_date(fetched_at, since)
+    query_kwargs = {"start_date": start} if start else {}
     bs.login()
     try:
         result = bs.query_history_k_data_plus(
-            _market_code(code), "date,close", frequency="d", adjustflag=_ADJUST_NONE
+            _market_code(code), "date,close", frequency="d", adjustflag=_ADJUST_NONE, **query_kwargs
         )
         rows: list[list[str]] = []
         while result.next():
@@ -45,9 +70,6 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
     finally:
         bs.logout()
 
-    if not rows:  # delisted/unknown code or a query-level error → no data, so the caller falls back
-        return []
-    as_of, close = rows[-1][0], rows[-1][1]
     return [
         Reading(
             series=SERIES,
@@ -56,4 +78,6 @@ def fetch_live(code: str, *, fetched_at: str) -> list[Reading]:  # pragma: no co
             fetched_at=fetched_at,
             payload={"nav": float(close), "source": SOURCE},
         )
+        for as_of, close in rows
+        if since is None or str(as_of) > since
     ]

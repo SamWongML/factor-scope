@@ -21,6 +21,7 @@ from factor_scope.ingest import (
     prices,
     themes,
 )
+from factor_scope.ingest.base import EASTMONEY_KLINE, IngestError, _HostBreaker
 from factor_scope.store import Reading
 from tests.unit._akshare_fakes import FakeFrame, install_fake_akshare
 
@@ -62,6 +63,68 @@ def test_prices_fetch_live_falls_back_to_sina_when_eastmoney_history_refused(mon
     assert reading.payload == {"nav": 0.918, "source": "akshare"}  # still the akshare leg
 
 
+def test_prices_fetch_live_returns_the_whole_window_not_just_the_latest(monkeypatch) -> None:
+    # The trend/reversal/low-vol factors read the full stored NAV history; the price leg must store
+    # every bar it pulls, not just frame.iloc[-1], or the 200-day MA gate is blind on a cold start.
+    def em(**kwargs: object) -> FakeFrame:
+        return FakeFrame(
+            [
+                {"日期": "2026-06-14", "收盘": 0.910},
+                {"日期": "2026-06-15", "收盘": 0.915},
+                {"日期": "2026-06-16", "收盘": 0.918},
+            ]
+        )
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    readings = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")
+    assert [r.as_of for r in readings] == ["2026-06-14", "2026-06-15", "2026-06-16"]
+    assert readings[-1].payload == {"nav": 0.918, "source": "akshare"}
+
+
+def test_prices_incremental_requests_and_keeps_only_bars_after_the_watermark(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def em(**kwargs: object) -> FakeFrame:
+        captured.update(kwargs)
+        return FakeFrame(
+            [{"日期": "2026-06-15", "收盘": 0.915}, {"日期": "2026-06-16", "收盘": 0.918}]
+        )
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    readings = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z", since="2026-06-15")
+    assert captured["start_date"] == "20260616"  # the watermark + 1 day, EastMoney's YYYYMMDD
+    assert [r.as_of for r in readings] == ["2026-06-16"]  # only sessions past the watermark
+
+
+def test_prices_cold_seed_bounds_the_window_instead_of_full_history(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def em(**kwargs: object) -> FakeFrame:
+        captured.update(kwargs)
+        return FakeFrame([{"日期": "2026-06-16", "收盘": 0.918}])
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")  # no watermark → cold seed
+    # ~650 calendar days back (≈ 400 trading days), not EastMoney's 19700101 full-history default
+    assert captured["start_date"] != "19700101"
+    assert captured["start_date"].startswith("2024")
+
+
+def test_prices_sina_fallback_trims_full_history_to_the_seed_window(monkeypatch) -> None:
+    def em(**kwargs: object) -> FakeFrame:
+        raise ConnectionError("history host closed the connection")
+
+    def sina(symbol: str) -> FakeFrame:
+        # Sina has no date range — it serves the entire history, so the window is trimmed here.
+        return FakeFrame(
+            [{"date": "2019-01-02", "close": 0.5}, {"date": "2026-06-16", "close": 0.918}]
+        )
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    readings = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")
+    assert [r.as_of for r in readings] == ["2026-06-16"]  # the ancient bar is outside the window
+
+
 def test_prices_fetch_live_logs_loudly_when_it_falls_back_to_sina(monkeypatch, caplog) -> None:
     # A silent EastMoney→Sina swap would hide a persistently-blocked primary for weeks; the fallback
     # must log so the degradation is visible even though Sina covers the read.
@@ -75,6 +138,53 @@ def test_prices_fetch_live_logs_loudly_when_it_falls_back_to_sina(monkeypatch, c
     with caplog.at_level(logging.WARNING):
         prices.fetch_live("561010", fetched_at="t")
     assert any(r.levelno == logging.WARNING and "561010" in r.getMessage() for r in caplog.records)
+
+
+def test_prices_skips_eastmoney_while_the_breaker_is_open(monkeypatch) -> None:
+    # Once the host has refused enough funds in a row, stop spending retries on it — go straight to
+    # Sina for the rest of the run instead of re-hammering a blocking IP.
+    breaker = _HostBreaker(threshold=1)
+    breaker.record_failure(EASTMONEY_KLINE)  # tripped open
+    monkeypatch.setattr(prices, "host_breaker", breaker)
+
+    def em(**kwargs: object) -> FakeFrame:
+        raise AssertionError("EastMoney must be skipped while the breaker is open")
+
+    def sina(symbol: str) -> FakeFrame:
+        return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    reading = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")[0]
+    assert reading.payload == {"nav": 0.918, "source": "akshare"}  # served by Sina, host untouched
+
+
+def test_prices_records_a_breaker_failure_when_eastmoney_refuses(monkeypatch) -> None:
+    breaker = _HostBreaker(threshold=5)
+    monkeypatch.setattr(prices, "host_breaker", breaker)
+
+    def em(**kwargs: object) -> FakeFrame:
+        raise ConnectionError("history host closed the connection")
+
+    def sina(symbol: str) -> FakeFrame:
+        return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")
+    assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
+
+
+def test_prices_success_resets_the_breaker_streak(monkeypatch) -> None:
+    breaker = _HostBreaker(threshold=2)
+    breaker.record_failure(EASTMONEY_KLINE)  # one prior blip (streak 1, not yet open)
+    monkeypatch.setattr(prices, "host_breaker", breaker)
+
+    def em(**kwargs: object) -> FakeFrame:
+        return FakeFrame([{"日期": "2026-06-16", "收盘": 0.918}])
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")  # EastMoney answers
+    breaker.record_failure(EASTMONEY_KLINE)  # would be streak 2 (open) had the success not reset it
+    assert not breaker.is_open(EASTMONEY_KLINE)  # the answered call reset the streak to zero
 
 
 def test_fund_holdings_first_year_is_the_watermark_year_else_the_run_year() -> None:
@@ -138,8 +248,10 @@ class _FakeFilings:
         return self._filing
 
 
-def _install_fake_edgar(monkeypatch, *, requested: list[str]) -> None:
-    """Inject a network-free ``edgar`` module that records the requested form."""
+def _install_fake_edgar(
+    monkeypatch, *, requested: list[str], identities: list[str] | None = None
+) -> None:
+    """A network-free ``edgar`` module recording the requested form (and any set identity)."""
 
     def get_filings(form: str) -> _FakeFilings:
         requested.append(form)
@@ -156,8 +268,13 @@ def _install_fake_edgar(monkeypatch, *, requested: list[str]) -> None:
         def get_filings(self, form: str) -> _FakeFilings:
             return get_filings(form)
 
+    def set_identity(identity: str) -> None:
+        if identities is not None:
+            identities.append(identity)
+
     module = types.ModuleType("edgar")
     module.Company = _FakeCompany  # type: ignore[attr-defined]
+    module.set_identity = set_identity  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "edgar", module)
 
 
@@ -178,6 +295,17 @@ def test_edgar_fetch_live_supports_nport(monkeypatch) -> None:
     assert readings[0].key == "0000102909/APPLE INC"
     # pct_value (% of net assets) → fraction weight, so N-PORT holdings can be graph HOLDS edges
     assert readings[0].payload == {"filer": "0000102909", "holding": "APPLE INC", "weight": 0.075}
+
+
+def test_edgar_fetch_live_sets_the_resolved_identity(monkeypatch) -> None:
+    # The SEC refuses requests without a User-Agent identity; the adapter resolves EDGAR_IDENTITY
+    # (env-then-Keychain) and sets it on EdgarTools itself, so the launchd nightly is self-reliant.
+    monkeypatch.setenv("EDGAR_IDENTITY", "Jane Doe jane@x.com")
+    identities: list[str] = []
+    _install_fake_edgar(monkeypatch, requested=[], identities=identities)
+    edgar.fetch_live("0001067983", fetched_at="t")
+    # set before the pull, from the resolved credential
+    assert identities == ["Jane Doe jane@x.com"]
 
 
 def test_themes_keys_by_name_and_coerces_flags() -> None:
@@ -226,20 +354,31 @@ def _install_fake_baostock(monkeypatch, *, rows: list[list[str]], calls: list[di
     monkeypatch.setitem(sys.modules, "baostock", module)
 
 
-def test_baostock_fetch_live_returns_latest_nav(monkeypatch) -> None:
+def test_baostock_fetch_live_returns_the_window(monkeypatch) -> None:
     calls: list[dict] = []
     _install_fake_baostock(
         monkeypatch,
         rows=[["2026-06-04", "1.90"], ["2026-06-05", "1.92"]],
         calls=calls,
     )
-    readings = baostock.fetch_live("561010", fetched_at="t")
+    readings = baostock.fetch_live("561010", fetched_at="2026-06-05T22:00:00Z")
     assert calls[0]["code"] == "sh.561010"  # 5x ETF codes are Shanghai-listed
-    assert readings[0].series == "prices"  # a second source for the same prices series
-    assert readings[0].key == "561010"
-    assert readings[0].as_of == "2026-06-05"  # the latest disclosed bar, not the run date
+    assert [r.as_of for r in readings] == ["2026-06-04", "2026-06-05"]  # the whole window, not [-1]
+    assert all(r.series == "prices" and r.key == "561010" for r in readings)
     # provenance: every price reading records which source it came from
-    assert readings[0].payload == {"nav": 1.92, "source": "baostock"}
+    assert readings[-1].payload == {"nav": 1.92, "source": "baostock"}
+
+
+def test_baostock_fetch_live_keeps_only_bars_after_the_watermark(monkeypatch) -> None:
+    calls: list[dict] = []
+    _install_fake_baostock(
+        monkeypatch,
+        rows=[["2026-06-04", "1.90"], ["2026-06-05", "1.92"]],
+        calls=calls,
+    )
+    readings = baostock.fetch_live("561010", fetched_at="2026-06-05T22:00:00Z", since="2026-06-04")
+    assert calls[0]["start_date"] == "2026-06-05"  # the watermark + 1 day, Baostock's YYYY-MM-DD
+    assert [r.as_of for r in readings] == ["2026-06-05"]  # only sessions past the watermark
 
 
 def test_baostock_code_prefixes_shenzhen_for_1x(monkeypatch) -> None:
@@ -268,6 +407,174 @@ def test_baostock_fetch_live_returns_empty_when_no_rows(monkeypatch) -> None:
 
 def test_mootdx_tags_its_source() -> None:
     assert mootdx.SOURCE == "mootdx"  # the third price source carries its own provenance tag
+
+
+class _FakeBars:
+    """A pandas-free stand-in for a Mootdx ``client.bars`` daily frame (index=date, col=close)."""
+
+    def __init__(self, by_date: dict[str, float]) -> None:
+        self._by_date = by_date
+
+    @property
+    def empty(self) -> bool:
+        return not self._by_date
+
+    def iterrows(self):
+        for day, close in self._by_date.items():
+            yield day, {"close": close}
+
+
+def _install_fake_mootdx(
+    monkeypatch,
+    *,
+    bars: _FakeBars | None,
+    calls: list[dict],
+    factory_calls: list[dict] | None = None,
+    clients: list | None = None,
+    closes: list | None = None,
+    fail: bool = False,
+) -> None:
+    """Inject a network-free ``mootdx`` whose ``Quotes`` factory + client record each interaction.
+
+    Mirrors the hardened adapter's surface: ``mootdx.consts.HQ_HOSTS`` for server pinning, a
+    factory that records its ``server``/``bestip``/``timeout`` kwargs, a client exposing
+    ``.client.auto_retry`` (the library default the adapter flips off) and ``.close()``. ``bars``
+    is the frame returned; ``None`` models a silent server, ``fail=True`` a raising read.
+    """
+
+    package = types.ModuleType("mootdx")
+    quotes_mod = types.ModuleType("mootdx.quotes")
+    consts_mod = types.ModuleType("mootdx.consts")
+    consts_mod.HQ_HOSTS = [  # type: ignore[attr-defined]
+        ("fake-tdx-1", "127.0.0.1", 7709),
+        ("fake-tdx-2", "127.0.0.2", 7709),
+    ]
+
+    class _Api:
+        def __init__(self) -> None:
+            self.auto_retry = True  # mootdx's StdQuotes default — the adapter must disable it
+
+    class _Client:
+        def __init__(self) -> None:
+            self.client = _Api()
+            if clients is not None:
+                clients.append(self)
+
+        def bars(self, *, symbol: str, frequency: int, offset: int) -> _FakeBars | None:
+            calls.append({"symbol": symbol, "frequency": frequency, "offset": offset})
+            if fail:
+                raise ConnectionError("tdx server silent")
+            return bars
+
+        def close(self) -> None:
+            if closes is not None:
+                closes.append(True)
+
+    class _Quotes:
+        @staticmethod
+        def factory(*, market: str, server=None, bestip=None, timeout=None) -> _Client:
+            if factory_calls is not None:
+                factory_calls.append(
+                    {"market": market, "server": server, "bestip": bestip, "timeout": timeout}
+                )
+            return _Client()
+
+    quotes_mod.Quotes = _Quotes  # type: ignore[attr-defined]
+    package.quotes = quotes_mod  # type: ignore[attr-defined]
+    package.consts = consts_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mootdx", package)
+    monkeypatch.setitem(sys.modules, "mootdx.quotes", quotes_mod)
+    monkeypatch.setitem(sys.modules, "mootdx.consts", consts_mod)
+    # The pinned-server cache is module-level; reset it so each test picks from the fake host list.
+    monkeypatch.setattr(mootdx, "_server", None, raising=False)
+    monkeypatch.setattr(mootdx, "_server_index", 0, raising=False)
+
+
+def test_mootdx_fetch_live_returns_the_window(monkeypatch) -> None:
+    calls: list[dict] = []
+    _install_fake_mootdx(
+        monkeypatch, bars=_FakeBars({"2026-06-04": 0.97, "2026-06-05": 0.98}), calls=calls
+    )
+    readings = mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    assert [r.as_of for r in readings] == ["2026-06-04", "2026-06-05"]  # the window, not just [-1]
+    assert readings[-1].payload == {"nav": 0.98, "source": "mootdx"}
+    assert calls[0]["offset"] == 400  # a bounded window of recent bars, not one latest bar
+
+
+def test_mootdx_keeps_only_bars_after_the_watermark(monkeypatch) -> None:
+    _install_fake_mootdx(
+        monkeypatch, bars=_FakeBars({"2026-06-04": 0.97, "2026-06-05": 0.98}), calls=[]
+    )
+    readings = mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z", since="2026-06-04")
+    assert [r.as_of for r in readings] == ["2026-06-05"]  # only sessions past the watermark
+
+
+def test_mootdx_returns_empty_when_no_bars(monkeypatch) -> None:
+    # An unknown/delisted code yields an empty frame → no data, so the caller falls back.
+    _install_fake_mootdx(monkeypatch, bars=_FakeBars({}), calls=[])
+    assert mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z") == []
+
+
+def test_mootdx_pins_a_server_and_bounds_the_socket(monkeypatch) -> None:
+    # The leg pins a known TDX host (no per-call async server selection) and passes an explicit
+    # socket timeout, so a silent server can't wedge the read — the root of the live-ingest hang.
+    factory_calls: list[dict] = []
+    _install_fake_mootdx(
+        monkeypatch, bars=_FakeBars({"2026-06-05": 0.98}), calls=[], factory_calls=factory_calls
+    )
+    mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    assert factory_calls[0]["server"] == ("127.0.0.1", 7709)  # pinned from HQ_HOSTS[0], not probed
+    assert factory_calls[0]["bestip"] is False  # never trigger the server-selection probe
+    assert factory_calls[0]["timeout"] == mootdx._SOCKET_TIMEOUT_SECONDS  # a hard socket deadline
+
+
+def test_mootdx_reuses_one_pinned_server_across_funds(monkeypatch) -> None:
+    # The pin is cached: a second fund hits the same host, not a fresh selection per call.
+    factory_calls: list[dict] = []
+    _install_fake_mootdx(
+        monkeypatch, bars=_FakeBars({"2026-06-05": 0.98}), calls=[], factory_calls=factory_calls
+    )
+    mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    mootdx.fetch_live("510300", fetched_at="2026-06-05T22:00:00Z")
+    assert [c["server"] for c in factory_calls] == [("127.0.0.1", 7709), ("127.0.0.1", 7709)]
+
+
+def test_mootdx_disables_the_librarys_auto_retry(monkeypatch) -> None:
+    # mootdx hardcodes auto_retry=True; tdxpy then loops reconnect+resend against a half-dead host,
+    # multiplying the deadline. We own retries at the resilience boundary, so the library's is off.
+    clients: list = []
+    _install_fake_mootdx(
+        monkeypatch, bars=_FakeBars({"2026-06-05": 0.98}), calls=[], clients=clients
+    )
+    mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    assert clients[0].client.auto_retry is False
+
+
+def test_mootdx_closes_the_client(monkeypatch) -> None:
+    closes: list = []
+    _install_fake_mootdx(
+        monkeypatch, bars=_FakeBars({"2026-06-05": 0.98}), calls=[], closes=closes
+    )
+    mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    assert closes == [True]  # the per-call client is closed, not leaked
+
+
+def test_mootdx_raises_on_a_silent_server_and_repins(monkeypatch) -> None:
+    # A None frame (a failed/blocked call, distinct from an empty one) is raised — so _with_retries
+    # re-picks and _live_or_empty degrades — and the dead pin is dropped so the next try rotates.
+    _install_fake_mootdx(monkeypatch, bars=None, calls=[])
+    with pytest.raises(IngestError):
+        mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    assert mootdx._server is None  # dropped the dead pin
+    assert mootdx._server_index == 1  # advanced to the next candidate host
+
+
+def test_mootdx_rotates_to_the_next_host_after_a_failure(monkeypatch) -> None:
+    # After a failure drops the pin, the next pick is the next host in the list, not the same one.
+    _install_fake_mootdx(monkeypatch, bars=None, calls=[])
+    with pytest.raises(IngestError):
+        mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
+    assert mootdx._pinned_server() == ("127.0.0.2", 7709)  # HQ_HOSTS[1], the rotation target
 
 
 def _src(source: str, nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:

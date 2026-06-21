@@ -155,6 +155,17 @@ class Config:
     # to the SEC/CSSF NAV-error materiality baseline (0.5%); raise it per equity ETFs, lower it for
     # money-market funds. A same-day gap beyond it flags the reading (never kills the run).
     corroboration_tolerance: float = 0.005
+    # Max seconds to pause between sequential live per-fund calls to the rate-limited EastMoney
+    # host, jittered in ``[0, this]``. A small pace keeps the full-universe burst under the IP
+    # limiter that drops the connection (``RemoteDisconnected``) without lengthening the nightly run
+    # materially. Live-only — the offline cassette replay never sleeps. Set to 0 to disable pacing.
+    live_pacing_seconds: float = 0.5
+    # An overall wall-clock budget (seconds) for one live ingest gather — the run-level backstop
+    # above the per-read deadline, so no single wedged source (e.g. a silent TDX server on the
+    # Mootdx leg) can stall a nightly run indefinitely. Once exceeded, the per-fund/per-code loops
+    # stop and the partial-but-valid readings gathered so far still ship. None (default) is
+    # unbounded; the offline suite leaves it None, so the byte-for-byte artifact is unaffected.
+    ingest_deadline_seconds: float | None = None
     # Digestion judgment provider: "claude_code" (default — online) | "fake" (the offline stub).
     # Tracks ``offline_mode()`` like ``source``. DeepSeek is a chore model (off the judgment path),
     # not a judgment provider — see digest.get_provider.

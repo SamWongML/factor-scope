@@ -27,7 +27,7 @@ from factor_scope.ingest import (
     prices,
     trading_activity,
 )
-from factor_scope.ingest.base import IngestError
+from factor_scope.ingest.base import EASTMONEY_KLINE, IngestError, host_breaker
 from factor_scope.markets.ashare import AShareMarket
 from factor_scope.store import Reading
 
@@ -39,10 +39,13 @@ _UNIVERSE = (("561010", True), ("588200", True), ("000001", False))
 
 
 def _stub_adapters(monkeypatch) -> None:
+    # A fully-configured live host with the network stubbed out: the credential preflight (run by
+    # pipeline.ingest) needs the required keys present even though the feeds themselves are faked.
+    monkeypatch.setenv("FRED_API_KEY", "stub-key")
     monkeypatch.setattr(
         prices,
         "fetch_live",
-        lambda key, *, fetched_at: [
+        lambda key, *, fetched_at, since=None: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.0})
         ],
@@ -50,7 +53,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         baostock,
         "fetch_live",
-        lambda key, *, fetched_at: [
+        lambda key, *, fetched_at, since=None: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.0})  # corroborates the AkShare read
         ],
@@ -58,7 +61,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         mootdx,
         "fetch_live",
-        lambda key, *, fetched_at: [
+        lambda key, *, fetched_at, since=None: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.0})  # the third source also corroborates
         ],
@@ -189,6 +192,44 @@ def test_ingest_discloses_a_fund_the_live_feed_dropped(monkeypatch, tmp_path) ->
     assert night_two["561010"].payload["delisting"] == ""  # the refreshed funds are untouched
 
 
+def test_gather_live_trims_dead_funds_but_fetches_core_and_probation(monkeypatch) -> None:
+    # The universe tier caps the per-fund burst that trips the history host: a seasoned, sub-floor,
+    # untraded zombie is recorded in the universe/scale reads but never deep-fetched, while core and
+    # the uncrowded probation funds (the discovery candidates) still earn their per-fund legs.
+    _stub_adapters(monkeypatch)
+    tiered = (("561010", True), ("159001", True), ("159002", True))  # core, probation, dead
+    monkeypatch.setattr(
+        fund_universe,
+        "fetch_live",
+        lambda *, as_of, fetched_at: [
+            Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
+                    payload={"name": code, "type": "ETF", "on_exchange": on_ex,
+                             "inception": "2021-01-20", "delisting": "", "fee": None,
+                             "tracking_error": None, "top10_weight": None, "valid": False})
+            for code, on_ex in tiered
+        ],
+    )
+    monkeypatch.setattr(
+        etf_scale,
+        "fetch_live",
+        lambda *, fetched_at: [
+            Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
+                    payload={"exchange": "sse", "aum": 68.0, "shares": 40.0, "amount": 3.0}),
+            Reading(series="etf_scale", key="159001", as_of="2026-05-31", fetched_at=fetched_at,
+                    payload={"exchange": "szse", "aum": 3.0, "shares": 2.0, "amount": 1.0}),
+            Reading(series="etf_scale", key="159002", as_of="2026-05-31", fetched_at=fetched_at,
+                    payload={"exchange": "szse", "aum": 0.2, "shares": 0.1, "amount": 0.0}),
+        ],
+    )
+    readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    activity = {r.key for r in readings if r.series == "trading_activity"}
+    assert activity == {"561010", "159001"}  # the dead 159002 trimmed; discovery candidates kept
+    priced = {r.key for r in readings if r.series == "prices"}
+    assert "159002" not in priced  # nor does the zombie pay the deep-price (push2his) pull
+    assert {"561010", "159001"} <= priced
+
+
 def test_gather_live_pulls_each_configured_edgar_filer(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     config = Config(source="live", edgar_ciks=("0001067983", "0000102909"))
@@ -205,6 +246,17 @@ def test_gather_live_pulls_no_edgar_filers_by_default(monkeypatch) -> None:
     _stub_adapters(monkeypatch)
     readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
     assert not [r for r in readings if r.series == "edgar"]
+
+
+def test_gather_resets_the_host_breaker_at_the_start_of_each_run(monkeypatch) -> None:
+    # The breaker is run-scoped: a previous night's EastMoney block must not leak into tonight and
+    # make every fund skip the host. Each gather resets it at the top.
+    _stub_adapters(monkeypatch)
+    for _ in range(10):
+        host_breaker.record_failure(EASTMONEY_KLINE)  # a prior run left it tripped open
+    assert host_breaker.is_open(EASTMONEY_KLINE)
+    AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+    assert not host_breaker.is_open(EASTMONEY_KLINE)  # this run reset it before pulling
 
 
 def test_live_gather_stamps_a_real_fetched_at_not_the_fixtures_derived_one(monkeypatch) -> None:
@@ -292,7 +344,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
     _stub_adapters(monkeypatch)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)  # don't really back off in the test
 
-    def _akshare_down(key, *, fetched_at):
+    def _akshare_down(key, *, fetched_at, since=None):
         raise RuntimeError("AkShare IP-blocked")
 
     monkeypatch.setattr(prices, "fetch_live", _akshare_down)
@@ -300,7 +352,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
         monkeypatch.setattr(
             source,
             "fetch_live",
-            lambda key, *, fetched_at: [
+            lambda key, *, fetched_at, since=None: [
                 Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                         payload={"nav": 2.0})
             ],
@@ -322,7 +374,7 @@ def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch, capl
     monkeypatch.setattr(
         baostock,
         "fetch_live",
-        lambda key, *, fetched_at: [
+        lambda key, *, fetched_at, since=None: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 99.0 if key == "561010" else 1.0})
         ],
@@ -344,7 +396,7 @@ def test_gather_live_trips_circuit_breaker_on_systemic_divergence(monkeypatch) -
     monkeypatch.setattr(
         baostock,
         "fetch_live",
-        lambda key, *, fetched_at: [
+        lambda key, *, fetched_at, since=None: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 99.0})
         ],
@@ -360,7 +412,7 @@ def test_gather_live_respects_configured_tolerance(monkeypatch) -> None:
     monkeypatch.setattr(
         baostock,
         "fetch_live",
-        lambda key, *, fetched_at: [
+        lambda key, *, fetched_at, since=None: [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.02})
         ],
@@ -450,6 +502,52 @@ def test_live_or_empty_forwards_extra_kwargs_to_the_fetch() -> None:
     assert seen == {"code": "561010", "fetched_at": "t", "since": "2026-06-05"}
 
 
+def test_ingest_deadline_none_is_unbounded() -> None:
+    # No budget set → the run is never cut short. This is the offline/test default, so the suite and
+    # the golden artifact are unaffected by the wall-clock backstop.
+    assert ingest.IngestDeadline(None).exceeded() is False
+
+
+def test_ingest_deadline_trips_once_the_budget_elapses() -> None:
+    ticks = iter([100.0, 100.5, 102.0])  # start, a check within 1s, a check past it
+    deadline = ingest.IngestDeadline(1.0, clock=lambda: next(ticks))
+    assert deadline.exceeded() is False  # 0.5s elapsed < 1s budget
+    assert deadline.exceeded() is True  # 2.0s elapsed ≥ 1s budget
+
+
+def test_prices_gather_stops_early_when_the_deadline_trips(monkeypatch, caplog) -> None:
+    # One wedged leg must not stall a nightly run: with a wall-clock budget the per-code price loop
+    # stops once the deadline trips, shipping a partial-but-valid set rather than running unbounded.
+    from factor_scope.markets import ashare
+
+    class _Feed:
+        def price_sources(self, code, *, fetched_at, since=None):
+            bar = Reading(
+                series=prices.SERIES,
+                key=code,
+                as_of="2026-06-05",
+                fetched_at=fetched_at,
+                payload={"nav": 1.0, "source": prices.SOURCE},
+            )
+            return [[bar], [], []]
+
+    monkeypatch.setattr(ashare, "get_feed", lambda _config: _Feed())
+    ticks = iter([0.0, 0.4, 2.0])  # start, first code within budget, second code past it
+    deadline = ingest.IngestDeadline(1.0, clock=lambda: next(ticks))
+
+    with caplog.at_level(logging.WARNING):
+        out = ashare.ASharePrices().gather(
+            Config(source="live"),
+            ["000001", "000002"],
+            as_of="2026-06-05",
+            fetched_at="t",
+            required=[],
+            deadline=deadline,
+        )
+    assert {r.key for r in out} == {"000001"}  # only the first; the second was past the deadline
+    assert any("budget" in r.message.lower() for r in caplog.records)
+
+
 def test_gather_live_degrades_a_failing_per_fund_leg(monkeypatch, caplog) -> None:
     # A per-fund factor leg that raises (a transient outage) must degrade to no reading for that
     # fund — its factor falls to invalid — not abort the whole universe loop. The failure is logged.
@@ -466,3 +564,117 @@ def test_gather_live_degrades_a_failing_per_fund_leg(monkeypatch, caplog) -> Non
     assert {r.key for r in readings if r.series == "fund_holdings"}  # the loop was not aborted
     assert not [r for r in readings if r.series == "fundamentals"]  # the failing leg → no reading
     assert any("fundamentals" in rec.getMessage() for rec in caplog.records)
+
+
+def test_gather_live_degrades_a_failing_macro_series(monkeypatch, caplog) -> None:
+    # The book-wide macro dial runs behind the same resilience boundary as the per-fund legs: one
+    # FRED series raising (a transient outage) degrades just that series to no reading, not the run.
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)  # no real backoff between retries
+
+    def flaky(series_id: str, *, fetched_at: str) -> list[Reading]:
+        if series_id == "WALCL":
+            raise ConnectionError("FRED endpoint down")
+        return [Reading(series="fred", key=series_id, as_of="2026-06-05", fetched_at=fetched_at,
+                        payload={"series_id": series_id, "value": 1.0})]
+
+    monkeypatch.setattr(fred, "fetch_live", flaky)
+    with caplog.at_level(logging.WARNING):
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    assert {r.key for r in readings if r.series == "fund_holdings"}  # the run was not aborted
+    macro = {r.key for r in readings if r.series == "fred"}
+    assert "WALCL" not in macro  # the failing series degraded to no reading
+    assert "DGS10" in macro  # the surviving series still landed
+    assert any("WALCL" in rec.getMessage() for rec in caplog.records)
+
+
+def test_gather_live_degrades_a_missing_fred_api_key(monkeypatch, caplog) -> None:
+    # The exact Issue #2 scenario: no FRED_API_KEY → fredapi raises ValueError. The macro dial must
+    # degrade to no reading (factor invalid), not abort the run after the expensive universe pull.
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)
+
+    def no_key(series_id: str, *, fetched_at: str) -> list[Reading]:
+        raise ValueError("You need to set a valid API key.")  # mirrors fredapi with no key
+
+    monkeypatch.setattr(fred, "fetch_live", no_key)
+    with caplog.at_level(logging.WARNING):
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    assert {r.key for r in readings if r.series == "fund_holdings"}  # the run completed
+    assert not [r for r in readings if r.series == "fred"]  # the macro dial degraded
+    assert any("fred" in rec.getMessage().lower() for rec in caplog.records)
+
+
+def test_gather_live_degrades_a_failing_demand_leg(monkeypatch, caplog) -> None:
+    # The keyless, book-wide end-demand dial must degrade like the others when AkShare blocks it —
+    # exercising the keyless-adapter shim end-to-end — rather than aborting the run.
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)
+
+    def blocked(*, fetched_at: str) -> list[Reading]:
+        raise RuntimeError("AkShare blocked")
+
+    monkeypatch.setattr(demand, "fetch_live", blocked)
+    with caplog.at_level(logging.WARNING):
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    assert {r.key for r in readings if r.series == "fund_universe"}  # the run completed
+    assert not [r for r in readings if r.series == "demand"]  # the demand dial degraded
+    assert any("demand" in rec.getMessage() for rec in caplog.records)
+
+
+def test_gather_live_degrades_a_failing_edgar_filer(monkeypatch, caplog) -> None:
+    # One EDGAR filer raising must degrade just that CIK — surviving filers' holdings still land,
+    # not lost because one CIK in the loop aborted the whole gather.
+    _stub_adapters(monkeypatch)
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)
+
+    def flaky(cik: str, *, form: str = "13F-HR", fetched_at: str) -> list[Reading]:
+        if cik == "0001067983":
+            raise TimeoutError("EDGAR slow")
+        return [Reading(series="edgar", key=f"{cik}/COHR", as_of="2026-03-31",
+                        fetched_at=fetched_at,
+                        payload={"filer": cik, "holding": "COHR", "weight": 0.05, "form": form})]
+
+    monkeypatch.setattr(edgar, "fetch_live", flaky)
+    config = Config(source="live", edgar_ciks=("0001067983", "0000102909"))
+    with caplog.at_level(logging.WARNING):
+        readings = AShareMarket().gather(config, as_of="2026-06-05")
+
+    filers = {r.payload["filer"] for r in readings if r.series == "edgar"}
+    assert filers == {"0000102909"}  # the failing CIK degraded; the surviving one still landed
+    assert any("0001067983" in rec.getMessage() for rec in caplog.records)
+
+
+def test_ingest_preflight_fails_before_gather(monkeypatch, tmp_path) -> None:
+    # The preflight runs inside pipeline.ingest before gather, so a missing key fails in seconds —
+    # never after the multi-hour universe pull. Inject a market whose gather must not run.
+    from factor_scope.markets.ashare import CredentialError
+    from factor_scope.pipeline import ingest as nightly_ingest
+
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+
+    class _ExplodingMarket:
+        name = "ashare"
+
+        def gather(self, config, *, as_of, store=None):
+            raise AssertionError("gather must not run when the preflight fails")
+
+    paths = {"store_path": tmp_path / "s.duckdb", "graph_path": tmp_path / "g.ladybug"}
+    with pytest.raises(CredentialError, match="FRED_API_KEY"):
+        nightly_ingest(
+            Config(source="live", as_of="2026-06-05", **paths), market=_ExplodingMarket()
+        )
+
+
+def test_ingest_does_not_preflight_credentials_when_offline(monkeypatch, tmp_path) -> None:
+    # The preflight is gated on source=="live"; the forced-offline suite (fixtures) must never trip
+    # it even with no FRED_API_KEY set — otherwise the whole offline suite would break.
+    from factor_scope.pipeline import ingest as nightly_ingest
+
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+    paths = {"store_path": tmp_path / "s.duckdb", "graph_path": tmp_path / "g.ladybug"}
+    n = nightly_ingest(Config(source="fixtures", as_of="2026-06-05", **paths))
+    assert n > 0  # the offline ingest ran normally, no CredentialError raised

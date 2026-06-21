@@ -14,6 +14,7 @@ from datetime import date
 import pytest
 
 from factor_scope.ingest import trading_activity
+from factor_scope.ingest.base import EASTMONEY_KLINE, _HostBreaker
 from tests.unit._akshare_fakes import FakeFrame, install_fake_akshare
 
 pytestmark = pytest.mark.unit
@@ -149,6 +150,45 @@ def test_spot_fallback_yields_no_reading_for_a_fund_absent_from_the_board(monkey
 
     install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
     assert trading_activity.fetch_live("561010", fetched_at=FETCHED_AT) == []
+    trading_activity._spot_snapshot.cache_clear()
+
+
+def test_trading_activity_skips_eastmoney_while_the_breaker_is_open(monkeypatch) -> None:
+    # The shared host breaker spans the activity leg too: once tripped, go straight to the spot
+    # board for the rest of the run rather than re-hitting a blocking IP per fund.
+    trading_activity._spot_snapshot.cache_clear()
+    breaker = _HostBreaker(threshold=1)
+    breaker.record_failure(EASTMONEY_KLINE)  # tripped open
+    monkeypatch.setattr(trading_activity, "host_breaker", breaker)
+
+    def em(**kwargs: object) -> FakeFrame:
+        raise AssertionError("EastMoney must be skipped while the breaker is open")
+
+    def spot() -> FakeFrame:
+        rows = [{"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15, "成交额": 1.0}]
+        return FakeFrame(rows)
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
+    reading = trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)[0]
+    assert reading.payload["provisional"] is True  # served by the spot board, the host untouched
+    trading_activity._spot_snapshot.cache_clear()
+
+
+def test_trading_activity_records_a_breaker_failure_when_eastmoney_refuses(monkeypatch) -> None:
+    trading_activity._spot_snapshot.cache_clear()
+    breaker = _HostBreaker(threshold=5)
+    monkeypatch.setattr(trading_activity, "host_breaker", breaker)
+
+    def em(**kwargs: object) -> FakeFrame:
+        raise ConnectionError("history host closed the connection")
+
+    def spot() -> FakeFrame:
+        rows = [{"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15, "成交额": 1.0}]
+        return FakeFrame(rows)
+
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
+    trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)
+    assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
     trading_activity._spot_snapshot.cache_clear()
 
 

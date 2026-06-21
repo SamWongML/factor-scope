@@ -130,6 +130,13 @@ def ingest(
         "--hot-window-days",
         help="How many days of readings stay hot in the DuckDB file before tiering to --cold-dir.",
     ),
+    deadline: float | None = typer.Option(
+        None,
+        "--deadline",
+        help="An overall wall-clock budget (seconds) for the live gather; once exceeded the "
+        "per-fund/per-code loops stop with partial-but-valid readings persisted, so a wedged "
+        "source can't stall the run. Unset = unbounded.",
+    ),
 ) -> None:
     """Fill the point-in-time store + connection graph from a source, so `run` can read them."""
 
@@ -141,6 +148,7 @@ def ingest(
         graph_path=graph_path,
         cold_dir=cold_dir,
         hot_window_days=hot_window_days,
+        ingest_deadline_seconds=deadline,
     )
     n = ingest_pipeline(config)
     typer.echo(f"✓ appended {n} readings to {store_path}; built graph at {graph_path}", err=True)
@@ -297,6 +305,13 @@ def nightly(
         help="A monthly USD ceiling across all model spend; over it, the run throttles to a "
         "partial-but-valid artifact. Unset = unlimited.",
     ),
+    deadline: float | None = typer.Option(
+        None,
+        "--deadline",
+        help="An overall wall-clock budget (seconds) for the live ingest gather; once exceeded the "
+        "per-fund/per-code loops stop with a partial-but-valid artifact, so a wedged source can't "
+        "stall the nightly run. Unset = unbounded.",
+    ),
     provider: str = typer.Option(
         "claude_code", help="Digestion judgment provider: claude_code (default) | fake (offline)."
     ),
@@ -327,6 +342,7 @@ def nightly(
         log_path=log_path,
         spend_path=spend_path,
         monthly_budget_usd=monthly_budget,
+        ingest_deadline_seconds=deadline,
         provider="fake" if is_offline else provider,
     )
     dash, record = nightly_pipeline(config)
@@ -416,14 +432,6 @@ def schedule(
     stderr_path: Path = typer.Option(
         Path("out") / "nightly.err.log", help="Where the job's stderr is appended."
     ),
-    env: list[str] = typer.Option(
-        [],
-        "--env",
-        help="KEY=VALUE to put in the scheduled job's environment (repeatable; a missing '=' or "
-        "empty VALUE is rejected). The live source keys (e.g. FRED_API_KEY) reach the job only "
-        "this way — launchd/cron source no shell rc files. On launchd these become "
-        "EnvironmentVariables; in cron they prefix the command, shell-quoted.",
-    ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Write the rendered config here instead of stdout."
     ),
@@ -431,10 +439,10 @@ def schedule(
     """Emit the scheduler config for the nightly job — a launchd plist (default) or a cron line.
 
     The job's executable is baked in by absolute path — launchd and cron run with a minimal
-    ``PATH`` — and ``--env KEY=VALUE`` injects the live source keys into its environment, the only
-    way they reach the job, which sources no shell rc files. Review the output, then install the
-    plist under ``~/Library/LaunchAgents`` and ``launchctl load`` it, or add the cron line to your
-    crontab. See ``docs/ops/RUNBOOK.md``.
+    ``PATH`` — and the live source keys (``FRED_API_KEY`` / ``EDGAR_IDENTITY``) come from the macOS
+    Keychain at runtime, so no secret is rendered into the config. Review the output, then install
+    the plist under ``~/Library/LaunchAgents`` and ``launchctl load`` it, or add the cron line to
+    your crontab. See ``docs/ops/RUNBOOK.md``.
     """
 
     from factor_scope.schedule import (
@@ -462,13 +470,6 @@ def schedule(
         )
     executable = str(Path(found).resolve())
 
-    environment: dict[str, str] = {}
-    for item in env:
-        key, sep, value = item.partition("=")
-        if not sep or not key or not value:
-            raise typer.BadParameter(f"--env must be KEY=VALUE; got {item!r}")
-        environment[key] = value
-
     spec = ScheduleSpec(
         label=label,
         program_arguments=(executable, *program[1:]),
@@ -477,7 +478,6 @@ def schedule(
         working_directory=working_dir.resolve(),
         stdout_path=stdout_path,
         stderr_path=stderr_path,
-        environment=environment or None,
     )
     if kind == "cron":
         text = render_cron_line(spec)

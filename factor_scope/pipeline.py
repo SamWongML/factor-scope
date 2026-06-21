@@ -83,6 +83,7 @@ from factor_scope.ingest import textstream
 from factor_scope.ingest.base import fetched_at_for
 from factor_scope.ingest.fund_universe import delisting_disclosures, still_listed
 from factor_scope.markets import Market, get_market
+from factor_scope.markets.ashare import preflight_live_credentials
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
 from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
@@ -169,6 +170,10 @@ def _resolve_market(config: Config, market: Market | None) -> Market:
 def ingest(config: Config, *, market: Market | None = None) -> int:
     """Fill the store + connection graph from the source. Returns the number of rows appended."""
 
+    if config.source == "live":
+        # Fail fast on a missing required credential — before the expensive universe/price pull —
+        # rather than discovering it only after a multi-hour run leaves a dial degraded.
+        preflight_live_credentials(config)
     as_of = _resolve_as_of(config)
     mkt = _resolve_market(config, market)
     store = _open_store(config)

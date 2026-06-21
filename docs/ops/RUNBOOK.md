@@ -150,10 +150,71 @@ make live-check    # FACTOR_SCOPE_LIVE=1 live smoke suite + a real `factor-scope
 hits each source and asserts its **full payload schema** — keys, types, plausible ranges — so drift
 fails here loudly instead of silently feeding the artifact. Run it on the Mac-mini host: several CN
 feeds geo-block cloud runners, so a GitHub Actions live canary is unreliable and intentionally not
-wired up. The `fred` and `edgar` legs need their credentials set first (`FRED_API_KEY` and an EDGAR
-identity, e.g. `EDGARTOOLS_IDENTITY="you you@example.com"`); without them those two legs are the only
-ones that can't run. A fund with no tracked-index mapping has no valuation read and reads
-`valid=False` — expected, not a failure.
+wired up. The `fred` and `edgar` legs need their credentials first (`FRED_API_KEY` and an EDGAR
+identity `EDGAR_IDENTITY="you you@example.com"`) — store them in the **Keychain** (below), and both
+`make live-check` and the launchd nightly resolve them at runtime. A live `ingest`/`nightly`
+**preflights** these before the universe pull and **fails fast in seconds** if `FRED_API_KEY` is
+unset (or `EDGAR_IDENTITY` is unset while `edgar_ciks` is configured) — a permanent operator error
+caught early, not after a multi-hour run. A *transient* outage on either feed instead degrades only
+that leg to no reading (factor `valid=False`) and the run continues. A fund with no tracked-index
+mapping has no valuation read and reads `valid=False` — expected, not a failure.
+
+### Credentials (macOS Keychain — the single store live-check and the nightly share)
+
+The two live keys are resolved **env first, then the macOS login Keychain** (service `factor-scope`,
+account = the variable name; see `factor_scope/credentials.py`). This is the one place that works for
+*both* contexts: an interactive `make live-check` inherits an exported var from the shell, but the
+**launchd nightly sources no shell rc at all** (not `.zshrc`, not even `.zshenv`), so a dotfile export
+never reaches it. Storing the secret in the Keychain — read at runtime — keeps it out of plaintext
+dotfiles and out of the plist, and both contexts resolve it identically. Store each once:
+
+```bash
+security add-generic-password -A -s factor-scope -a FRED_API_KEY  -w 'your-fred-key'
+security add-generic-password -A -s factor-scope -a EDGAR_IDENTITY -w 'You you@example.com'  # only if edgar_ciks is set
+```
+
+`-A` lets the local `security` binary read the item without an ACL prompt — required for the
+non-interactive nightly, acceptable on a dedicated single-user host. Update a value by re-running with
+`-U`. With the keys in the Keychain you can **remove them from `.zshrc`** — nothing else needs them.
+
+### Running live from inside China (OpenClash / a transparent proxy)
+
+From inside China the feeds split into two families that need **opposite** routing, and a single
+global proxy can't serve both. With a transparent, rules-based proxy (OpenClash on the gateway) the
+host sets no proxy env vars; every connection is routed DIRECT or through the overseas node **by
+domain/GEOIP rule** — so the app needs no proxy configuration, only a *complete* ruleset. The legs:
+
+| Feed (adapter) | Transport · AkShare fn | Host(s) | Route |
+|---|---|---|---|
+| prices · trading_activity · etf_scale · fund_holdings · fund_universe | `requests` · `fund_etf_hist_em` / `fund_etf_spot_em` / `fund_portfolio_hold_em` / `fund_name_em` / `fund_exchange_rank_em` | `*.eastmoney.com`, `1234567.com.cn`, `*.sina.com.cn` | **DIRECT** |
+| fundamentals | `requests` · `stock_zh_index_value_csindex` | `csindex.com.cn` | **DIRECT** |
+| demand | `requests` · `macro_china_industrial_production_yoy` | eastmoney datacenter / NBS / sina / jin10 mirrors | **DIRECT** |
+| prices x-check (Baostock) | raw TCP `:10030` | `baostock.com` (+ its IP) | **DIRECT** |
+| prices x-check (Mootdx/pytdx) | raw TCP `:7709`, `select_best_ip` | **bare CN IPs** + `tdx.*.com.cn` | **DIRECT** |
+| fred | `urllib` | `api.stlouisfed.org` | **proxy node** |
+| edgar | `httpx` | `www.sec.gov`, `efts.sec.gov`, `data.sec.gov` | **proxy node** |
+
+The CN HTTP feeds all sit under domains in `geosite:cn`; the overseas legs fall through to the node.
+The one trap is the **raw-socket** price cross-checks: Mootdx probes *bare* CN IPs (no domain for a
+`DOMAIN-SUFFIX` rule to match) and Baostock connects by IP too, so they need a **`GEOIP,CN,DIRECT`**
+rule — without it `test_mootdx_live_smoke` fails (Mootdx going dark is non-fatal for a real run,
+which reconciles prices from AkShare + Baostock, but the canary flags it). A working ruleset, ordered
+first-match-wins:
+
+```yaml
+- GEOIP,CN,DIRECT                       # raw-socket CN feeds (Mootdx bare IPs, Baostock) — no domain to match
+- DOMAIN-SUFFIX,baostock.com,DIRECT     # belt-and-suspenders for domains geosite:cn may miss on a cold load
+- DOMAIN-SUFFIX,csindex.com.cn,DIRECT
+- DOMAIN-SUFFIX,eastmoney.com,DIRECT
+- DOMAIN-SUFFIX,1234567.com.cn,DIRECT
+- DOMAIN-SUFFIX,sina.com.cn,DIRECT
+- RULE-SET,cn,DIRECT                    # geosite:cn — the primary CN lever
+# FRED (stlouisfed.org) and SEC (sec.gov) fall through to the overseas node via the existing catch-all
+```
+
+Read a `make live-check` failure as a routing diagnosis: a red CN smoke test ⇒ that host isn't going
+DIRECT (a missing rule, or `GEOIP,CN,DIRECT` for Mootdx); a FRED/EDGAR failure ⇒ the node isn't
+reaching the overseas host, or the Keychain entry is missing/locked.
 
 ## Scheduling
 
@@ -164,35 +225,22 @@ installing). It is **not** a daemon: it fires the one-shot job once a day.
 
 ```bash
 factor-scope schedule --hour 22 --minute 0 --working-dir "$PWD" \
-  --env FRED_API_KEY="$FRED_API_KEY" \
   -o ~/Library/LaunchAgents/com.factor-scope.nightly.plist
 launchctl load ~/Library/LaunchAgents/com.factor-scope.nightly.plist   # enable
 launchctl start com.factor-scope.nightly                               # optional: run now
 launchctl unload ~/Library/LaunchAgents/com.factor-scope.nightly.plist # disable
 ```
 
-The plist sets `RunAtLoad=false` (a scheduled batch, not a service) and `StartCalendarInterval` to
-the given hour/minute. 22:00 local is the default — after the close, matching the artifact's
-`generated_at` stamp. `factor-scope` is baked in by **absolute path** (resolved at render time), so
-launchd's minimal `PATH` finds it.
+The job resolves `FRED_API_KEY` / `EDGAR_IDENTITY` from the **Keychain** at runtime (above), so no
+secret is baked into the plist. The plist sets `RunAtLoad=false` (a scheduled batch, not a service)
+and `StartCalendarInterval` to the given hour/minute. 22:00 local is the default — after the close,
+matching the artifact's `generated_at` stamp. `factor-scope` is baked in by **absolute path**
+(resolved at render time), so launchd's minimal `PATH` finds it.
 
-### Linux — cron
-
-```bash
-factor-scope schedule --kind cron --hour 22 --minute 0 --working-dir "$PWD" \
-  --env FRED_API_KEY="$FRED_API_KEY"
-# → 0 22 * * * cd <dir> && FRED_API_KEY=… /abs/path/factor-scope nightly >> out/nightly.out.log 2>> out/nightly.err.log
-# add that line with: crontab -e
-```
-
-The scheduled job is **live** (online by default) and **sources no shell rc files** — neither
-launchd nor cron read `~/.zshrc` (it is interactive-only) or `~/.zshenv`, so an exported key the
-nightly host can see at the terminal does **not** reach the job. Supply each source API key (e.g.
-`FRED_API_KEY`) with `--env KEY=VALUE` (repeatable): on launchd it lands in the plist's
-`EnvironmentVariables`, in cron it prefixes the command inline (shell-quoted, so a value with a
-space like the EDGAR identity stays one token). A missing key fails loudly — `--env KEY=` (e.g. an
-unset `"$FRED_API_KEY"` expanding to empty) is rejected, not baked in as an empty value. For a
-fixtures-only dry run, add `--offline` to the generated command.
+The scheduled job is **live** (online by default) and **sources no shell rc files** — launchd does
+not read `~/.zshrc` (it is interactive-only) or `~/.zshenv`, so an exported key the host can see at
+the terminal does **not** reach the job; the live keys come from the **Keychain** at runtime (above)
+instead. For a fixtures-only dry run, add `--offline` to the generated command.
 
 A scheduled live job runs with no `--as-of`, so it reasons as-of the **run date** — the host's
 **local** date (resolved once per run and frozen, so a multi-hour pull that crosses midnight stays

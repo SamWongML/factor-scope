@@ -12,11 +12,37 @@ from __future__ import annotations
 import csv
 import io
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 
 class IngestError(ValueError):
     """A source row could not be parsed into a Reading."""
+
+
+def day_after(since: str) -> date:
+    """The day after an incremental watermark — the first session a re-pull should request.
+
+    The per-fund time series are watermarked: a re-pull asks the source for only sessions strictly
+    newer than the latest one stored, so the multi-year history is fetched once and each later night
+    pulls only the new bars. Adapters format this for their own backend (AkShare/EastMoney want
+    ``YYYYMMDD``, Baostock wants ``YYYY-MM-DD``).
+    """
+
+    return date.fromisoformat(since) + timedelta(days=1)
+
+
+def run_date(fetched_at: str) -> date | None:
+    """The calendar date of a live ``fetched_at`` stamp, or ``None`` if it is not a real date.
+
+    Live pulls stamp the wall-clock instant; the cold-start seed window is measured back from this
+    run date. Unit fakes pass a sentinel (``"t"``) rather than a timestamp — those degrade to no
+    bounded seed (the adapter falls back to its backend's default range) rather than raising.
+    """
+
+    try:
+        return date.fromisoformat(fetched_at[:10])
+    except ValueError:
+        return None
 
 
 def fetched_at_for(as_of: str) -> str:
@@ -38,6 +64,62 @@ def fetched_at_now() -> str:
     """
 
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _HostBreaker:
+    """A run-scoped circuit breaker: once a host refuses N times in a row, callers skip it.
+
+    The EastMoney K-line host blocks the IP under a sustained burst and stays blocked for a long,
+    undocumented cooldown; once it starts refusing there is no point spending three retries × the
+    wall-clock deadline on every remaining fund. After ``threshold`` consecutive failures the host
+    is *open* and the price/activity adapters route straight to their fallback (Sina / spot board)
+    for the rest of the run; a single success closes it (the cooldown may pass mid-run). State is
+    per run — :meth:`reset` is called at the top of each market gather.
+    """
+
+    def __init__(self, threshold: int = 5) -> None:
+        self._threshold = threshold
+        self._consecutive: dict[str, int] = {}
+        self._failures: dict[str, int] = {}
+        self._open: set[str] = set()
+
+    def is_open(self, host: str) -> bool:
+        """Has ``host`` tripped open — should callers skip it and go straight to the fallback?"""
+
+        return host in self._open
+
+    def record_success(self, host: str) -> None:
+        """A reachable host: clear its failure streak and close it back."""
+
+        self._consecutive[host] = 0
+        self._open.discard(host)
+
+    def record_failure(self, host: str) -> None:
+        """A refusal: extend the streak (and the run total), tripping open at the threshold."""
+
+        self._failures[host] = self._failures.get(host, 0) + 1
+        streak = self._consecutive.get(host, 0) + 1
+        self._consecutive[host] = streak
+        if streak >= self._threshold:
+            self._open.add(host)
+
+    def failures(self, host: str) -> int:
+        """Total refusals from ``host`` this run — the run-level alarm's count."""
+
+        return self._failures.get(host, 0)
+
+    def reset(self) -> None:
+        """Clear all run-scoped state — called at the top of each market gather."""
+
+        self._consecutive.clear()
+        self._failures.clear()
+        self._open.clear()
+
+
+# The per-fund K-line host AkShare's ``fund_etf_hist_em`` contacts (prices + trading activity). One
+# shared breaker spans both legs because they hit the same IP — a block on one is a block on both.
+EASTMONEY_KLINE = "push2his.eastmoney.com"
+host_breaker = _HostBreaker()
 
 
 def read_rows(
