@@ -515,6 +515,36 @@ def test_ingest_deadline_trips_once_the_budget_elapses() -> None:
     assert deadline.exceeded() is True  # 2.0s elapsed ≥ 1s budget
 
 
+def test_ingest_deadline_zero_or_negative_is_unbounded() -> None:
+    # 0/negative means "no cap" (mirroring live_pacing_seconds's "set to 0 to disable"), not "stop
+    # immediately" — so `--deadline 0` can't silently truncate the whole gather on the first check.
+    assert ingest.IngestDeadline(0).exceeded() is False
+    assert ingest.IngestDeadline(-5.0).exceeded() is False
+
+
+def test_bounded_propagates_on_persistent_failure(monkeypatch) -> None:
+    # Unlike _live_or_empty, _bounded does NOT swallow to [] — a no-safe-empty read (the universe
+    # membership snapshot) must fail loudly, not ship an empty universe.
+    monkeypatch.setattr("random.uniform", lambda _lo, _hi: 0.0)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    def always_down() -> list[Reading]:
+        raise RuntimeError("universe host down")
+
+    with pytest.raises(RuntimeError, match="universe host down"):
+        ingest._bounded(always_down)
+
+
+def test_bounded_returns_the_result_on_success() -> None:
+    assert ingest._bounded(lambda: ["ok"]) == ["ok"]  # the read's value passes through unchanged
+
+
+def test_universe_snapshot_deadline_is_wider_than_the_per_fund_one() -> None:
+    # The whole-universe pull takes ~30s; the 20s per-fund deadline fails a working pull (it did, in
+    # a cold-start run), so the no-safe-empty reads get a wider deadline.
+    assert ingest._UNIVERSE_TIMEOUT_SECONDS > ingest._TIMEOUT_SECONDS
+
+
 def test_prices_gather_stops_early_when_the_deadline_trips(monkeypatch, caplog) -> None:
     # One wedged leg must not stall a nightly run: with a wall-clock budget the per-code price loop
     # stops once the deadline trips, shipping a partial-but-valid set rather than running unbounded.
@@ -546,6 +576,45 @@ def test_prices_gather_stops_early_when_the_deadline_trips(monkeypatch, caplog) 
         )
     assert {r.key for r in out} == {"000001"}  # only the first; the second was past the deadline
     assert any("budget" in r.message.lower() for r in caplog.records)
+
+
+def test_prices_gather_deadline_does_not_falsely_pass_the_breaker(monkeypatch, caplog) -> None:
+    # The blocker the review caught: when a deadline truncates the price loop, required (book) codes
+    # never reached must NOT count toward the breaker's health (which lets a cold-start run ship a
+    # wholly-unpriced book while logging "N/N corroborated"). The breaker reasons only over codes
+    # actually attempted; the unreached book is surfaced loudly instead.
+    from factor_scope.markets import ashare
+
+    class _Feed:
+        def price_sources(self, code, *, fetched_at, since=None):
+            bar = Reading(
+                series=prices.SERIES,
+                key=code,
+                as_of="2026-06-05",
+                fetched_at=fetched_at,
+                payload={"nav": 1.0, "source": prices.SOURCE},
+            )
+            return [[bar], [], []]
+
+    monkeypatch.setattr(ashare, "get_feed", lambda _config: _Feed())
+    ticks = iter([0.0, 100.0])  # start, then the first per-code check is already past the 1s budget
+    deadline = ingest.IngestDeadline(1.0, clock=lambda: next(ticks))
+    book = ["000001", "000002", "000003"]  # the whole book is required, nothing yet stored
+    with caplog.at_level(logging.INFO):
+        out = ashare.ASharePrices().gather(
+            Config(source="live"),
+            book,
+            as_of="2026-06-05",
+            fetched_at="t",
+            required=book,
+            deadline=deadline,
+        )
+    assert out == []  # the deadline tripped before any code was priced
+    msgs = " ".join(r.message.lower() for r in caplog.records)
+    # The unreached book is surfaced loudly with its count — not silently dropped.
+    assert "budget exceeded" in msgs and "3/3 required" in msgs and "unpriced" in msgs
+    # And the breaker does NOT report the full book as corroborated (the false-health bug).
+    assert "3/3 funds corroborated" not in msgs
 
 
 def test_gather_live_degrades_a_failing_per_fund_leg(monkeypatch, caplog) -> None:

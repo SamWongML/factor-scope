@@ -163,8 +163,8 @@ class Config:
     # An overall wall-clock budget (seconds) for one live ingest gather — the run-level backstop
     # above the per-read deadline, so no single wedged source (e.g. a silent TDX server on the
     # Mootdx leg) can stall a nightly run indefinitely. Once exceeded, the per-fund/per-code loops
-    # stop and the partial-but-valid readings gathered so far still ship. None (default) is
-    # unbounded; the offline suite leaves it None, so the byte-for-byte artifact is unaffected.
+    # stop and the partial-but-valid readings gathered so far still ship. None (default) or any
+    # non-positive value is unbounded; offline leaves it None, so the artifact is unaffected.
     ingest_deadline_seconds: float | None = None
     # Digestion judgment provider: "claude_code" (default — online) | "fake" (the offline stub).
     # Tracks ``offline_mode()`` like ``source``. DeepSeek is a chore model (off the judgment path),

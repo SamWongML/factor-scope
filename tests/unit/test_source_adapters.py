@@ -433,13 +433,17 @@ def _install_fake_mootdx(
     clients: list | None = None,
     closes: list | None = None,
     fail: bool = False,
+    dead: bool = False,
 ) -> None:
     """Inject a network-free ``mootdx`` whose ``Quotes`` factory + client record each interaction.
 
     Mirrors the hardened adapter's surface: ``mootdx.consts.HQ_HOSTS`` for server pinning, a
     factory that records its ``server``/``bestip``/``timeout`` kwargs, a client exposing
-    ``.client.auto_retry`` (the library default the adapter flips off) and ``.close()``. ``bars``
-    is the frame returned; ``None`` models a silent server, ``fail=True`` a raising read.
+    ``.client.auto_retry`` (the default the adapter flips off), ``.client.get_security_count`` (the
+    liveness probe), and ``.close()``. ``bars`` is the frame returned; ``fail=True`` makes the read
+    raise; ``dead=True`` makes the liveness probe return no count — the real silent-server signal
+    (the live library returns an *empty frame*, not ``None``, so death can't be told from ``bars()``
+    alone).
     """
 
     package = types.ModuleType("mootdx")
@@ -453,6 +457,9 @@ def _install_fake_mootdx(
     class _Api:
         def __init__(self) -> None:
             self.auto_retry = True  # mootdx's StdQuotes default — the adapter must disable it
+
+        def get_security_count(self, market: int = 1) -> int | None:
+            return None if dead else 5000  # a live TDX server returns a positive security count
 
     class _Client:
         def __init__(self) -> None:
@@ -560,9 +567,10 @@ def test_mootdx_closes_the_client(monkeypatch) -> None:
 
 
 def test_mootdx_raises_on_a_silent_server_and_repins(monkeypatch) -> None:
-    # A None frame (a failed/blocked call, distinct from an empty one) is raised — so _with_retries
-    # re-picks and _live_or_empty degrades — and the dead pin is dropped so the next try rotates.
-    _install_fake_mootdx(monkeypatch, bars=None, calls=[])
+    # The real client returns an EMPTY frame on a dead server — indistinguishable from a delisted
+    # code — so the leg detects death via a liveness probe (a falsy security count) and raises, so
+    # _with_retries re-picks and _live_or_empty degrades; the dead pin drops so the next rotates.
+    _install_fake_mootdx(monkeypatch, bars=_FakeBars({}), calls=[], dead=True)
     with pytest.raises(IngestError):
         mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
     assert mootdx._server is None  # dropped the dead pin
@@ -571,10 +579,18 @@ def test_mootdx_raises_on_a_silent_server_and_repins(monkeypatch) -> None:
 
 def test_mootdx_rotates_to_the_next_host_after_a_failure(monkeypatch) -> None:
     # After a failure drops the pin, the next pick is the next host in the list, not the same one.
-    _install_fake_mootdx(monkeypatch, bars=None, calls=[])
+    _install_fake_mootdx(monkeypatch, bars=_FakeBars({}), calls=[], dead=True)
     with pytest.raises(IngestError):
         mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z")
     assert mootdx._pinned_server() == ("127.0.0.2", 7709)  # HQ_HOSTS[1], the rotation target
+
+
+def test_mootdx_empty_frame_on_a_live_server_is_a_delisting_not_a_failure(monkeypatch) -> None:
+    # A live server (liveness probe passes) that returns an empty frame is a delisted/unknown code:
+    # degrade quietly to [] and do NOT drop the pin — only a dead server rotates.
+    _install_fake_mootdx(monkeypatch, bars=_FakeBars({}), calls=[])  # dead=False (live)
+    assert mootdx.fetch_live("159915", fetched_at="2026-06-05T22:00:00Z") == []
+    assert mootdx._server == ("127.0.0.1", 7709)  # pin kept — a live server is not rotated away
 
 
 def _src(source: str, nav: float, *, as_of: str = "2026-06-05") -> list[Reading]:

@@ -35,6 +35,11 @@ _RETRY_CAP_SECONDS = 30.0
 # bounded by _RETRY_ATTEMPTS × this + backoff.
 _TIMEOUT_SECONDS = 20.0
 
+# Whole-universe snapshot reads (fund membership + the ETF-scale board) aggregate several large
+# AkShare pulls and legitimately take ~30s — well past the per-fund deadline above — so they get a
+# wider one (:func:`_bounded`) that still catches a true hang but won't fail a slow working pull.
+_UNIVERSE_TIMEOUT_SECONDS = 120.0
+
 # Data circuit breaker: an isolated divergence flags-and-continues, but if more than this fraction
 # of funds are unreconciled the failure is systemic (e.g. a source switched to adjusted prices) —
 # fail the whole run loudly rather than ship a wall of suspect NAVs.
@@ -46,17 +51,21 @@ class IngestDeadline:
     deadline (:func:`_with_timeout`). It bounds the *whole* gather so no single wedged leg can
     stall a nightly run indefinitely.
 
-    ``seconds`` is the budget measured from run start; ``None`` (the default everywhere but an
-    explicit ``--deadline``) means unbounded, so the offline suite and the byte-for-byte artifact
-    stay unaffected. Checked at the top of the per-fund/per-code ingest loops; on expiry the loop
-    stops and the partial-but-valid readings gathered so far still ship. ``clock`` is injectable for
-    tests; it is wall-clock time used only for control flow, never written into the artifact.
+    ``seconds`` is the budget measured from run start; ``None`` or any non-positive value (the
+    default everywhere but an explicit ``--deadline``) means unbounded — mirroring
+    ``live_pacing_seconds``'s "0 disables" convention, so ``--deadline 0`` reads as "no cap", not
+    "stop immediately" — so the offline suite and the byte-for-byte artifact stay unaffected.
+    Checked at the top of the per-fund/per-code ingest loops; on expiry the loop stops and the
+    partial-but-valid readings gathered so far still ship. ``clock`` is injectable for tests; it is
+    wall-clock time used only for control flow, never written into the artifact.
     """
 
     def __init__(
         self, seconds: float | None, *, clock: Callable[[], float] = time.monotonic
     ) -> None:
-        self._budget = seconds
+        # A non-positive budget collapses to unbounded (like live_pacing_seconds's "0 disables"), so
+        # ``--deadline 0`` means "no cap" rather than "stop on the first check".
+        self._budget = seconds if (seconds is not None and seconds > 0) else None
         self._clock = clock
         self._start = clock()
 
@@ -114,6 +123,22 @@ def _with_timeout(thunk: Callable[[], list[Reading]], seconds: float) -> list[Re
     if error:
         raise error[0]
     return result[0]
+
+
+def _bounded(thunk: Callable[[], list[Reading]]) -> list[Reading]:
+    """Bound a critical, no-safe-empty live read: retry + a per-attempt wall-clock deadline, but
+    *propagate* on persistent failure rather than swallowing to ``[]``.
+
+    Unlike :func:`_live_or_empty`, the result is not degraded to an empty read. It is for the reads
+    that have no safe empty fallback — the whole-universe membership and the ETF-scale board, which
+    are called once before the per-fund loop and feed delisting detection and the tier screen.
+    A hung host on one of those is converted from an unbounded stall (the run-level deadline can't
+    fire on a synchronous call) into a bounded, loud failure, rather than a silently empty universe.
+    The deadline is :data:`_UNIVERSE_TIMEOUT_SECONDS` (wider than the per-fund one), since these
+    whole-market pulls legitimately take ~30s — the per-fund 20s would fail a working pull.
+    """
+
+    return _with_retries(lambda: _with_timeout(thunk, _UNIVERSE_TIMEOUT_SECONDS))
 
 
 def _live_or_empty(

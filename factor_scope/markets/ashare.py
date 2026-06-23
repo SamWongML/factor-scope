@@ -26,6 +26,7 @@ from factor_scope.config import Config
 from factor_scope.credentials import resolve_credential
 from factor_scope.ingest import (
     IngestDeadline,
+    _bounded,
     _check_eastmoney_health,
     _check_price_health,
     _live_or_empty,
@@ -76,9 +77,13 @@ class AShareUniverse:
                 config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
             )
         )
-        universe = feed.universe(as_of=as_of, fetched_at=fetched_at)
+        # Universe membership + ETF-scale snapshots run once, before the per-fund loop, feeding
+        # delisting detection and the tier screen — so they have no safe empty fallback. They are
+        # bounded (retry + per-attempt deadline) but not degraded: a hung host here is a loud,
+        # bounded failure, not an unbounded stall (the run-level deadline can't fire synchronously).
+        universe = _bounded(lambda: feed.universe(as_of=as_of, fetched_at=fetched_at))
         readings += universe
-        readings += feed.etf_scale(fetched_at=fetched_at)
+        readings += _bounded(lambda: feed.etf_scale(fetched_at=fetched_at))
         fetch_codes = _fetch_universe_codes(readings, as_of)
         activity_floor = _series_watermarks(store, trading_activity.SERIES, as_of)
         valuation_floor = _series_watermarks(store, fundamentals.SERIES, as_of)
@@ -211,13 +216,13 @@ class ASharePrices:
         stored = {r.key for r in store.read_as_of(prices.SERIES, as_of)} if store else set()
         readings: list[Reading] = []
         degraded: list[str] = []  # book codes with no reconciled price — unpriced or flagged
+        seen: set[str] = set()  # codes actually attempted (vs left unreached by a deadline trip)
+        stopped_early = False
         for code in sorted(set(codes)):
             if deadline is not None and deadline.exceeded():
-                logger.warning(
-                    "ingest: wall-clock budget exceeded; stopping the per-code price loop early "
-                    "(partial-but-valid — codes not reached keep their last stored NAV)"
-                )
+                stopped_early = True
                 break
+            seen.add(code)
             reconciled = _reconcile_history(
                 feed.price_sources(code, fetched_at=fetched_at, since=price_floor.get(code)),
                 tolerance=config.corroboration_tolerance,
@@ -228,7 +233,22 @@ class ASharePrices:
                     degraded.append(code)  # a same-day source disagreement, flagged
                 elif not reconciled and code not in stored:
                     degraded.append(code)  # no fresh bar and none on record → genuinely unpriced
-        _check_price_health(len(required_codes), degraded)
+        if stopped_early:
+            # A deadline cut the loop short. Book codes never reached are a *coverage* gap (ran
+            # out of time), not a price *divergence* — surface them loudly but keep them out of the
+            # breaker's fraction below, which reasons only over codes actually attempted. So the
+            # breaker can't read a truncated run as "N/N corroborated", yet a tight deadline still
+            # degrades partial-but-valid rather than raising.
+            unreached = sorted(required_codes - seen - stored)
+            logger.warning(
+                "ingest: wall-clock budget exceeded; stopped the per-code price loop after %d "
+                "code(s) — %d/%d required (book) codes left unpriced (deadline-truncated, "
+                "partial-but-valid)",
+                len(seen),
+                len(unreached),
+                len(required_codes),
+            )
+        _check_price_health(len(required_codes & seen), degraded)
         return readings
 
 

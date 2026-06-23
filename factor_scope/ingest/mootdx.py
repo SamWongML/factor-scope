@@ -20,6 +20,7 @@ forces offline).
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from factor_scope.ingest.base import IngestError
@@ -28,6 +29,8 @@ from factor_scope.store import Reading
 
 SOURCE = "mootdx"  # this adapter's provenance tag
 _DAILY = 9  # Mootdx frequency code for the daily K-line; bars are unadjusted (raw close)
+_MARKET_SH = 1  # TDX market code for Shanghai (on-exchange ETF codes starting 5)
+_MARKET_SZ = 0  # TDX market code for Shenzhen (codes starting 1)
 
 # A hard socket timeout (connect + every recv) — pytdx/tdxpy exposes none by default, so a silent
 # TDX server would otherwise block a read forever. Small enough that a bounded read finishes well
@@ -39,6 +42,9 @@ _SOCKET_TIMEOUT_SECONDS = 8
 # A read failure drops the pin and advances ``_server_index`` so the next attempt rotates hosts.
 _server: tuple[str, int] | None = None
 _server_index = 0
+# The pin is read/rotated from the daemon threads ``_with_timeout`` spawns; a lock keeps the
+# (otherwise non-atomic) rotation consistent if an abandoned thread resets after the run moved on.
+_server_lock = threading.Lock()
 
 
 def _pinned_server() -> tuple[str, int]:
@@ -50,20 +56,22 @@ def _pinned_server() -> tuple[str, int]:
     """
 
     global _server
-    if _server is None:
-        from mootdx.consts import HQ_HOSTS
+    with _server_lock:
+        if _server is None:
+            from mootdx.consts import HQ_HOSTS
 
-        _name, ip, port = HQ_HOSTS[_server_index % len(HQ_HOSTS)]
-        _server = (ip, int(port))
-    return _server
+            _name, ip, port = HQ_HOSTS[_server_index % len(HQ_HOSTS)]
+            _server = (ip, int(port))
+        return _server
 
 
 def _reset_server() -> None:
     """Drop the current pin and rotate to the next candidate host on the next pick."""
 
     global _server, _server_index
-    _server = None
-    _server_index += 1
+    with _server_lock:
+        _server = None
+        _server_index += 1
 
 
 def fetch_live(code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
@@ -74,9 +82,9 @@ def fetch_live(code: str, *, fetched_at: str, since: str | None = None) -> list[
     are kept — so the price series is corroborated across the full window, not just the latest bar.
 
     Construction pins a server and bounds the socket; the library's auto-retry is disabled (the
-    resilience boundary owns retries). A silent server (``None`` frame) is raised, not swallowed, so
-    the boundary degrades the leg and the next attempt rotates to another host; the per-call client
-    is always closed.
+    resilience boundary owns retries). A dead/silent pin is caught by a liveness probe and raised
+    (not swallowed), so the boundary degrades the leg with a warning and the next attempt rotates to
+    another host; the per-call client is always closed.
     """
 
     from mootdx.quotes import Quotes
@@ -87,19 +95,24 @@ def fetch_live(code: str, *, fetched_at: str, since: str | None = None) -> list[
         client = Quotes.factory(
             market="std", server=(ip, port), bestip=False, timeout=_SOCKET_TIMEOUT_SECONDS
         )
-        # auto_retry off: tdxpy's reconnect+resend loop multiplies the deadline on a dead host
+        # auto_retry off: tdxpy's reconnect+resend loop multiplies the deadline on a dead host.
         client.client.auto_retry = False
+        # The real client returns an EMPTY frame (never ``None``) on a silent/dead server —
+        # indistinguishable from a delisted code — so a dead pin can't be told from ``bars()`` alone
+        # and would degrade silently with no rotation. A falsy security count means the pin is dead:
+        # raise so the boundary degrades-with-warning and the next attempt rotates to another host.
+        market = _MARKET_SH if code.startswith("5") else _MARKET_SZ
+        if not client.client.get_security_count(market):
+            raise IngestError(f"mootdx: pinned TDX server {ip}:{port} is unresponsive")
         frame = client.bars(symbol=code, frequency=_DAILY, offset=_SEED_TRADING_DAYS)
-        if frame is None:  # a blocked/failed call (distinct from an empty frame) — degrade + rotate
-            raise IngestError(f"mootdx: no response from {ip}:{port} for {code}")
     except Exception:
-        _reset_server()
+        _reset_server()  # drop the (possibly dead) pin so the next attempt rotates to another host
         raise
     finally:
         if client is not None:
             client.close()
 
-    if frame.empty:  # unknown/delisted code → no data, so the caller falls back to the other legs
+    if frame is None or frame.empty:  # live server, no data → delisted/unknown code → fall back
         return []
     return [
         Reading(

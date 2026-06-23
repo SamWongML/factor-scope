@@ -25,11 +25,23 @@ writes three things under `out/` (override with the flags below):
 | run log | `out/nightly.jsonl` | one append-only ops record per run (below) |
 
 Flags: `--output`, `--history-dir`, `--series-dir`, `--store-path`, `--replica-path`,
-`--graph-path`, `--log-path`, `--provider`, `--as-of`, `--offline`, `--quiet`. The job is **online by default** (live sources + the real provider);
+`--graph-path`, `--log-path`, `--provider`, `--as-of`, `--offline`, `--quiet`, `--deadline`. The job is **online by default** (live sources + the real provider);
 `--offline` (or `FACTOR_SCOPE_OFFLINE=1`) selects fixtures + the deterministic `fake` provider for a
 demo or test run. Re-running the **same night is idempotent**: positions are stamped
 with the run's `as_of`, so a second run that night re-uses the night's readings — the artifact stays
 byte-for-byte and calls are never double-counted. A **new** night ingests fresh data.
+
+**`--deadline <seconds>` — the run-level wall-clock backstop.** Unset by default (unbounded). Every
+source read is already bounded individually (a 20s per-attempt deadline × 3 retries; the Mootdx TDX
+leg additionally pins a server, sets a socket timeout, and probes liveness so it degrades rather than
+hangs), so no single leg stalls forever. But the **aggregate** of a *cold-start full-universe* run is
+long — hundreds of funds × several per-fund legs, paced under the EastMoney rate limiter, so tens of
+minutes is normal. Set `--deadline` on the first cold start (and, if you want a hard nightly SLA, on
+the cron job) to cap the whole gather: once exceeded the per-fund/per-code loops stop and the
+**partial-but-valid** artifact still ships — the price circuit-breaker then reasons only over the
+codes actually reached, and any unreached book codes are logged loudly rather than passing as
+healthy. `0` or unset = unbounded. Incremental nightly re-pulls (a warm store) are fast — the
+watermark fetches only sessions past the floor — so the deadline matters mainly for the cold start.
 
 ### The run log
 

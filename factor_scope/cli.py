@@ -135,7 +135,7 @@ def ingest(
         "--deadline",
         help="An overall wall-clock budget (seconds) for the live gather; once exceeded the "
         "per-fund/per-code loops stop with partial-but-valid readings persisted, so a wedged "
-        "source can't stall the run. Unset = unbounded.",
+        "source can't stall the run. Unset or 0 = unbounded.",
     ),
 ) -> None:
     """Fill the point-in-time store + connection graph from a source, so `run` can read them."""
@@ -310,7 +310,7 @@ def nightly(
         "--deadline",
         help="An overall wall-clock budget (seconds) for the live ingest gather; once exceeded the "
         "per-fund/per-code loops stop with a partial-but-valid artifact, so a wedged source can't "
-        "stall the nightly run. Unset = unbounded.",
+        "stall the nightly run. Unset or 0 = unbounded.",
     ),
     provider: str = typer.Option(
         "claude_code", help="Digestion judgment provider: claude_code (default) | fake (offline)."
