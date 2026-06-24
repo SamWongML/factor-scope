@@ -584,6 +584,7 @@ discovery = [
 live = [
     { name = "akshare" },
     { name = "baostock" },
+    { name = "curl-cffi" },
     { name = "edgartools" },
     { name = "fredapi" },
     { name = "httpx" },
@@ -604,6 +605,7 @@ requires-dist = [
     { name = "akshare", marker = "extra == 'live'", specifier = ">=1.18,<2" },
     { name = "baostock", marker = "extra == 'live'", specifier = ">=0.9,<1" },
     { name = "bertopic", marker = "extra == 'discovery'", specifier = ">=0.16,<0.17" },
+    { name = "curl-cffi", marker = "extra == 'live'", specifier = ">=0.15,<1" },
     { name = "duckdb", marker = "extra == 'store'", specifier = ">=1,<2" },
     { name = "edgartools", marker = "extra == 'live'", specifier = ">=5.35,<6" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115,<1" },

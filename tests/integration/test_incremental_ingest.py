@@ -97,7 +97,7 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
     # so a re-pull carves only the newer-than-watermark slice; Baostock/Mootdx corroborate the
     # latest bar so the run completes without tripping the data circuit breaker. Only the AkShare
     # leg records ``since`` — the watermark progression is asserted on it.
-    def fake_price(key, *, fetched_at, since=None):
+    def fake_price(key, *, fetched_at, since=None, impersonate="chrome"):
         if key == _FUND:  # the universe ETF whose price watermark the test pins
             seen[prices.SERIES].append(since)
         return [

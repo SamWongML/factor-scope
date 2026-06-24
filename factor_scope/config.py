@@ -160,6 +160,10 @@ class Config:
     # limiter that drops the connection (``RemoteDisconnected``) without lengthening the nightly run
     # materially. Live-only — the offline cassette replay never sleeps. Set to 0 to disable pacing.
     live_pacing_seconds: float = 0.5
+    # The browser fingerprint the EastMoney K-line client impersonates (curl_cffi) to defeat the
+    # push2his connection reset that refuses a plain-``requests`` TLS handshake. Bump this when
+    # Chrome's fingerprint drifts past what the pinned curl_cffi build ships (e.g. "chrome131").
+    eastmoney_impersonate: str = "chrome"
     # An overall wall-clock budget (seconds) for one live ingest gather — the run-level backstop
     # above the per-read deadline, so no single wedged source (e.g. a silent TDX server on the
     # Mootdx leg) can stall a nightly run indefinitely. Once exceeded, the per-fund/per-code loops

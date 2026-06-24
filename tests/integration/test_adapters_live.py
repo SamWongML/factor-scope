@@ -19,6 +19,7 @@ import pytest
 from factor_scope.ingest import (
     baostock,
     demand,
+    eastmoney,
     edgar,
     etf_scale,
     fred,
@@ -44,6 +45,19 @@ _RUN_STAMP = "2026-06-05T22:00:00Z"
 
 
 @skip_unless_live
+def test_eastmoney_kline_live_defeats_the_push2his_reset() -> None:
+    # The reason the client exists: a real-Chrome TLS/HTTP fingerprint gets a daily window back from
+    # push2his, where a plain ``requests`` handshake is reset. A non-empty window IS the
+    # impersonation working; it also pins the domain-bar schema the NAV leg maps close→nav on.
+    bars = eastmoney.kline(_PROBE, beg="20240101")
+    assert len(bars) > 1  # a window came back — the reset was defeated, not an empty/dropped read
+    assert all(bar.keys() == {"date", "close", "turnover", "amount"} for bar in bars)
+    assert all(bar["close"] > 0 for bar in bars)
+    stamps = [bar["date"] for bar in bars]
+    assert stamps == sorted(stamps)  # oldest-first, the order select_reconciled's r[-1] relies on
+
+
+@skip_unless_live
 def test_prices_live_smoke() -> None:
     readings = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
     # The cold pull seeds a *window* of bars, not just the latest, so the trend gate's 200-day MA
@@ -65,7 +79,7 @@ def test_prices_live_smoke() -> None:
 def test_prices_incremental_since_live_smoke() -> None:
     # The other half of the contract: a re-pull past a watermark returns only newer sessions, so a
     # nightly re-pull is linear, not a full re-fetch. Offline this is cassette-simulated; here it is
-    # the real EastMoney ``start_date`` path, the leg that tripped the rate limiter when unbounded.
+    # the real EastMoney ``beg`` path, the leg that tripped the rate limiter when unbounded.
     cold = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
     assert len(cold) > 1
     since = cold[len(cold) // 2].as_of  # a real session mid-window becomes the watermark

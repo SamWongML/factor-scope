@@ -14,6 +14,7 @@ import pytest
 
 from factor_scope.ingest import (
     baostock,
+    eastmoney,
     edgar,
     fred,
     fund_holdings,
@@ -28,19 +29,43 @@ from tests.unit._akshare_fakes import FakeFrame, install_fake_akshare
 pytestmark = pytest.mark.unit
 
 
+def fake_eastmoney_kline(
+    monkeypatch,
+    *,
+    bars: list[dict] | None = None,
+    error: Exception | None = None,
+    captured: dict | None = None,
+) -> None:
+    """Mock the EastMoney K-line client the prices NAV leg now fetches through.
+
+    Returns domain bars ``{date, close, turnover, amount}`` (the client's contract), raises
+    ``error`` to simulate a ``push2his`` reset, or records the ``beg`` / ``impersonate`` it was
+    called with into ``captured``.
+    """
+
+    def _kline(code: str, *, beg: str, impersonate: str = "chrome") -> list[dict]:
+        if captured is not None:
+            captured.update({"code": code, "beg": beg, "impersonate": impersonate})
+        if error is not None:
+            raise error
+        return bars or []
+
+    monkeypatch.setattr(eastmoney, "kline", _kline)
+
+
+def _em_bar(as_of: str, close: float) -> dict:
+    """A domain bar as the EastMoney client returns it; the NAV leg reads only date + close."""
+
+    return {"date": as_of, "close": close, "turnover": 0.0, "amount": 0.0}
+
+
 def test_sina_symbol_prefixes_by_listing_exchange() -> None:
     assert prices._sina_symbol("561010") == "sh561010"  # SSE ETFs are 5x
     assert prices._sina_symbol("159915") == "sz159915"  # SZSE ETFs are 1x
 
 
 def test_prices_fetch_live_uses_eastmoney_when_reachable(monkeypatch) -> None:
-    def em(**kwargs: object) -> FakeFrame:
-        return FakeFrame([{"日期": "2026-06-16", "收盘": 0.918}])
-
-    def sina(symbol: str) -> FakeFrame:
-        raise AssertionError("Sina must not be called when EastMoney answers")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    fake_eastmoney_kline(monkeypatch, bars=[_em_bar("2026-06-16", 0.918)])
     reading = prices.fetch_live("561010", fetched_at="t")[0]
     assert reading.as_of == "2026-06-16"
     assert reading.payload == {"nav": 0.918, "source": "akshare"}
@@ -49,14 +74,12 @@ def test_prices_fetch_live_uses_eastmoney_when_reachable(monkeypatch) -> None:
 def test_prices_fetch_live_falls_back_to_sina_when_eastmoney_history_refused(monkeypatch) -> None:
     requested: list[str] = []
 
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
     def sina(symbol: str) -> FakeFrame:
         requested.append(symbol)
         return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
 
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    fake_eastmoney_kline(monkeypatch, error=ConnectionError("push2his reset"))
+    install_fake_akshare(monkeypatch, fund_etf_hist_sina=sina)
     reading = prices.fetch_live("561010", fetched_at="t")[0]
     assert requested == ["sh561010"]  # routed to Sina with the exchange prefix
     assert reading.as_of == "2026-06-16"
@@ -65,17 +88,15 @@ def test_prices_fetch_live_falls_back_to_sina_when_eastmoney_history_refused(mon
 
 def test_prices_fetch_live_returns_the_whole_window_not_just_the_latest(monkeypatch) -> None:
     # The trend/reversal/low-vol factors read the full stored NAV history; the price leg must store
-    # every bar it pulls, not just frame.iloc[-1], or the 200-day MA gate is blind on a cold start.
-    def em(**kwargs: object) -> FakeFrame:
-        return FakeFrame(
-            [
-                {"日期": "2026-06-14", "收盘": 0.910},
-                {"日期": "2026-06-15", "收盘": 0.915},
-                {"日期": "2026-06-16", "收盘": 0.918},
-            ]
-        )
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    # every bar it pulls, not just the latest, or the 200-day MA gate is blind on a cold start.
+    fake_eastmoney_kline(
+        monkeypatch,
+        bars=[
+            _em_bar("2026-06-14", 0.910),
+            _em_bar("2026-06-15", 0.915),
+            _em_bar("2026-06-16", 0.918),
+        ],
+    )
     readings = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")
     assert [r.as_of for r in readings] == ["2026-06-14", "2026-06-15", "2026-06-16"]
     assert readings[-1].payload == {"nav": 0.918, "source": "akshare"}
@@ -83,44 +104,42 @@ def test_prices_fetch_live_returns_the_whole_window_not_just_the_latest(monkeypa
 
 def test_prices_incremental_requests_and_keeps_only_bars_after_the_watermark(monkeypatch) -> None:
     captured: dict[str, object] = {}
-
-    def em(**kwargs: object) -> FakeFrame:
-        captured.update(kwargs)
-        return FakeFrame(
-            [{"日期": "2026-06-15", "收盘": 0.915}, {"日期": "2026-06-16", "收盘": 0.918}]
-        )
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    fake_eastmoney_kline(
+        monkeypatch,
+        bars=[_em_bar("2026-06-15", 0.915), _em_bar("2026-06-16", 0.918)],
+        captured=captured,
+    )
     readings = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z", since="2026-06-15")
-    assert captured["start_date"] == "20260616"  # the watermark + 1 day, EastMoney's YYYYMMDD
+    assert captured["beg"] == "20260616"  # the watermark + 1 day, EastMoney's YYYYMMDD
     assert [r.as_of for r in readings] == ["2026-06-16"]  # only sessions past the watermark
 
 
 def test_prices_cold_seed_bounds_the_window_instead_of_full_history(monkeypatch) -> None:
     captured: dict[str, object] = {}
-
-    def em(**kwargs: object) -> FakeFrame:
-        captured.update(kwargs)
-        return FakeFrame([{"日期": "2026-06-16", "收盘": 0.918}])
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    fake_eastmoney_kline(monkeypatch, bars=[_em_bar("2026-06-16", 0.918)], captured=captured)
     prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")  # no watermark → cold seed
     # ~650 calendar days back (≈ 400 trading days), not EastMoney's 19700101 full-history default
-    assert captured["start_date"] != "19700101"
-    assert captured["start_date"].startswith("2024")
+    assert captured["beg"] != "19700101"
+    assert str(captured["beg"]).startswith("2024")
+
+
+def test_prices_passes_the_configured_impersonation_profile(monkeypatch) -> None:
+    # The fingerprint can be bumped when Chrome's TLS profile drifts; the leg threads it through.
+    captured: dict[str, object] = {}
+    fake_eastmoney_kline(monkeypatch, bars=[_em_bar("2026-06-16", 0.918)], captured=captured)
+    prices.fetch_live("561010", fetched_at="t", impersonate="chrome131")
+    assert captured["impersonate"] == "chrome131"
 
 
 def test_prices_sina_fallback_trims_full_history_to_the_seed_window(monkeypatch) -> None:
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
     def sina(symbol: str) -> FakeFrame:
         # Sina has no date range — it serves the entire history, so the window is trimmed here.
         return FakeFrame(
             [{"date": "2019-01-02", "close": 0.5}, {"date": "2026-06-16", "close": 0.918}]
         )
 
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    fake_eastmoney_kline(monkeypatch, error=ConnectionError("push2his reset"))
+    install_fake_akshare(monkeypatch, fund_etf_hist_sina=sina)
     readings = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")
     assert [r.as_of for r in readings] == ["2026-06-16"]  # the ancient bar is outside the window
 
@@ -128,13 +147,11 @@ def test_prices_sina_fallback_trims_full_history_to_the_seed_window(monkeypatch)
 def test_prices_fetch_live_logs_loudly_when_it_falls_back_to_sina(monkeypatch, caplog) -> None:
     # A silent EastMoney→Sina swap would hide a persistently-blocked primary for weeks; the fallback
     # must log so the degradation is visible even though Sina covers the read.
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
     def sina(symbol: str) -> FakeFrame:
         return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
 
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    fake_eastmoney_kline(monkeypatch, error=ConnectionError("push2his reset"))
+    install_fake_akshare(monkeypatch, fund_etf_hist_sina=sina)
     with caplog.at_level(logging.WARNING):
         prices.fetch_live("561010", fetched_at="t")
     assert any(r.levelno == logging.WARNING and "561010" in r.getMessage() for r in caplog.records)
@@ -147,13 +164,14 @@ def test_prices_skips_eastmoney_while_the_breaker_is_open(monkeypatch) -> None:
     breaker.record_failure(EASTMONEY_KLINE)  # tripped open
     monkeypatch.setattr(prices, "host_breaker", breaker)
 
-    def em(**kwargs: object) -> FakeFrame:
+    def kline(code: str, *, beg: str, impersonate: str = "chrome") -> list[dict]:
         raise AssertionError("EastMoney must be skipped while the breaker is open")
 
     def sina(symbol: str) -> FakeFrame:
         return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
 
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    monkeypatch.setattr(eastmoney, "kline", kline)
+    install_fake_akshare(monkeypatch, fund_etf_hist_sina=sina)
     reading = prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")[0]
     assert reading.payload == {"nav": 0.918, "source": "akshare"}  # served by Sina, host untouched
 
@@ -162,13 +180,11 @@ def test_prices_records_a_breaker_failure_when_eastmoney_refuses(monkeypatch) ->
     breaker = _HostBreaker(threshold=5)
     monkeypatch.setattr(prices, "host_breaker", breaker)
 
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
     def sina(symbol: str) -> FakeFrame:
         return FakeFrame([{"date": "2026-06-16", "close": 0.918}])
 
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=sina)
+    fake_eastmoney_kline(monkeypatch, error=ConnectionError("push2his reset"))
+    install_fake_akshare(monkeypatch, fund_etf_hist_sina=sina)
     prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")
     assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
 
@@ -178,10 +194,7 @@ def test_prices_success_resets_the_breaker_streak(monkeypatch) -> None:
     breaker.record_failure(EASTMONEY_KLINE)  # one prior blip (streak 1, not yet open)
     monkeypatch.setattr(prices, "host_breaker", breaker)
 
-    def em(**kwargs: object) -> FakeFrame:
-        return FakeFrame([{"日期": "2026-06-16", "收盘": 0.918}])
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_hist_sina=lambda symbol: None)
+    fake_eastmoney_kline(monkeypatch, bars=[_em_bar("2026-06-16", 0.918)])
     prices.fetch_live("561010", fetched_at="2026-06-16T22:00:00Z")  # EastMoney answers
     breaker.record_failure(EASTMONEY_KLINE)  # would be streak 2 (open) had the success not reset it
     assert not breaker.is_open(EASTMONEY_KLINE)  # the answered call reset the streak to zero

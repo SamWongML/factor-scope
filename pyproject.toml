@@ -17,6 +17,9 @@ dependencies = [
 live = [
     "akshare>=1.18,<2",
     "baostock>=0.9,<1",
+    # Promoted from a transitive AkShare dep to an explicit member: the EastMoney K-line client
+    # impersonates a real Chrome TLS/HTTP fingerprint through it to defeat the push2his reset.
+    "curl_cffi>=0.15,<1",
     "edgartools>=5.35,<6",
     "fredapi>=0.5,<1",
     "httpx>=0.27,<1",
