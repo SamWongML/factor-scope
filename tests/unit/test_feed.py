@@ -25,8 +25,18 @@ def _feed() -> CassetteFeed:
 
 
 def test_get_feed_selects_cassettes_offline_and_the_adapters_online() -> None:
-    assert isinstance(get_feed(Config()), CassetteFeed)  # the suite forces offline
-    assert isinstance(get_feed(Config(source="live")), LiveFeed)
+    assert isinstance(get_feed(Config(), store=None), CassetteFeed)  # the suite forces offline
+    assert isinstance(get_feed(Config(source="live"), store=None), LiveFeed)
+
+
+def test_get_feed_makes_the_live_feed_store_aware_and_the_cassette_store_agnostic() -> None:
+    # The live feed carries the point-in-time store for the per-code spot/deep load-shape decision;
+    # the offline cassette ignores it and replays recordings exactly.
+    store = object()  # a stand-in store — the live feed only needs to hold it here
+    live = get_feed(Config(source="live"), store=store)
+    assert isinstance(live, LiveFeed)
+    assert live._store is store
+    assert isinstance(get_feed(Config(), store=store), CassetteFeed)  # offline drops the store
 
 
 def test_universe_carries_identity_lifecycle_and_scorecard_inputs() -> None:
@@ -72,11 +82,12 @@ def test_live_feed_paces_between_per_fund_calls(monkeypatch) -> None:
     # the IP limiter; the delay is config-driven. (Offline cassettes never pace — see below.)
     paced: list[float] = []
     monkeypatch.setattr(feed_mod, "pace_between_calls", lambda seconds: paced.append(seconds))
+    monkeypatch.setattr("factor_scope.ingest.etf_scale.fetch_spot_board", dict)
     monkeypatch.setattr(
         "factor_scope.ingest.trading_activity.fetch_live",
-        lambda code, *, fetched_at, since=None: [],
+        lambda board, code, *, fetched_at, since=None: [],
     )
-    live = get_feed(Config(source="live", live_pacing_seconds=0.7))
+    live = get_feed(Config(source="live", live_pacing_seconds=0.7), store=None)
     assert isinstance(live, LiveFeed)
     live.activity("561010", fetched_at=FETCHED_AT)
     assert paced == [0.7]  # paced once with the configured delay, before the per-fund network call
@@ -98,7 +109,9 @@ def test_live_feed_threads_the_impersonation_profile_to_the_prices_leg(monkeypat
             f"factor_scope.ingest.{leg}.fetch_live",
             lambda code, *, fetched_at, since=None: [],
         )
-    live = get_feed(Config(source="live", eastmoney_impersonate="chrome131", live_pacing_seconds=0))
+    live = get_feed(
+        Config(source="live", eastmoney_impersonate="chrome131", live_pacing_seconds=0), store=None
+    )
     live.price_sources("561010", fetched_at=FETCHED_AT)
     assert seen["impersonate"] == "chrome131"  # the configured profile reached the client boundary
 

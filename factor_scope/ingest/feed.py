@@ -31,7 +31,7 @@ from factor_scope.ingest import (
     prices,
     trading_activity,
 )
-from factor_scope.store import Reading
+from factor_scope.store import PointInTimeStore, Reading
 
 _SCORECARD = ("fee", "tracking_error", "top10_weight")
 
@@ -88,17 +88,40 @@ class LiveFeed:
     ``tests/integration/test_adapters_live.py`` under ``FACTOR_SCOPE_LIVE=1``. Each *per-fund* call
     is preceded by a jittered pace (``pace_seconds``) so the full-universe loop's hundreds of
     sequential hits to the one rate-limited EastMoney host stay under its IP limiter.
+
+    One feed is constructed per run and is store-aware: it carries the point-in-time ``store`` for
+    the per-code spot-vs-deep load-shape decision.
     """
 
-    def __init__(self, pace_seconds: float = 0.0, *, impersonate: str = "chrome") -> None:
+    def __init__(
+        self,
+        store: PointInTimeStore | None,
+        pace_seconds: float = 0.0,
+        *,
+        impersonate: str = "chrome",
+    ) -> None:
+        self._store = store
         self._pace_seconds = pace_seconds
         self._impersonate = impersonate
+        self._spot: dict[str, Any] | None = None
+
+    @property
+    def _spot_board(self) -> dict[str, Any]:
+        """The whole-market spot board, pulled once and shared across the legs that read it.
+
+        Lazy so a prices-only use never pulls it; memoised so the universe, scale, and
+        activity-fallback legs of one run share a single snapshot rather than re-fetching per leg.
+        """
+
+        if self._spot is None:
+            self._spot = etf_scale.fetch_spot_board()
+        return self._spot
 
     def universe(self, *, as_of: str, fetched_at: str) -> list[Reading]:
-        return fund_universe.fetch_live(as_of=as_of, fetched_at=fetched_at)
+        return fund_universe.fetch_live(self._spot_board, as_of=as_of, fetched_at=fetched_at)
 
     def etf_scale(self, *, fetched_at: str) -> list[Reading]:
-        return etf_scale.fetch_live(fetched_at=fetched_at)
+        return etf_scale.fetch_live(self._spot_board, fetched_at=fetched_at)
 
     def holdings(self, fund: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
         pace_between_calls(self._pace_seconds)
@@ -106,7 +129,9 @@ class LiveFeed:
 
     def activity(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
         pace_between_calls(self._pace_seconds)
-        return trading_activity.fetch_live(code, fetched_at=fetched_at, since=since)
+        return trading_activity.fetch_live(
+            self._spot_board, code, fetched_at=fetched_at, since=since
+        )
 
     def valuation(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
         pace_between_calls(self._pace_seconds)
@@ -261,11 +286,15 @@ class CassetteFeed:
         ]
 
 
-def get_feed(config: Config) -> Feed:
-    """The online network adapters by default; the committed recordings in the offline test mode."""
+def get_feed(config: Config, store: PointInTimeStore | None) -> Feed:
+    """The online network adapters by default; the committed recordings in the offline test mode.
+
+    The live feed is store-aware (it carries ``store`` for the per-code load-shape decision); the
+    offline cassette feed ignores it and replays the recordings deterministically.
+    """
 
     if config.source == "live":
         return LiveFeed(
-            pace_seconds=config.live_pacing_seconds, impersonate=config.eastmoney_impersonate
+            store, pace_seconds=config.live_pacing_seconds, impersonate=config.eastmoney_impersonate
         )
     return CassetteFeed(config.fixtures_dir / "cassettes")

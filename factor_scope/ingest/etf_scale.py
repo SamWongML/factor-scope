@@ -45,10 +45,20 @@ def _from_rows(rows: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Re
     ]
 
 
-def fetch_live(*, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
-    """Pull every on-exchange ETF's AUM + shares via AkShare. Requires `live` + network."""
+def fetch_spot_board() -> dict[str, Any]:  # pragma: no cover - live path
+    """The whole-market on-exchange ETF spot board, indexed by fund code — one batch call per run.
+
+    This single snapshot is the shared input the live feed hands to the universe-membership,
+    ETF-scale, and trading-activity-fallback legs, so ``fund_etf_spot_em`` is pulled once per run
+    rather than once per leg. Indexed by code so the per-fund fallback lookup is O(1).
+    """
 
     import akshare as ak
 
-    frame = ak.fund_etf_spot_em()
-    return _from_rows((row for _, row in frame.iterrows()), fetched_at=fetched_at)
+    return {str(row["代码"]): row for _, row in ak.fund_etf_spot_em().iterrows()}
+
+
+def fetch_live(board: Mapping[str, Any], *, fetched_at: str) -> list[Reading]:
+    """Map every on-exchange ETF's row on the shared spot board to an AUM/shares/amount Reading."""
+
+    return _from_rows(board.values(), fetched_at=fetched_at)

@@ -16,8 +16,9 @@ vanishes from the next pull).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from factor_scope.store import Reading
 
@@ -124,19 +125,23 @@ def still_listed(delisting: str, as_of: str) -> bool:
     return not delisting or delisting > as_of
 
 
-def fetch_live(*, as_of: str, fetched_at: str) -> list[Reading]:  # pragma: no cover - live path
+def fetch_live(
+    board: Mapping[str, Any], *, as_of: str, fetched_at: str
+) -> list[Reading]:  # pragma: no cover - live path
     """Merge AkShare's all-funds list with the on-exchange ETF universe (needs `live` + network).
 
-    The exchange-traded ranking (``fund_exchange_rank_em``) carries each on-exchange fund's
-    inception (成立日期) — the launch-at-peak guardrail's input — in one bulk call; an off-exchange
-    fund keeps an empty inception (missing data never vetoes). Delisting dates are not disclosed by
-    any feed; they are captured at ingest by :func:`delisting_disclosures` when a fund vanishes.
+    The on-exchange membership comes from the shared spot ``board`` (keyed by ETF code), so the
+    whole-market board is not re-pulled here. The exchange-traded ranking
+    (``fund_exchange_rank_em``) carries each on-exchange fund's inception (成立日期) — the
+    launch-at-peak guardrail's input — in one bulk call; an off-exchange fund keeps an empty
+    inception (missing data never vetoes). Delisting dates are not disclosed by any feed; they are
+    captured at ingest by :func:`delisting_disclosures` when a fund vanishes.
     """
 
     import akshare as ak
     import pandas as pd
 
-    on_exchange = {str(c) for c in ak.fund_etf_spot_em()["代码"]}
+    on_exchange = set(board)
     inceptions = {
         str(row["基金代码"]): f"{row['成立日期']:%Y-%m-%d}"
         for _, row in ak.fund_exchange_rank_em().iterrows()

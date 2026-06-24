@@ -56,7 +56,7 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
     def _newer(dates, since, run):
         return [d for d in dates if d <= run and (since is None or d > since)]
 
-    def fake_trading(code, *, fetched_at, since=None):
+    def fake_trading(board, code, *, fetched_at, since=None):
         seen[trading_activity.SERIES].append(since)
         return [
             Reading(series=trading_activity.SERIES, key=code, as_of=d, fetched_at=fetched_at,
@@ -83,10 +83,11 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
     monkeypatch.setattr(trading_activity, "fetch_live", fake_trading)
     monkeypatch.setattr(fundamentals, "fetch_live", fake_valuation)
     monkeypatch.setattr(fund_holdings, "fetch_live", fake_holdings)
+    monkeypatch.setattr(etf_scale, "fetch_spot_board", lambda: {_FUND: {}})
     monkeypatch.setattr(
         fund_universe,
         "fetch_live",
-        lambda *, as_of, fetched_at: [
+        lambda board, *, as_of, fetched_at: [
             Reading(series="fund_universe", key=_FUND, as_of=as_of, fetched_at=fetched_at,
                     payload={"name": _FUND, "type": "ETF", "on_exchange": True,
                              "inception": "2021-01-20", "delisting": "", "fee": None,
@@ -118,7 +119,7 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
     monkeypatch.setattr(
         etf_scale,
         "fetch_live",
-        lambda *, fetched_at: [
+        lambda board, *, fetched_at: [
             Reading(series="etf_scale", key=_FUND, as_of=fetched_at[:10], fetched_at=fetched_at,
                     payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})
         ],

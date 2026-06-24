@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 
 from factor_scope.config import Config
 from factor_scope.ingest.base import fetched_at_for
+from factor_scope.ingest.feed import Feed, get_feed
 from factor_scope.ingest.positions import SERIES as POSITIONS_SERIES
 from factor_scope.store import PointInTimeStore, Reading
 
@@ -27,7 +28,13 @@ class UniverseSource(Protocol):
     """Yields the run's book — the ``positions`` rows that seed the three lists."""
 
     def gather(
-        self, config: Config, *, as_of: str, fetched_at: str, store: PointInTimeStore | None = None
+        self,
+        config: Config,
+        *,
+        as_of: str,
+        fetched_at: str,
+        feed: Feed,
+        store: PointInTimeStore | None = None,
     ) -> list[Reading]: ...
 
 
@@ -36,7 +43,7 @@ class PriceSource(Protocol):
     """Yields point-in-time NAVs for the universe's ``codes`` (the ``prices`` rows)."""
 
     def gather(
-        self, config: Config, codes: Sequence[str], *, as_of: str, fetched_at: str
+        self, config: Config, codes: Sequence[str], *, as_of: str, fetched_at: str, feed: Feed
     ) -> list[Reading]: ...
 
 
@@ -78,10 +85,16 @@ class ComposedMarket:
         self, config: Config, *, as_of: str, store: PointInTimeStore | None = None
     ) -> list[Reading]:
         fetched_at = fetched_at_for(as_of)
+        # One feed per run, threaded to both sources so the transport is built once, not per source.
+        feed = get_feed(config, store)
         readings = list(
-            self.universe.gather(config, as_of=as_of, fetched_at=fetched_at, store=store)
+            self.universe.gather(
+                config, as_of=as_of, fetched_at=fetched_at, feed=feed, store=store
+            )
         )
         codes = [r.key for r in readings if r.series == POSITIONS_SERIES]
-        readings += self.prices.gather(config, codes, as_of=as_of, fetched_at=fetched_at)
+        readings += self.prices.gather(
+            config, codes, as_of=as_of, fetched_at=fetched_at, feed=feed
+        )
         readings += self.themes.gather(config, as_of=as_of, fetched_at=fetched_at)
         return readings
