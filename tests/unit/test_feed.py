@@ -82,6 +82,27 @@ def test_live_feed_paces_between_per_fund_calls(monkeypatch) -> None:
     assert paced == [0.7]  # paced once with the configured delay, before the per-fund network call
 
 
+def test_live_feed_threads_the_impersonation_profile_to_the_prices_leg(monkeypatch) -> None:
+    # The EastMoney fingerprint is config-driven so it can be bumped when Chrome's TLS profile
+    # drifts; get_feed must thread Config.eastmoney_impersonate down to the price NAV leg (and only
+    # that leg — Baostock/Mootdx don't speak it).
+    seen: dict[str, str] = {}
+
+    def fake_price(code, *, fetched_at, since=None, impersonate="chrome"):
+        seen["impersonate"] = impersonate
+        return []
+
+    monkeypatch.setattr("factor_scope.ingest.prices.fetch_live", fake_price)
+    for leg in ("baostock", "mootdx"):
+        monkeypatch.setattr(
+            f"factor_scope.ingest.{leg}.fetch_live",
+            lambda code, *, fetched_at, since=None: [],
+        )
+    live = get_feed(Config(source="live", eastmoney_impersonate="chrome131", live_pacing_seconds=0))
+    live.price_sources("561010", fetched_at=FETCHED_AT)
+    assert seen["impersonate"] == "chrome131"  # the configured profile reached the client boundary
+
+
 def test_cassette_feed_never_paces() -> None:
     # Offline replay is the deterministic test mode — it must not sleep. CassetteFeed simply has no
     # pacing call; constructing the offline feed and reading from it never touches the pacer.

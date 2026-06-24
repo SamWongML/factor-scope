@@ -90,8 +90,9 @@ class LiveFeed:
     sequential hits to the one rate-limited EastMoney host stay under its IP limiter.
     """
 
-    def __init__(self, pace_seconds: float = 0.0) -> None:
+    def __init__(self, pace_seconds: float = 0.0, *, impersonate: str = "chrome") -> None:
         self._pace_seconds = pace_seconds
+        self._impersonate = impersonate
 
     def universe(self, *, as_of: str, fetched_at: str) -> list[Reading]:
         return fund_universe.fetch_live(as_of=as_of, fetched_at=fetched_at)
@@ -122,7 +123,12 @@ class LiveFeed:
         bao = baostock.fetch_live
         return [
             _live_or_empty(
-                prices.fetch_live, code, source=prices.SOURCE, fetched_at=fetched_at, since=since
+                prices.fetch_live,
+                code,
+                source=prices.SOURCE,
+                fetched_at=fetched_at,
+                since=since,
+                impersonate=self._impersonate,
             ),
             _live_or_empty(
                 bao, code, source=baostock.SOURCE, fetched_at=fetched_at, since=since
@@ -259,5 +265,7 @@ def get_feed(config: Config) -> Feed:
     """The online network adapters by default; the committed recordings in the offline test mode."""
 
     if config.source == "live":
-        return LiveFeed(pace_seconds=config.live_pacing_seconds)
+        return LiveFeed(
+            pace_seconds=config.live_pacing_seconds, impersonate=config.eastmoney_impersonate
+        )
     return CassetteFeed(config.fixtures_dir / "cassettes")

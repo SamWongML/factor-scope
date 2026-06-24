@@ -45,7 +45,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         prices,
         "fetch_live",
-        lambda key, *, fetched_at, since=None: [
+        lambda key, *, fetched_at, since=None, impersonate="chrome": [
             Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"nav": 1.0})
         ],
@@ -344,7 +344,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
     _stub_adapters(monkeypatch)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)  # don't really back off in the test
 
-    def _akshare_down(key, *, fetched_at, since=None):
+    def _akshare_down(key, *, fetched_at, since=None, impersonate="chrome"):
         raise RuntimeError("AkShare IP-blocked")
 
     monkeypatch.setattr(prices, "fetch_live", _akshare_down)
