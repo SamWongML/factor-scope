@@ -116,8 +116,9 @@ class _HostBreaker:
         self._open.clear()
 
 
-# The per-fund K-line host AkShare's ``fund_etf_hist_em`` contacts (prices + trading activity). One
-# shared breaker spans both legs because they hit the same IP — a block on one is a block on both.
+# The per-fund K-line host the impersonating :mod:`eastmoney` client contacts (prices + trading
+# activity). One shared breaker spans both legs because they hit the same IP — a block on one is a
+# block on both.
 EASTMONEY_KLINE = "push2his.eastmoney.com"
 host_breaker = _HostBreaker()
 
