@@ -83,10 +83,13 @@ def _stub_adapters(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(fred, "fetch_live", lambda series_id, *, fetched_at: [])
+    # One shared spot board per run; the three legs below take it but ignore its contents (they
+    # return canned readings), so a bare snapshot is enough to thread through the gather.
+    monkeypatch.setattr(etf_scale, "fetch_spot_board", lambda: {code: {} for code, _ in _UNIVERSE})
     monkeypatch.setattr(
         fund_universe,
         "fetch_live",
-        lambda *, as_of, fetched_at: [
+        lambda board, *, as_of, fetched_at: [
             Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
                     payload={"name": code, "type": "ETF", "on_exchange": on_exchange,
                              "inception": "2021-01-20", "delisting": "", "fee": None,
@@ -97,7 +100,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         etf_scale,
         "fetch_live",
-        lambda *, fetched_at: [
+        lambda board, *, fetched_at: [
             Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
                     payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})
         ],
@@ -105,7 +108,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         trading_activity,
         "fetch_live",
-        lambda code, *, fetched_at, since=None: [
+        lambda board, code, *, fetched_at, since=None: [
             Reading(series="trading_activity", key=code, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"turnover": 3.1, "amount": 2.8})
         ],
@@ -135,6 +138,69 @@ def test_gather_live_pulls_the_full_universe_and_etf_scale(monkeypatch) -> None:
     scale = [r for r in readings if r.series == "etf_scale"]
     assert universe == {code for code, _ in _UNIVERSE}  # the whole fund universe, not just the book
     assert scale and scale[0].payload["aum"] == 68.0
+
+
+def test_gather_live_constructs_exactly_one_feed_for_the_whole_run(monkeypatch) -> None:
+    # One store-aware feed is built per run and threaded through the universe + price legs, so
+    # `get_feed` runs once for the whole gather, not once per gather method.
+    from factor_scope.markets import ashare
+
+    _stub_adapters(monkeypatch)
+    real_get_feed = ashare.get_feed
+    calls = {"n": 0}
+
+    def counting_get_feed(config, store):
+        calls["n"] += 1
+        return real_get_feed(config, store)
+
+    monkeypatch.setattr(ashare, "get_feed", counting_get_feed)
+    AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+    assert calls["n"] == 1  # constructed once for the whole gather, then passed down
+
+
+def test_gather_live_fetches_the_spot_board_once_and_shares_it(monkeypatch) -> None:
+    # The whole-market spot board is a single shared per-run snapshot: pulled once, then handed to
+    # the universe-membership, ETF-scale, and trading-activity-fallback legs — not fetched per leg.
+    _stub_adapters(monkeypatch)
+    board = {"561010": object()}  # a sentinel snapshot — the legs only need its identity here
+    pulls = {"n": 0}
+    seen: list[object] = []
+
+    def fetch_board_once():
+        pulls["n"] += 1
+        return board
+
+    def universe(b, *, as_of, fetched_at):
+        seen.append(b)
+        return [
+            Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
+                    payload={"name": code, "type": "ETF", "on_exchange": on_exchange,
+                             "inception": "2021-01-20", "delisting": "", "fee": None,
+                             "tracking_error": None, "top10_weight": None, "valid": False})
+            for code, on_exchange in _UNIVERSE
+        ]
+
+    def scale(b, *, fetched_at):
+        seen.append(b)
+        return [Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
+                        payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})]
+
+    def activity(b, code, *, fetched_at, since=None):
+        seen.append(b)
+        return [Reading(series="trading_activity", key=code, as_of="2026-06-05",
+                        fetched_at=fetched_at, payload={"turnover": 3.1, "amount": 2.8})]
+
+    monkeypatch.setattr(etf_scale, "fetch_spot_board", fetch_board_once)
+    monkeypatch.setattr(fund_universe, "fetch_live", universe)
+    monkeypatch.setattr(etf_scale, "fetch_live", scale)
+    monkeypatch.setattr(trading_activity, "fetch_live", activity)
+
+    AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
+
+    assert pulls["n"] == 1  # pulled exactly once for the whole run, not once per leg
+    # one board reached every leg that reads it — universe, scale, and the activity leg of each
+    # on-exchange ETF (561010 + 588200, both non-dead) — so exactly four consumers, same snapshot
+    assert len(seen) == 4 and all(b is board for b in seen)
 
 
 def test_gather_live_refreshes_holdings_for_each_on_exchange_etf(monkeypatch) -> None:
@@ -170,7 +236,7 @@ def test_ingest_discloses_a_fund_the_live_feed_dropped(monkeypatch, tmp_path) ->
     monkeypatch.setattr(
         fund_universe,
         "fetch_live",
-        lambda *, as_of, fetched_at: [
+        lambda board, *, as_of, fetched_at: [
             Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
                     payload={"name": code, "type": "ETF", "on_exchange": on_exchange,
                              "inception": "2021-01-20", "delisting": "", "fee": None,
@@ -201,7 +267,7 @@ def test_gather_live_trims_dead_funds_but_fetches_core_and_probation(monkeypatch
     monkeypatch.setattr(
         fund_universe,
         "fetch_live",
-        lambda *, as_of, fetched_at: [
+        lambda board, *, as_of, fetched_at: [
             Reading(series="fund_universe", key=code, as_of=as_of, fetched_at=fetched_at,
                     payload={"name": code, "type": "ETF", "on_exchange": on_ex,
                              "inception": "2021-01-20", "delisting": "", "fee": None,
@@ -212,7 +278,7 @@ def test_gather_live_trims_dead_funds_but_fetches_core_and_probation(monkeypatch
     monkeypatch.setattr(
         etf_scale,
         "fetch_live",
-        lambda *, fetched_at: [
+        lambda board, *, fetched_at: [
             Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
                     payload={"exchange": "sse", "aum": 68.0, "shares": 40.0, "amount": 3.0}),
             Reading(series="etf_scale", key="159001", as_of="2026-05-31", fetched_at=fetched_at,
@@ -561,7 +627,6 @@ def test_prices_gather_stops_early_when_the_deadline_trips(monkeypatch, caplog) 
             )
             return [[bar], [], []]
 
-    monkeypatch.setattr(ashare, "get_feed", lambda _config: _Feed())
     ticks = iter([0.0, 0.4, 2.0])  # start, first code within budget, second code past it
     deadline = ingest.IngestDeadline(1.0, clock=lambda: next(ticks))
 
@@ -571,6 +636,7 @@ def test_prices_gather_stops_early_when_the_deadline_trips(monkeypatch, caplog) 
             ["000001", "000002"],
             as_of="2026-06-05",
             fetched_at="t",
+            feed=_Feed(),
             required=[],
             deadline=deadline,
         )
@@ -596,7 +662,6 @@ def test_prices_gather_deadline_does_not_falsely_pass_the_breaker(monkeypatch, c
             )
             return [[bar], [], []]
 
-    monkeypatch.setattr(ashare, "get_feed", lambda _config: _Feed())
     ticks = iter([0.0, 100.0])  # start, then the first per-code check is already past the 1s budget
     deadline = ingest.IngestDeadline(1.0, clock=lambda: next(ticks))
     book = ["000001", "000002", "000003"]  # the whole book is required, nothing yet stored
@@ -606,6 +671,7 @@ def test_prices_gather_deadline_does_not_falsely_pass_the_breaker(monkeypatch, c
             book,
             as_of="2026-06-05",
             fetched_at="t",
+            feed=_Feed(),
             required=book,
             deadline=deadline,
         )

@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Mapping
 from datetime import date, timedelta
-from functools import lru_cache
 from typing import Any
 
 from factor_scope.ingest.base import EASTMONEY_KLINE, host_breaker
@@ -47,7 +46,7 @@ def _from_bars(
 
 
 def fetch_live(
-    code: str, *, fetched_at: str, since: str | None = None
+    board: Mapping[str, Any], code: str, *, fetched_at: str, since: str | None = None
 ) -> list[Reading]:
     """Pull a fund's daily turnover + traded value via AkShare. Requires `live` + network.
 
@@ -56,14 +55,15 @@ def fetch_live(
     night pulls only the new sessions — turning the nightly re-pull from quadratic to linear.
 
     EastMoney's per-fund history is primary; when its history host refuses the request, the current
-    session's turnover + traded value come from the whole-market spot board instead, so a block on
-    one host degrades the crowding surface to today's bar rather than dropping the fund entirely.
+    session's turnover + traded value come from the shared whole-market spot ``board`` (the single
+    per-run snapshot) instead, so a block on one host degrades the crowding surface to today's bar
+    rather than dropping the fund entirely.
     """
 
     import akshare as ak
 
     if host_breaker.is_open(EASTMONEY_KLINE):  # host known-blocked → skip it, use the spot board
-        return _spot_bar(code, fetched_at=fetched_at, since=since)
+        return _spot_bar(board, code, fetched_at=fetched_at, since=since)
     kwargs = {"start_date": _start_date(since)} if since is not None else {}
     try:
         frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="", **kwargs)
@@ -75,7 +75,7 @@ def fetch_live(
             code,
             exc,
         )
-        return _spot_bar(code, fetched_at=fetched_at, since=since)
+        return _spot_bar(board, code, fetched_at=fetched_at, since=since)
     bars = (bar for _, bar in frame.iterrows())
     return _from_bars(code, bars, fetched_at=fetched_at, since=since)
 
@@ -86,24 +86,13 @@ def _start_date(since: str) -> str:
     return (date.fromisoformat(since) + timedelta(days=1)).strftime("%Y%m%d")
 
 
-@lru_cache(maxsize=1)
-def _spot_snapshot() -> dict[str, Any]:
-    """The whole-market ETF spot board indexed by fund code, fetched once per run.
+def _spot_bar(
+    board: Mapping[str, Any], code: str, *, fetched_at: str, since: str | None
+) -> list[Reading]:
+    """One fund's current-session bar from the shared spot ``board`` — the fallback when the history
+    host is unreachable. Returns no rows for a code absent from the board (e.g. delisted)."""
 
-    Memoised so a history-host outage that forces every fund onto the spot fallback still hits the
-    network a single time, not once per fund — and the per-fund lookup is O(1), not a board scan.
-    """
-
-    import akshare as ak
-
-    return {str(row["代码"]): row for _, row in ak.fund_etf_spot_em().iterrows()}
-
-
-def _spot_bar(code: str, *, fetched_at: str, since: str | None) -> list[Reading]:
-    """One fund's current-session bar from the spot board — the fallback when the history host is
-    unreachable. Returns no rows for a code absent from the board (e.g. delisted)."""
-
-    row = _spot_snapshot().get(code)
+    row = board.get(code)
     if row is None:
         return []
     return _spot_reading(code, row, fetched_at=fetched_at, since=since)

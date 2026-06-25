@@ -146,7 +146,9 @@ def test_fund_holdings_live_smoke() -> None:
 
 @skip_unless_live
 def test_fund_universe_live_smoke() -> None:
-    readings = fund_universe.fetch_live(as_of="2026-06-05", fetched_at="t")
+    readings = fund_universe.fetch_live(
+        etf_scale.fetch_spot_board(), as_of="2026-06-05", fetched_at="t"
+    )
     assert readings and "on_exchange" in readings[0].payload  # all funds, ETFs marked on-exchange
     # the launch-at-peak guardrail needs real launch dates: on-exchange funds carry one live
     assert any(r.payload["on_exchange"] and r.payload["inception"] for r in readings)
@@ -154,7 +156,7 @@ def test_fund_universe_live_smoke() -> None:
 
 @skip_unless_live
 def test_etf_scale_live_smoke() -> None:
-    reading = etf_scale.fetch_live(fetched_at="t")[0]
+    reading = etf_scale.fetch_live(etf_scale.fetch_spot_board(), fetched_at="t")[0]
     # ``amount`` (成交额, the liquidity leg of the universe tier) rides on the same spot board
     assert reading.payload.keys() == {"exchange", "aum", "shares", "amount"}
     assert reading.payload["exchange"] in {"sse", "szse"}
@@ -183,7 +185,7 @@ def test_fundamentals_live_smoke() -> None:
 
 @skip_unless_live
 def test_trading_activity_live_smoke() -> None:
-    reading = trading_activity.fetch_live(_PROBE, fetched_at="t")[0]
+    reading = trading_activity.fetch_live(etf_scale.fetch_spot_board(), _PROBE, fetched_at="t")[0]
     # EastMoney history yields {turnover, amount}; the spot-board fallback adds a `provisional` tag.
     assert {"turnover", "amount"} <= reading.payload.keys()
     assert reading.payload.keys() <= {"turnover", "amount", "provisional"}  # only the optional tag

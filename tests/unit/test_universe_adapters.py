@@ -153,3 +153,17 @@ def test_etf_scale_maps_the_akshare_spot_columns() -> None:
     assert sse.payload == {"exchange": "sse", "aum": 68.0, "shares": 40.0, "amount": 8.0}
     assert szse.key == "159755"
     assert szse.payload == {"exchange": "szse", "aum": 46.0, "shares": 42.0, "amount": 0.5}
+
+
+def test_etf_scale_fetch_live_maps_the_shared_board_values() -> None:
+    # The live ETF-scale leg reads the shared spot board (keyed by code) the feed pulls once per
+    # run and maps each row to a scale Reading — it never re-fetches a board of its own.
+    board = {
+        "561010": {
+            "代码": "561010", "数据日期": "2026-06-15 00:00:00",
+            "总市值": 6_800_000_000.0, "最新份额": 4_000_000_000.0, "成交额": 800_000_000.0,
+        },
+    }
+    readings = etf_scale.fetch_live(board, fetched_at=FETCHED_AT)
+    assert [r.key for r in readings] == ["561010"]
+    assert readings[0].payload == {"exchange": "sse", "aum": 68.0, "shares": 40.0, "amount": 8.0}

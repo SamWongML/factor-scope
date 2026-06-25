@@ -12,6 +12,7 @@ import pytest
 
 from factor_scope.config import Config
 from factor_scope.contract import ListName
+from factor_scope.ingest.feed import Feed
 from factor_scope.markets import ComposedMarket, get_market
 from factor_scope.pipeline import build_dashboard
 from factor_scope.store import PointInTimeStore, Reading
@@ -62,7 +63,13 @@ class _FakeUniverse:
     """A one-position book, in the UniverseSource shape."""
 
     def gather(
-        self, config: Config, *, as_of: str, fetched_at: str, store: PointInTimeStore | None = None
+        self,
+        config: Config,
+        *,
+        as_of: str,
+        fetched_at: str,
+        feed: Feed,
+        store: PointInTimeStore | None = None,
     ) -> list[Reading]:
         return [
             Reading(
@@ -84,7 +91,7 @@ class _FakePrices:
     """One NAV for the universe's codes, in the PriceSource shape."""
 
     def gather(
-        self, config: Config, codes: list[str], *, as_of: str, fetched_at: str
+        self, config: Config, codes: list[str], *, as_of: str, fetched_at: str, feed: Feed
     ) -> list[Reading]:
         return [
             Reading(
@@ -116,3 +123,38 @@ def test_a_fake_market_drives_the_whole_pipeline() -> None:
     item = dash.items[0]
     assert item.list_name is ListName.HOLDINGS
     assert item.gain == pytest.approx(0.5)  # (1.5 nav - 1.0 cost) / 1.0
+
+
+def test_composed_market_threads_one_shared_feed_to_its_sources() -> None:
+    # ComposedMarket builds a single feed per run and hands it to the universe and price sources —
+    # the same one-feed-per-run wiring AShareMarket uses — so a feed-driven source never re-creates
+    # the transport, and the source protocols carry the feed the sources read from.
+    feeds: list[Feed] = []
+
+    class _FeedAwareUniverse:
+        def gather(
+            self,
+            config: Config,
+            *,
+            as_of: str,
+            fetched_at: str,
+            feed: Feed,
+            store: PointInTimeStore | None = None,
+        ) -> list[Reading]:
+            feeds.append(feed)
+            return []
+
+    class _FeedAwarePrices:
+        def gather(
+            self, config: Config, codes: list[str], *, as_of: str, fetched_at: str, feed: Feed
+        ) -> list[Reading]:
+            feeds.append(feed)
+            return []
+
+    market = ComposedMarket(
+        name="fake", universe=_FeedAwareUniverse(), prices=_FeedAwarePrices(), themes=_FakeThemes()
+    )
+    market.gather(Config(), as_of=AS_OF)
+    assert len(feeds) == 2  # threaded to both sources: universe + prices
+    assert feeds[0] is feeds[1]  # the same feed instance, one per run
+    assert isinstance(feeds[0], Feed)  # the real transport (offline → CassetteFeed)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Any
 
 import pytest
 
@@ -86,15 +87,22 @@ def test_spot_reading_is_marked_provisional() -> None:
     assert rows[0].payload["provisional"] is True
 
 
+def _board(code: str = "561010", *, turnover: float = 5.15, amount: float = 1.0) -> dict[str, Any]:
+    """A one-row shared spot board (keyed by code, like ``etf_scale.fetch_spot_board``) for the
+    fallback path — the live feed pulls this once per run and hands it to the activity leg."""
+
+    return {
+        code: {"代码": code, "数据日期": date(2026, 6, 16), "换手率": turnover, "成交额": amount}
+    }
+
+
 def test_trading_activity_fetch_live_prefers_history_when_reachable(monkeypatch) -> None:
     def em(**kwargs: object) -> FakeFrame:
         return FakeFrame([{"日期": "2026-05-30", "换手率": "4.25", "成交额": "3.60"}])
 
-    def spot() -> FakeFrame:
-        raise AssertionError("the spot board must not be called when history answers")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
-    reading = trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)[0]
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    # an empty board would yield no fallback rows, so a non-empty reading proves history answered
+    reading = trading_activity.fetch_live({}, "561010", fetched_at=FETCHED_AT)[0]
     assert reading.as_of == "2026-05-30"
     assert reading.payload == {"turnover": 4.25, "amount": 3.60}
 
@@ -109,54 +117,38 @@ def test_trading_activity_fetch_live_starts_one_day_past_the_watermark(monkeypat
         return FakeFrame([{"日期": "2026-05-30", "换手率": "4.25", "成交额": "3.60"}])
 
     install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
-    trading_activity.fetch_live("561010", fetched_at=FETCHED_AT, since="2026-05-29")
+    trading_activity.fetch_live({}, "561010", fetched_at=FETCHED_AT, since="2026-05-29")
     assert seen["start_date"] == "20260530"
 
 
 def test_trading_activity_falls_back_to_spot_when_history_refused(monkeypatch) -> None:
-    trading_activity._spot_snapshot.cache_clear()  # the spot board is memoised across the run
-
     def em(**kwargs: object) -> FakeFrame:
         raise ConnectionError("history host closed the connection")
 
-    def spot() -> FakeFrame:
-        day = date(2026, 6, 16)
-        return FakeFrame(
-            [
-                {"代码": "515880", "数据日期": day, "换手率": 1.0, "成交额": 2.0},
-                {"代码": "561010", "数据日期": day, "换手率": 5.15, "成交额": 12095104.0},
-            ]
-        )
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
-    reading = trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)[0]
-    assert reading.as_of == "2026-06-16"  # the spot session, found by code on the board
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    board = {
+        "515880": {"代码": "515880", "数据日期": date(2026, 6, 16), "换手率": 1.0, "成交额": 2.0},
+        "561010": {"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15,
+                   "成交额": 12095104.0},
+    }
+    reading = trading_activity.fetch_live(board, "561010", fetched_at=FETCHED_AT)[0]
+    assert reading.as_of == "2026-06-16"  # the spot session, found by code on the shared board
     assert reading.payload == {"turnover": 5.15, "amount": 12095104.0, "provisional": True}
-    trading_activity._spot_snapshot.cache_clear()
 
 
 def test_spot_fallback_yields_no_reading_for_a_fund_absent_from_the_board(monkeypatch) -> None:
     # A delisted/absent code simply isn't on the spot board → the crowding surface degrades to no
     # reading (the factor falls to invalid), never a crash.
-    trading_activity._spot_snapshot.cache_clear()
-
     def em(**kwargs: object) -> FakeFrame:
         raise ConnectionError("history host closed the connection")
 
-    def spot() -> FakeFrame:
-        return FakeFrame(
-            [{"代码": "515880", "数据日期": date(2026, 6, 16), "换手率": 1.0, "成交额": 2.0}]
-        )
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
-    assert trading_activity.fetch_live("561010", fetched_at=FETCHED_AT) == []
-    trading_activity._spot_snapshot.cache_clear()
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    assert trading_activity.fetch_live(_board("515880"), "561010", fetched_at=FETCHED_AT) == []
 
 
 def test_trading_activity_skips_eastmoney_while_the_breaker_is_open(monkeypatch) -> None:
     # The shared host breaker spans the activity leg too: once tripped, go straight to the spot
     # board for the rest of the run rather than re-hitting a blocking IP per fund.
-    trading_activity._spot_snapshot.cache_clear()
     breaker = _HostBreaker(threshold=1)
     breaker.record_failure(EASTMONEY_KLINE)  # tripped open
     monkeypatch.setattr(trading_activity, "host_breaker", breaker)
@@ -164,48 +156,30 @@ def test_trading_activity_skips_eastmoney_while_the_breaker_is_open(monkeypatch)
     def em(**kwargs: object) -> FakeFrame:
         raise AssertionError("EastMoney must be skipped while the breaker is open")
 
-    def spot() -> FakeFrame:
-        rows = [{"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15, "成交额": 1.0}]
-        return FakeFrame(rows)
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
-    reading = trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)[0]
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    reading = trading_activity.fetch_live(_board(), "561010", fetched_at=FETCHED_AT)[0]
     assert reading.payload["provisional"] is True  # served by the spot board, the host untouched
-    trading_activity._spot_snapshot.cache_clear()
 
 
 def test_trading_activity_records_a_breaker_failure_when_eastmoney_refuses(monkeypatch) -> None:
-    trading_activity._spot_snapshot.cache_clear()
     breaker = _HostBreaker(threshold=5)
     monkeypatch.setattr(trading_activity, "host_breaker", breaker)
 
     def em(**kwargs: object) -> FakeFrame:
         raise ConnectionError("history host closed the connection")
 
-    def spot() -> FakeFrame:
-        rows = [{"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15, "成交额": 1.0}]
-        return FakeFrame(rows)
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
-    trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    trading_activity.fetch_live(_board(), "561010", fetched_at=FETCHED_AT)
     assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
-    trading_activity._spot_snapshot.cache_clear()
 
 
 def test_trading_activity_logs_loudly_when_it_falls_back_to_spot(monkeypatch, caplog) -> None:
     # A silent history→spot swap would hide a persistently-blocked primary; the fallback must log so
     # the degradation is visible even though the spot board covers the current session.
-    trading_activity._spot_snapshot.cache_clear()
-
     def em(**kwargs: object) -> FakeFrame:
         raise ConnectionError("history host closed the connection")
 
-    def spot() -> FakeFrame:
-        rows = [{"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15, "成交额": 1.0}]
-        return FakeFrame(rows)
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em, fund_etf_spot_em=spot)
+    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
     with caplog.at_level(logging.WARNING):
-        trading_activity.fetch_live("561010", fetched_at=FETCHED_AT)
+        trading_activity.fetch_live(_board(), "561010", fetched_at=FETCHED_AT)
     assert any(r.levelno == logging.WARNING and "561010" in r.getMessage() for r in caplog.records)
-    trading_activity._spot_snapshot.cache_clear()

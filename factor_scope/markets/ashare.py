@@ -44,7 +44,7 @@ from factor_scope.ingest import (
     trading_activity,
 )
 from factor_scope.ingest.base import fetched_at_for, fetched_at_now, host_breaker
-from factor_scope.ingest.feed import get_feed
+from factor_scope.ingest.feed import Feed, get_feed
 from factor_scope.store import PointInTimeStore, Reading
 
 logger = logging.getLogger(__name__)
@@ -68,10 +68,10 @@ class AShareUniverse:
         *,
         as_of: str,
         fetched_at: str,
+        feed: Feed,
         store: PointInTimeStore | None = None,
         deadline: IngestDeadline | None = None,
     ) -> list[Reading]:
-        feed = get_feed(config)
         readings: list[Reading] = list(
             positions.load_fixture(
                 config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
@@ -201,11 +201,11 @@ class ASharePrices:
         *,
         as_of: str,
         fetched_at: str,
+        feed: Feed,
         required: Sequence[str] | None = None,
         store: PointInTimeStore | None = None,
         deadline: IngestDeadline | None = None,
     ) -> list[Reading]:
-        feed = get_feed(config)
         required_codes = set(codes if required is None else required)
         # Prices are watermarked like the other per-fund series: the cold pull seeds a ~400-day
         # window and each later night fetches only sessions past the store's floor.
@@ -408,8 +408,11 @@ class AShareMarket:
         # default), so a wedged source can't stall the nightly run past it — the per-fund/per-code
         # loops below stop once it trips, shipping the partial-but-valid readings gathered so far.
         deadline = IngestDeadline(config.ingest_deadline_seconds)
+        # One store-aware feed for the whole run, threaded through both legs: it fetches the shared
+        # spot board once and carries the store for the per-code load-shape decision.
+        feed = get_feed(config, store)
         readings = AShareUniverse().gather(
-            config, as_of=as_of, fetched_at=fetched_at, store=store, deadline=deadline
+            config, as_of=as_of, fetched_at=fetched_at, feed=feed, store=store, deadline=deadline
         )
         # Price the held book *and* the fetched (non-dead) universe: the funnel reasons over
         # candidate funds' NAVs (the trend gate, the launch-at-peak run-up, the return-correlation
@@ -422,6 +425,7 @@ class AShareMarket:
             codes,
             as_of=as_of,
             fetched_at=fetched_at,
+            feed=feed,
             required=book,
             store=store,
             deadline=deadline,
