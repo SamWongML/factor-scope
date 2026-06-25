@@ -164,6 +164,12 @@ class Config:
     # push2his connection reset that refuses a plain-``requests`` TLS handshake. Bump this when
     # Chrome's fingerprint drifts past what the pinned curl_cffi build ships (e.g. "chrome131").
     eastmoney_impersonate: str = "chrome"
+    # How many trading sessions a fund's stored history may fall behind the closed session before
+    # the live feed re-pulls its EastMoney K-line history instead of reading the current bar off the
+    # spot board. Steady state is one session behind (today's bar not yet settled), so the default
+    # tolerates a small hole; lower it to 1 to backfill every missed session, raise it to defer more
+    # to the cheap board. A fund more than this far behind (or never seeded) takes a deep pull.
+    eastmoney_gap_sessions: int = 2
     # An overall wall-clock budget (seconds) for one live ingest gather — the run-level backstop
     # above the per-read deadline, so no single wedged source (e.g. a silent TDX server on the
     # Mootdx leg) can stall a nightly run indefinitely. Once exceeded, the per-fund/per-code loops

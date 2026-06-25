@@ -59,9 +59,12 @@ def test_eastmoney_kline_live_defeats_the_push2his_reset() -> None:
 
 @skip_unless_live
 def test_prices_live_smoke() -> None:
-    readings = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
-    # The cold pull seeds a *window* of bars, not just the latest, so the trend gate's 200-day MA
-    # has its own-history distribution from night one — the regression returning one bar caused.
+    # The NAV leg maps the impersonating K-line client's bars (close → nav). The cold pull seeds a
+    # *window* of bars, not just the latest, so the trend gate's 200-day MA has its own-history
+    # distribution from night one — the regression returning one bar caused.
+    floor = prices._floor(_RUN_STAMP, None)
+    bars = eastmoney.kline(_PROBE, beg=prices._em_start(_RUN_STAMP, None))
+    readings = prices.from_kline(_PROBE, bars, fetched_at=_RUN_STAMP, floor=floor)
     assert len(readings) > 1
     assert all(r.key == _PROBE for r in readings)
     assert all(r.payload.keys() == {"nav", "source"} for r in readings)
@@ -71,19 +74,27 @@ def test_prices_live_smoke() -> None:
     stamps = [r.as_of for r in readings]
     assert stamps == sorted(stamps)
     # The window is bounded to the ~400-trading-day seed floor, not the fund's full history.
-    floor = prices._floor(_RUN_STAMP, None)
     assert floor is not None and all(r.as_of > floor for r in readings)
 
 
 @skip_unless_live
 def test_prices_incremental_since_live_smoke() -> None:
-    # The other half of the contract: a re-pull past a watermark returns only newer sessions, so a
-    # nightly re-pull is linear, not a full re-fetch. Offline this is cassette-simulated; here it is
-    # the real EastMoney ``beg`` path, the leg that tripped the rate limiter when unbounded.
-    cold = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP)
+    # The other half of the contract: the real EastMoney ``beg`` path (the leg that tripped the rate
+    # limiter when unbounded) returns only sessions past a watermark — a nightly re-pull is linear.
+    cold = prices.from_kline(
+        _PROBE,
+        eastmoney.kline(_PROBE, beg=prices._em_start(_RUN_STAMP, None)),
+        fetched_at=_RUN_STAMP,
+        floor=prices._floor(_RUN_STAMP, None),
+    )
     assert len(cold) > 1
     since = cold[len(cold) // 2].as_of  # a real session mid-window becomes the watermark
-    incremental = prices.fetch_live(_PROBE, fetched_at=_RUN_STAMP, since=since)
+    incremental = prices.from_kline(
+        _PROBE,
+        eastmoney.kline(_PROBE, beg=prices._em_start(_RUN_STAMP, since)),
+        fetched_at=_RUN_STAMP,
+        floor=since,
+    )
     assert all(r.as_of > since for r in incremental)  # only sessions strictly past the watermark
     assert len(incremental) < len(cold)  # a strict subset of the window, not a whole re-fetch
     assert all(r.payload.keys() == {"nav", "source"} for r in incremental)
@@ -185,11 +196,12 @@ def test_fundamentals_live_smoke() -> None:
 
 @skip_unless_live
 def test_trading_activity_live_smoke() -> None:
-    # The activity history leg rides the same browser-impersonating K-line client as the NAV leg: a
-    # window of {turnover, amount} bars comes back (the push2his reset defeated), not the single
-    # provisional bar the spot-board fallback yields when impersonation fails.
-    board = etf_scale.fetch_spot_board()
-    readings = trading_activity.fetch_live(board, _PROBE, fetched_at=_RUN_STAMP)
+    # The activity history leg rides the same browser-impersonating K-line client as the NAV leg —
+    # one fetch feeds both. A window of {turnover, amount} bars comes back (the push2his reset
+    # defeated), not the single provisional bar the spot-board fallback yields when impersonation
+    # fails. The same ``bars`` carry the NAV leg's close, proving the one-call-feeds-both contract.
+    bars = eastmoney.kline(_PROBE, beg=prices._em_start(_RUN_STAMP, None))
+    readings = trading_activity.from_kline(_PROBE, bars, fetched_at=_RUN_STAMP)
     assert len(readings) > 1  # a history window via impersonation, not the one-bar spot fallback
     assert all(r.key == _PROBE for r in readings)
     assert all(r.payload.keys() == {"turnover", "amount"} for r in readings)  # history, untagged

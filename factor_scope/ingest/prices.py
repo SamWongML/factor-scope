@@ -1,26 +1,25 @@
 """Prices / fund-NAV adapter (CN). Reads ``{code, as_of, nav}`` rows.
 
 Per-item gain comes from cost basis vs the current NAV pulled here, and the trend/reversal/low-vol
-factors read the NAV history. Live, EastMoney's daily K-line is fetched through the
-browser-fingerprinted :mod:`~factor_scope.ingest.eastmoney` client (which defeats the ``push2his``
-reset), with a Sina (``fund_etf_hist_sina``) fallback for when that host refuses the request — never
-called in CI (which forces offline). Offline, the recorded NAV history is replayed through the feed
-and reconciled across the three corroborating legs by :func:`select_reconciled`.
+factors read the NAV history. Live, the current bar comes from the shared whole-market spot board
+(:func:`spot_reading`) and per-fund EastMoney K-line history (:func:`from_kline`, via the
+browser-fingerprinted :mod:`~factor_scope.ingest.eastmoney` client) is pulled only to seed or
+backfill — the spot-vs-deep load-shape decision lives in the store-aware
+:class:`~factor_scope.ingest.feed.LiveFeed`. A Sina (:func:`sina`) leg backs the K-line up when the
+``push2his`` host refuses the request — never called in CI (which forces offline). Offline, the
+recorded NAV history is replayed through the feed and reconciled across the three corroborating legs
+by :func:`select_reconciled`.
 """
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterable, Mapping
 from datetime import timedelta
 from statistics import median
 from typing import Any
 
-from factor_scope.ingest import eastmoney
-from factor_scope.ingest.base import EASTMONEY_KLINE, day_after, host_breaker, run_date
+from factor_scope.ingest.base import day_after, run_date, spot_date
 from factor_scope.store import Reading
-
-logger = logging.getLogger(__name__)
 
 SERIES = "prices"
 SOURCE = "akshare"  # this adapter's provenance tag; its live backend is AkShare-shaped
@@ -96,39 +95,54 @@ def select_reconciled(
     return [canonical]
 
 
-def fetch_live(
-    code: str, *, fetched_at: str, since: str | None = None, impersonate: str = "chrome"
+def from_kline(
+    code: str, rows: Iterable[Mapping[str, Any]], *, fetched_at: str, floor: str | None = None
 ) -> list[Reading]:
-    """Pull one ETF's daily raw-close NAV history. Requires `live` + network.
+    """Map the EastMoney K-line client's domain bars (``close`` → NAV) to Readings, oldest-first.
 
-    Returns a *window* of bars, not just the latest: the trend/reversal/low-vol factors read the
-    full stored NAV history, so the cold (``since`` is None) pull seeds ~400 trading days and each
-    later night pulls only the sessions after the watermark — the same incremental contract the
-    other per-fund series use, turning the nightly re-pull from quadratic to linear.
-
-    EastMoney is the primary backend, fetched through the browser-fingerprinted :mod:`eastmoney`
-    K-line client (``impersonate`` profile) that defeats the ``push2his`` reset; when that host
-    refuses the request, Sina serves the same unadjusted daily close, so a block on one host can't
-    unprice the book. The provenance tag stays ``akshare`` either way — both are on the same
-    raw-close basis Sina's AkShare backend reads.
+    The deep (seed / backfill) leg of the load-shape: a *window* of bars, not just the latest, since
+    the trend/reversal/low-vol factors read the full stored NAV history. ``floor`` keeps only bars
+    strictly newer than the stored watermark, so a re-pull writes nothing already held. One K-line
+    fetch feeds both this leg (``close``) and the trading-activity leg (``turnover`` / ``amount``).
     """
 
-    floor = _floor(fetched_at, since)
-    if host_breaker.is_open(EASTMONEY_KLINE):
-        return _sina(code, fetched_at=fetched_at, floor=floor)  # host known-blocked → skip it
-    try:
-        rows = eastmoney.kline(code, beg=_em_start(fetched_at, since), impersonate=impersonate)
-        bars = [{"as_of": bar["date"], "nav": bar["close"]} for bar in rows]
-        host_breaker.record_success(EASTMONEY_KLINE)
-    except Exception as exc:
-        host_breaker.record_failure(EASTMONEY_KLINE)
-        logger.warning("prices: EastMoney history refused %s (%s); falling back to Sina", code, exc)
-        return _sina(code, fetched_at=fetched_at, floor=floor)
+    bars = ({"as_of": str(r["date"]), "nav": float(r["close"])} for r in rows)
     return _to_readings(code, bars, fetched_at=fetched_at, floor=floor)
 
 
-def _sina(code: str, *, fetched_at: str, floor: str | None) -> list[Reading]:
-    """The Sina fallback: full history (no date range), trimmed client-side to the same window."""
+def spot_reading(
+    board: Mapping[str, Any], code: str, *, fetched_at: str, settled: bool, floor: str | None
+) -> list[Reading]:
+    """One fund's current-session NAV (``最新价``) from the shared whole-market spot ``board``.
+
+    Steady state reads the current bar off the cheap batch board rather than a per-code ``push2his``
+    pull. A bar whose session date is the closed trading session (``settled``) records as settled
+    NAV history and advances the watermark; otherwise it is tagged ``provisional`` so the floor
+    (:func:`markets.ashare._series_watermarks`) skips it and a later K-line pull backfills. The
+    provenance tag stays ``akshare`` — the board's ``最新价`` is the same raw market-close basis the
+    K-line leg stores. No rows for a code absent from the board (e.g. delisted).
+    """
+
+    row = board.get(code)
+    if row is None:
+        return []
+    bars = [{"as_of": spot_date(row["数据日期"]), "nav": float(row["最新价"])}]
+    readings = _to_readings(code, bars, fetched_at=fetched_at, floor=floor)
+    if settled:
+        return readings
+    return [
+        reading.model_copy(update={"payload": {**reading.payload, "provisional": True}})
+        for reading in readings
+    ]
+
+
+def sina(code: str, *, fetched_at: str, floor: str | None) -> list[Reading]:
+    """The Sina fallback when ``push2his`` refuses the K-line: full history, trimmed to the window.
+
+    Sina (``fund_etf_hist_sina``) returns the same unadjusted daily close on a different host, so a
+    block on EastMoney can't unprice the book. The provenance tag stays ``akshare`` — both are on
+    the same raw-close basis AkShare's Sina backend reads.
+    """
 
     import akshare as ak
 

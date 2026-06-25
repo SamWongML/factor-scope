@@ -17,6 +17,7 @@ from factor_scope.config import Config
 from factor_scope.ingest import (
     baostock,
     demand,
+    eastmoney,
     edgar,
     etf_scale,
     fred,
@@ -25,7 +26,6 @@ from factor_scope.ingest import (
     fundamentals,
     mootdx,
     prices,
-    trading_activity,
 )
 from factor_scope.ingest.base import EASTMONEY_KLINE, IngestError, host_breaker
 from factor_scope.markets.ashare import AShareMarket
@@ -42,30 +42,26 @@ def _stub_adapters(monkeypatch) -> None:
     # A fully-configured live host with the network stubbed out: the credential preflight (run by
     # pipeline.ingest) needs the required keys present even though the feeds themselves are faked.
     monkeypatch.setenv("FRED_API_KEY", "stub-key")
+    # store=None on these gathers → every code reads cold → one impersonating K-line pull per code
+    # feeds BOTH the NAV (close → 1.0) and activity (turnover/amount) legs from the one client.
     monkeypatch.setattr(
-        prices,
-        "fetch_live",
-        lambda key, *, fetched_at, since=None, impersonate="chrome": [
-            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
-                    payload={"nav": 1.0})
+        eastmoney,
+        "kline",
+        lambda code, *, beg, impersonate="chrome": [
+            {"date": "2026-06-05", "close": 1.0, "turnover": 3.1, "amount": 2.8}
         ],
     )
-    monkeypatch.setattr(
-        baostock,
-        "fetch_live",
-        lambda key, *, fetched_at, since=None: [
-            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
-                    payload={"nav": 1.0})  # corroborates the AkShare read
-        ],
-    )
-    monkeypatch.setattr(
-        mootdx,
-        "fetch_live",
-        lambda key, *, fetched_at, since=None: [
-            Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
-                    payload={"nav": 1.0})  # the third source also corroborates
-        ],
-    )
+    # Baostock/Mootdx corroborate the AkShare read on their own hosts; they honour the ``since``
+    # watermark (a same-day re-pull past the floor returns nothing) so an idempotent re-ingest is a
+    # true no-op across all three legs, like production.
+    def _corroborate(key, *, fetched_at, since=None):
+        if since is not None:
+            return []
+        return [Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                        payload={"nav": 1.0})]
+
+    monkeypatch.setattr(baostock, "fetch_live", _corroborate)
+    monkeypatch.setattr(mootdx, "fetch_live", _corroborate)
     monkeypatch.setattr(
         fund_holdings,
         "fetch_live",
@@ -83,9 +79,17 @@ def _stub_adapters(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(fred, "fetch_live", lambda series_id, *, fetched_at: [])
-    # One shared spot board per run; the three legs below take it but ignore its contents (they
-    # return canned readings), so a bare snapshot is enough to thread through the gather.
-    monkeypatch.setattr(etf_scale, "fetch_spot_board", lambda: {code: {} for code, _ in _UNIVERSE})
+    # One shared spot board per run, carrying the current-bar fields the universe/scale legs read
+    # and the per-fund legs fall back to (最新价 → NAV, 换手率/成交额 → activity) on a K-line miss.
+    monkeypatch.setattr(
+        etf_scale,
+        "fetch_spot_board",
+        lambda: {
+            code: {"代码": code, "数据日期": "2026-06-05",
+                   "最新价": 1.0, "换手率": 3.1, "成交额": 2.8}
+            for code, _ in _UNIVERSE
+        },
+    )
     monkeypatch.setattr(
         fund_universe,
         "fetch_live",
@@ -103,14 +107,6 @@ def _stub_adapters(monkeypatch) -> None:
         lambda board, *, fetched_at: [
             Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
                     payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})
-        ],
-    )
-    monkeypatch.setattr(
-        trading_activity,
-        "fetch_live",
-        lambda board, code, *, fetched_at, since=None, impersonate="chrome": [
-            Reading(series="trading_activity", key=code, as_of="2026-06-05", fetched_at=fetched_at,
-                    payload={"turnover": 3.1, "amount": 2.8})
         ],
     )
     monkeypatch.setattr(
@@ -160,7 +156,7 @@ def test_gather_live_constructs_exactly_one_feed_for_the_whole_run(monkeypatch) 
 
 def test_gather_live_fetches_the_spot_board_once_and_shares_it(monkeypatch) -> None:
     # The whole-market spot board is a single shared per-run snapshot: pulled once, then handed to
-    # the universe-membership, ETF-scale, and trading-activity-fallback legs — not fetched per leg.
+    # the universe-membership + ETF-scale legs (and the per-fund current-bar legs) — not per leg.
     _stub_adapters(monkeypatch)
     board = {"561010": object()}  # a sentinel snapshot — the legs only need its identity here
     pulls = {"n": 0}
@@ -185,22 +181,16 @@ def test_gather_live_fetches_the_spot_board_once_and_shares_it(monkeypatch) -> N
         return [Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
                         payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})]
 
-    def activity(b, code, *, fetched_at, since=None, impersonate="chrome"):
-        seen.append(b)
-        return [Reading(series="trading_activity", key=code, as_of="2026-06-05",
-                        fetched_at=fetched_at, payload={"turnover": 3.1, "amount": 2.8})]
-
     monkeypatch.setattr(etf_scale, "fetch_spot_board", fetch_board_once)
     monkeypatch.setattr(fund_universe, "fetch_live", universe)
     monkeypatch.setattr(etf_scale, "fetch_live", scale)
-    monkeypatch.setattr(trading_activity, "fetch_live", activity)
 
     AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
 
     assert pulls["n"] == 1  # pulled exactly once for the whole run, not once per leg
-    # one board reached every leg that reads it — universe, scale, and the activity leg of each
-    # on-exchange ETF (561010 + 588200, both non-dead) — so exactly four consumers, same snapshot
-    assert len(seen) == 4 and all(b is board for b in seen)
+    # the board reaches the legs that read it directly — universe membership + ETF scale — as one
+    # shared snapshot (the per-fund current-bar legs read it on the warm path, seam-tested).
+    assert len(seen) == 2 and all(b is board for b in seen)
 
 
 def test_gather_live_refreshes_holdings_for_each_on_exchange_etf(monkeypatch) -> None:
@@ -406,14 +396,17 @@ def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
     assert len(priced) == len(held)
 
 
-def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, caplog) -> None:
+def test_gather_live_falls_back_to_baostock_when_eastmoney_is_down(monkeypatch, caplog) -> None:
     _stub_adapters(monkeypatch)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)  # don't really back off in the test
 
-    def _akshare_down(key, *, fetched_at, since=None, impersonate="chrome"):
-        raise RuntimeError("AkShare IP-blocked")
+    def _push2his_down(code, *, beg, impersonate="chrome"):
+        raise RuntimeError("push2his IP-blocked")
 
-    monkeypatch.setattr(prices, "fetch_live", _akshare_down)
+    monkeypatch.setattr(eastmoney, "kline", _push2his_down)
+    # Sina (the EastMoney NAV leg's own fallback) can't serve either, so the akshare leg drops out
+    # entirely and Baostock/Mootdx must substitute the NAV.
+    monkeypatch.setattr(prices, "sina", lambda code, *, fetched_at, floor: [])
     for source in (baostock, mootdx):  # the two surviving sources agree on the substitute NAV
         monkeypatch.setattr(
             source,
@@ -423,7 +416,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
                         payload={"nav": 2.0})
             ],
         )
-    # AkShare offline must not kill the run — the other sources substitute for it (failover).
+    # The EastMoney host offline must not kill the run — the other sources substitute for it.
     with caplog.at_level(logging.WARNING):
         readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
     held = {r.key for r in readings if r.series == "positions"}
@@ -431,7 +424,7 @@ def test_gather_live_falls_back_to_baostock_when_akshare_is_down(monkeypatch, ca
     assert {r.key for r in priced} == held
     assert all(r.payload["nav"] == 2.0 for r in priced)  # the substituted Baostock NAV
     # the failover is logged, not silent — silent degradation is the failure mode we guard against
-    assert any("akshare" in rec.message.lower() for rec in caplog.records)
+    assert any("eastmoney" in rec.message.lower() for rec in caplog.records)
 
 
 def test_gather_live_flags_a_source_disagreement_and_continues(monkeypatch, caplog) -> None:

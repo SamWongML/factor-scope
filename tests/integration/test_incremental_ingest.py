@@ -8,12 +8,15 @@ hard-coded lookback. These stay offline by stubbing the heavy ``fetch_live`` bac
 date-driven fakes that record the ``since`` watermark each call was handed.
 """
 
+from datetime import date, timedelta
+
 import pytest
 
 from factor_scope.config import Config
 from factor_scope.ingest import (
     baostock,
     demand,
+    eastmoney,
     edgar,
     etf_scale,
     fred,
@@ -47,21 +50,27 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
     # A configured live host with the network stubbed: the credential preflight needs the key set.
     monkeypatch.setenv("FRED_API_KEY", "stub-key")
     seen: dict[str, list[str | None]] = {
-        trading_activity.SERIES: [],
         fundamentals.SERIES: [],
         fund_holdings.SERIES: [],
-        prices.SERIES: [],
+        prices.SERIES: [],  # the `beg` the feed asks the shared K-line (NAV + activity ride it)
     }
 
     def _newer(dates, since, run):
         return [d for d in dates if d <= run and (since is None or d > since)]
 
-    def fake_trading(board, code, *, fetched_at, since=None, impersonate="chrome"):
-        seen[trading_activity.SERIES].append(since)
+    def fake_kline(code, *, beg, impersonate="chrome"):
+        # One impersonating K-line pull feeds BOTH the NAV (close) and activity (turnover/amount)
+        # legs. A young fund (bars span months, not the ~650-day seed window) reads as
+        # cold every night, so the feed re-requests from the seed floor (beg = run − window) and the
+        # store floor trims the WRITE to sessions past the watermark — accrual stays incremental.
+        if code == _FUND:
+            seen[prices.SERIES].append(beg)
+        beg_iso = f"{beg[:4]}-{beg[4:6]}-{beg[6:8]}"
+        run = (date.fromisoformat(beg_iso) + timedelta(days=prices._SEED_CALENDAR_DAYS)).isoformat()
         return [
-            Reading(series=trading_activity.SERIES, key=code, as_of=d, fetched_at=fetched_at,
-                    payload={"turnover": 3.1, "amount": 2.8})
-            for d in _newer(_TRADING_BARS, since, fetched_at[:10])
+            {"date": d, "close": 1.0, "turnover": 3.1, "amount": 2.8}
+            for d in _TRADING_BARS
+            if beg_iso <= d <= run
         ]
 
     def fake_valuation(code, *, fetched_at, since=None):
@@ -80,7 +89,7 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
             for q in _newer(_HOLDINGS_QUARTERS, since, fetched_at[:10])
         ]
 
-    monkeypatch.setattr(trading_activity, "fetch_live", fake_trading)
+    monkeypatch.setattr(eastmoney, "kline", fake_kline)
     monkeypatch.setattr(fundamentals, "fetch_live", fake_valuation)
     monkeypatch.setattr(fund_holdings, "fetch_live", fake_holdings)
     monkeypatch.setattr(etf_scale, "fetch_spot_board", lambda: {_FUND: {}})
@@ -94,19 +103,9 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
                              "tracking_error": None, "top10_weight": None, "valid": False})
         ],
     )
-    # Prices are watermarked windows too: the AkShare leg is date-driven (and records its ``since``)
-    # so a re-pull carves only the newer-than-watermark slice; Baostock/Mootdx corroborate the
-    # latest bar so the run completes without tripping the data circuit breaker. Only the AkShare
-    # leg records ``since`` — the watermark progression is asserted on it.
-    def fake_price(key, *, fetched_at, since=None, impersonate="chrome"):
-        if key == _FUND:  # the universe ETF whose price watermark the test pins
-            seen[prices.SERIES].append(since)
-        return [
-            Reading(series="prices", key=key, as_of=d, fetched_at=fetched_at, payload={"nav": 1.0})
-            for d in _newer(_PRICE_BARS, since, fetched_at[:10])
-        ]
-
-    monkeypatch.setattr(prices, "fetch_live", fake_price)
+    # Baostock/Mootdx corroborate the latest bar (so the run completes without tripping the data
+    # circuit breaker) on their own un-throttled hosts; the EastMoney NAV leg rides the shared
+    # ``fake_kline`` above (one call feeds both NAV and activity).
     for source in (baostock, mootdx):
         monkeypatch.setattr(
             source,
@@ -159,18 +158,22 @@ def test_second_ingest_pulls_only_newer_bars(monkeypatch, tmp_path) -> None:
         fundamentals.SERIES: 2,  # 06-29, 06-30
         fund_holdings.SERIES: 2,  # 2026-03-31, 2026-06-30
     }
-    assert seen[trading_activity.SERIES] == [None]
-    assert seen[fundamentals.SERIES] == [None]
+    assert seen[fundamentals.SERIES] == [None]  # holdings/valuation still pass incremental since
     assert seen[fund_holdings.SERIES] == [None]
-    assert seen[prices.SERIES] == [None]  # cold start → the price leg seeds its window from scratch
+    # The EastMoney legs re-seed from the bounded window floor (this fund is younger than the seed
+    # window, so it reads cold), not the full-history epoch; the store floor trims the WRITE.
+    assert seen[prices.SERIES] == [prices._em_start("2026-06-30T22:00:00Z", None)]
 
-    # Night two skips ahead a quarter: each pull is handed the night-one watermark and returns only
-    # the strictly-newer slice — the skipped sessions in between are backfilled from the watermark.
+    # Night two skips ahead a quarter. Holdings/valuation are handed the night-one watermark and
+    # return only the strictly-newer slice; the EastMoney legs re-seed the window again, but the
+    # store floor still writes only the sessions past the watermark — accrual stays incremental.
     nightly_ingest(Config(source="live", as_of="2026-09-30", **paths))
-    assert seen[trading_activity.SERIES] == [None, "2026-06-30"]
     assert seen[fundamentals.SERIES] == [None, "2026-06-30"]
     assert seen[fund_holdings.SERIES] == [None, "2026-06-30"]
-    assert seen[prices.SERIES] == [None, "2026-06-30"]  # night two pulls only past the price floor
+    assert seen[prices.SERIES] == [
+        prices._em_start("2026-06-30T22:00:00Z", None),
+        prices._em_start("2026-09-30T22:00:00Z", None),
+    ]
     assert _counts(paths["store_path"]) == {
         trading_activity.SERIES: 4,  # + 09-29, 09-30 (the gap is backfilled, not just last night)
         fundamentals.SERIES: 4,  # + 09-29, 09-30
@@ -200,7 +203,7 @@ def test_reingest_same_night_writes_nothing(monkeypatch, tmp_path) -> None:
     # the re-pull is a no-op, so the append-only log does not grow.
     nightly_ingest(Config(source="live", as_of="2026-09-30", **paths))
     assert _counts(paths["store_path"]) == before
-    assert seen[trading_activity.SERIES][-1] == "2026-09-30"  # the watermark, not a re-pull of all
+    assert seen[fund_holdings.SERIES][-1] == "2026-09-30"  # the watermark was read, not a re-pull
 
 
 def test_offline_reingest_over_unchanged_cassettes_writes_nothing(tmp_path) -> None:
