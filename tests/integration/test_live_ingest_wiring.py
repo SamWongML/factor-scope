@@ -108,7 +108,7 @@ def _stub_adapters(monkeypatch) -> None:
     monkeypatch.setattr(
         trading_activity,
         "fetch_live",
-        lambda board, code, *, fetched_at, since=None: [
+        lambda board, code, *, fetched_at, since=None, impersonate="chrome": [
             Reading(series="trading_activity", key=code, as_of="2026-06-05", fetched_at=fetched_at,
                     payload={"turnover": 3.1, "amount": 2.8})
         ],
@@ -185,7 +185,7 @@ def test_gather_live_fetches_the_spot_board_once_and_shares_it(monkeypatch) -> N
         return [Reading(series="etf_scale", key="561010", as_of="2026-05-31", fetched_at=fetched_at,
                         payload={"exchange": "sse", "aum": 68.0, "shares": 40.0})]
 
-    def activity(b, code, *, fetched_at, since=None):
+    def activity(b, code, *, fetched_at, since=None, impersonate="chrome"):
         seen.append(b)
         return [Reading(series="trading_activity", key=code, as_of="2026-06-05",
                         fetched_at=fetched_at, payload={"turnover": 3.1, "amount": 2.8})]

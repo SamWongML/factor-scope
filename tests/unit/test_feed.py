@@ -85,7 +85,7 @@ def test_live_feed_paces_between_per_fund_calls(monkeypatch) -> None:
     monkeypatch.setattr("factor_scope.ingest.etf_scale.fetch_spot_board", dict)
     monkeypatch.setattr(
         "factor_scope.ingest.trading_activity.fetch_live",
-        lambda board, code, *, fetched_at, since=None: [],
+        lambda board, code, *, fetched_at, since=None, impersonate="chrome": [],
     )
     live = get_feed(Config(source="live", live_pacing_seconds=0.7), store=None)
     assert isinstance(live, LiveFeed)
@@ -114,6 +114,25 @@ def test_live_feed_threads_the_impersonation_profile_to_the_prices_leg(monkeypat
     )
     live.price_sources("561010", fetched_at=FETCHED_AT)
     assert seen["impersonate"] == "chrome131"  # the configured profile reached the client boundary
+
+
+def test_live_feed_threads_the_impersonation_profile_to_the_activity_leg(monkeypatch) -> None:
+    # The activity history leg rides the same EastMoney K-line client as the NAV leg, so get_feed
+    # must thread Config.eastmoney_impersonate down to it too — else a bumped profile fixes NAV but
+    # leaves activity hitting the same host with the stale one (and tripping the shared breaker).
+    seen: dict[str, str] = {}
+
+    def fake_activity(board, code, *, fetched_at, since=None, impersonate="chrome"):
+        seen["impersonate"] = impersonate
+        return []
+
+    monkeypatch.setattr("factor_scope.ingest.etf_scale.fetch_spot_board", dict)
+    monkeypatch.setattr("factor_scope.ingest.trading_activity.fetch_live", fake_activity)
+    live = get_feed(
+        Config(source="live", eastmoney_impersonate="chrome131", live_pacing_seconds=0), store=None
+    )
+    live.activity("561010", fetched_at=FETCHED_AT)
+    assert seen["impersonate"] == "chrome131"  # the configured profile reached the activity leg
 
 
 def test_cassette_feed_never_paces() -> None:

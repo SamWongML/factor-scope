@@ -56,7 +56,7 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
     def _newer(dates, since, run):
         return [d for d in dates if d <= run and (since is None or d > since)]
 
-    def fake_trading(board, code, *, fetched_at, since=None):
+    def fake_trading(board, code, *, fetched_at, since=None, impersonate="chrome"):
         seen[trading_activity.SERIES].append(since)
         return [
             Reading(series=trading_activity.SERIES, key=code, as_of=d, fetched_at=fetched_at,

@@ -185,11 +185,17 @@ def test_fundamentals_live_smoke() -> None:
 
 @skip_unless_live
 def test_trading_activity_live_smoke() -> None:
-    reading = trading_activity.fetch_live(etf_scale.fetch_spot_board(), _PROBE, fetched_at="t")[0]
-    # EastMoney history yields {turnover, amount}; the spot-board fallback adds a `provisional` tag.
-    assert {"turnover", "amount"} <= reading.payload.keys()
-    assert reading.payload.keys() <= {"turnover", "amount", "provisional"}  # only the optional tag
-    assert reading.payload["turnover"] >= 0 and reading.payload["amount"] >= 0
+    # The activity history leg rides the same browser-impersonating K-line client as the NAV leg: a
+    # window of {turnover, amount} bars comes back (the push2his reset defeated), not the single
+    # provisional bar the spot-board fallback yields when impersonation fails.
+    board = etf_scale.fetch_spot_board()
+    readings = trading_activity.fetch_live(board, _PROBE, fetched_at=_RUN_STAMP)
+    assert len(readings) > 1  # a history window via impersonation, not the one-bar spot fallback
+    assert all(r.key == _PROBE for r in readings)
+    assert all(r.payload.keys() == {"turnover", "amount"} for r in readings)  # history, untagged
+    assert all(r.payload["turnover"] >= 0 and r.payload["amount"] >= 0 for r in readings)
+    stamps = [r.as_of for r in readings]
+    assert stamps == sorted(stamps)  # oldest-first, matching the NAV leg's window contract
 
 
 @skip_unless_live

@@ -1,8 +1,9 @@
 """The trading-activity ingest adapter — daily turnover + traded value, the crowding surface.
 
-This pins the live AkShare backend: each row is keyed by code and stamped with the bar's own
-trading date (not the run date), carrying ``turnover`` (换手率, the crowding signal) and ``amount``
-(成交额, the Amihud-illiquidity input). The offline replay is covered in
+This pins the live EastMoney K-line backend: the same browser-impersonating client the NAV leg
+rides, returning domain bars ``{date, turnover, amount}``. Each row is keyed by code and stamped
+with the bar's own trading date (not the run date), carrying ``turnover`` (换手率, the crowding
+signal) and ``amount`` (成交额, the Amihud-illiquidity input). The offline replay is covered in
 ``tests/unit/test_feed.py``.
 """
 
@@ -14,19 +15,47 @@ from typing import Any
 
 import pytest
 
-from factor_scope.ingest import trading_activity
+from factor_scope.ingest import eastmoney, prices, trading_activity
 from factor_scope.ingest.base import EASTMONEY_KLINE, _HostBreaker
-from tests.unit._akshare_fakes import FakeFrame, install_fake_akshare
 
 pytestmark = pytest.mark.unit
 
 FETCHED_AT = "2026-06-05T22:00:00Z"
 
 
-def test_trading_activity_maps_the_akshare_bar_columns() -> None:
-    # the live ETF daily bar (日期 / 换手率 / 成交额) maps to the same Reading shape as the fixture,
-    # pinned offline so the column mapping is covered without the network.
-    bars = [{"日期": "2026-05-30", "换手率": "4.25", "成交额": "3.60"}]
+def fake_kline(
+    monkeypatch: Any,
+    *,
+    bars: list[dict[str, Any]] | None = None,
+    error: Exception | None = None,
+    captured: dict[str, Any] | None = None,
+) -> None:
+    """Mock the EastMoney K-line client the activity history leg now fetches through.
+
+    Returns domain bars ``{date, close, turnover, amount}`` (the client's contract), raises
+    ``error`` to simulate a ``push2his`` reset, or records the ``beg`` it saw into ``captured``.
+    """
+
+    def _kline(code: str, *, beg: str, impersonate: str = "chrome") -> list[dict[str, Any]]:
+        if captured is not None:
+            captured.update({"code": code, "beg": beg, "impersonate": impersonate})
+        if error is not None:
+            raise error
+        return bars or []
+
+    monkeypatch.setattr(eastmoney, "kline", _kline)
+
+
+def _bar(as_of: str, *, turnover: float, amount: float) -> dict[str, Any]:
+    """A domain bar as the EastMoney client returns it; the activity leg reads turnover + amount."""
+
+    return {"date": as_of, "close": 0.0, "turnover": turnover, "amount": amount}
+
+
+def test_trading_activity_maps_the_kline_bar_columns() -> None:
+    # the client's domain bar ({date, turnover, amount}) maps to the same Reading shape as the
+    # fixture, pinned offline so the column mapping is covered without the network.
+    bars = [_bar("2026-05-30", turnover=4.25, amount=3.60)]
     reading = trading_activity._from_bars("561010", bars, fetched_at=FETCHED_AT)[0]
     assert reading.key == "561010"
     assert reading.as_of == "2026-05-30"
@@ -34,21 +63,14 @@ def test_trading_activity_maps_the_akshare_bar_columns() -> None:
 
 
 def test_trading_activity_from_bars_keeps_only_bars_past_the_watermark() -> None:
-    # the incremental re-pull drops bars at or before the stored watermark (AkShare's start_date is
+    # the incremental re-pull drops bars at or before the stored watermark (the K-line beg is
     # inclusive, so the boundary bar can return) — only strictly-newer sessions become rows.
     bars = [
-        {"日期": "2026-05-29", "换手率": "1.0", "成交额": "1.0"},
-        {"日期": "2026-05-30", "换手率": "2.0", "成交额": "2.0"},
+        _bar("2026-05-29", turnover=1.0, amount=1.0),
+        _bar("2026-05-30", turnover=2.0, amount=2.0),
     ]
     kept = trading_activity._from_bars("561010", bars, fetched_at=FETCHED_AT, since="2026-05-29")
     assert [r.as_of for r in kept] == ["2026-05-30"]
-
-
-def test_trading_activity_start_date_is_the_day_after_the_watermark() -> None:
-    # the AkShare start_date is the day past the watermark (YYYYMMDD), so the request never re-pulls
-    # the stored bar — and it rolls the year correctly at a year boundary.
-    assert trading_activity._start_date("2026-06-30") == "20260701"
-    assert trading_activity._start_date("2026-12-31") == "20270101"
 
 
 def test_spot_reading_maps_the_session_turnover_and_traded_value() -> None:
@@ -97,10 +119,7 @@ def _board(code: str = "561010", *, turnover: float = 5.15, amount: float = 1.0)
 
 
 def test_trading_activity_fetch_live_prefers_history_when_reachable(monkeypatch) -> None:
-    def em(**kwargs: object) -> FakeFrame:
-        return FakeFrame([{"日期": "2026-05-30", "换手率": "4.25", "成交额": "3.60"}])
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    fake_kline(monkeypatch, bars=[_bar("2026-05-30", turnover=4.25, amount=3.60)])
     # an empty board would yield no fallback rows, so a non-empty reading proves history answered
     reading = trading_activity.fetch_live({}, "561010", fetched_at=FETCHED_AT)[0]
     assert reading.as_of == "2026-05-30"
@@ -108,24 +127,43 @@ def test_trading_activity_fetch_live_prefers_history_when_reachable(monkeypatch)
 
 
 def test_trading_activity_fetch_live_starts_one_day_past_the_watermark(monkeypatch) -> None:
-    # With a stored watermark the history request starts the day after it (YYYYMMDD), so the nightly
-    # re-pull asks EastMoney only for sessions newer than the store already holds.
-    seen: dict[str, object] = {}
-
-    def em(**kwargs: object) -> FakeFrame:
-        seen.update(kwargs)
-        return FakeFrame([{"日期": "2026-05-30", "换手率": "4.25", "成交额": "3.60"}])
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    # With a stored watermark the history request starts the day after it (YYYYMMDD beg), so the
+    # nightly re-pull asks EastMoney only for sessions newer than the store already holds.
+    captured: dict[str, object] = {}
+    fake_kline(
+        monkeypatch, bars=[_bar("2026-05-30", turnover=4.25, amount=3.60)], captured=captured
+    )
     trading_activity.fetch_live({}, "561010", fetched_at=FETCHED_AT, since="2026-05-29")
-    assert seen["start_date"] == "20260530"
+    assert captured["beg"] == "20260530"
+
+
+def test_trading_activity_cold_pull_seeds_the_bounded_window_not_full_history(monkeypatch) -> None:
+    # A cold pull (no watermark) seeds the same bounded window the NAV leg uses off the same K-line
+    # client, anchored on the run date — not the full-history epoch, which would burst the
+    # rate-limited push2his host with every fund's entire history on the first night.
+    captured: dict[str, object] = {}
+    fake_kline(
+        monkeypatch, bars=[_bar("2026-05-30", turnover=4.25, amount=3.60)], captured=captured
+    )
+    trading_activity.fetch_live({}, "561010", fetched_at=FETCHED_AT)
+    assert captured["beg"] != "19700101"  # not the full-history epoch
+    assert captured["beg"] == prices._em_start(FETCHED_AT, None)  # the NAV leg's seed window
+
+
+def test_trading_activity_fetch_live_threads_the_impersonation_profile(monkeypatch) -> None:
+    # The activity history leg rides the same browser-impersonating K-line client (same host, same
+    # breaker) as the NAV leg, so the config-driven fingerprint must reach it too — else a bumped
+    # profile fixes NAV but leaves activity hitting the same host with the stale one.
+    captured: dict[str, object] = {}
+    fake_kline(
+        monkeypatch, bars=[_bar("2026-05-30", turnover=4.25, amount=3.60)], captured=captured
+    )
+    trading_activity.fetch_live({}, "561010", fetched_at=FETCHED_AT, impersonate="chrome131")
+    assert captured["impersonate"] == "chrome131"  # the configured profile reached the client
 
 
 def test_trading_activity_falls_back_to_spot_when_history_refused(monkeypatch) -> None:
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    fake_kline(monkeypatch, error=ConnectionError("history host closed the connection"))
     board = {
         "515880": {"代码": "515880", "数据日期": date(2026, 6, 16), "换手率": 1.0, "成交额": 2.0},
         "561010": {"代码": "561010", "数据日期": date(2026, 6, 16), "换手率": 5.15,
@@ -139,10 +177,7 @@ def test_trading_activity_falls_back_to_spot_when_history_refused(monkeypatch) -
 def test_spot_fallback_yields_no_reading_for_a_fund_absent_from_the_board(monkeypatch) -> None:
     # A delisted/absent code simply isn't on the spot board → the crowding surface degrades to no
     # reading (the factor falls to invalid), never a crash.
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    fake_kline(monkeypatch, error=ConnectionError("history host closed the connection"))
     assert trading_activity.fetch_live(_board("515880"), "561010", fetched_at=FETCHED_AT) == []
 
 
@@ -153,10 +188,10 @@ def test_trading_activity_skips_eastmoney_while_the_breaker_is_open(monkeypatch)
     breaker.record_failure(EASTMONEY_KLINE)  # tripped open
     monkeypatch.setattr(trading_activity, "host_breaker", breaker)
 
-    def em(**kwargs: object) -> FakeFrame:
-        raise AssertionError("EastMoney must be skipped while the breaker is open")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    fake_kline(
+        monkeypatch,
+        error=AssertionError("EastMoney must be skipped while the breaker is open"),
+    )
     reading = trading_activity.fetch_live(_board(), "561010", fetched_at=FETCHED_AT)[0]
     assert reading.payload["provisional"] is True  # served by the spot board, the host untouched
 
@@ -165,10 +200,7 @@ def test_trading_activity_records_a_breaker_failure_when_eastmoney_refuses(monke
     breaker = _HostBreaker(threshold=5)
     monkeypatch.setattr(trading_activity, "host_breaker", breaker)
 
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    fake_kline(monkeypatch, error=ConnectionError("history host closed the connection"))
     trading_activity.fetch_live(_board(), "561010", fetched_at=FETCHED_AT)
     assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
 
@@ -176,10 +208,7 @@ def test_trading_activity_records_a_breaker_failure_when_eastmoney_refuses(monke
 def test_trading_activity_logs_loudly_when_it_falls_back_to_spot(monkeypatch, caplog) -> None:
     # A silent history→spot swap would hide a persistently-blocked primary; the fallback must log so
     # the degradation is visible even though the spot board covers the current session.
-    def em(**kwargs: object) -> FakeFrame:
-        raise ConnectionError("history host closed the connection")
-
-    install_fake_akshare(monkeypatch, fund_etf_hist_em=em)
+    fake_kline(monkeypatch, error=ConnectionError("history host closed the connection"))
     with caplog.at_level(logging.WARNING):
         trading_activity.fetch_live(_board(), "561010", fetched_at=FETCHED_AT)
     assert any(r.levelno == logging.WARNING and "561010" in r.getMessage() for r in caplog.records)

@@ -5,17 +5,20 @@ stamped with the bar's own trading date. ``turnover`` is the daily turnover rati
 crowding signal); ``amount`` is the daily traded value (成交额, the Amihud-illiquidity input). Both
 are read point-in-time against a fund's own history by the factor battery.
 
-Live pulls AkShare's on-exchange ETF daily bar (``fund_etf_hist_em``) — never called in CI.
+Live pulls EastMoney's daily K-line through the browser-impersonating
+:mod:`~factor_scope.ingest.eastmoney` client (the same leg the NAV adapter rides) — never called in
+CI.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from datetime import date, timedelta
 from typing import Any
 
+from factor_scope.ingest import eastmoney
 from factor_scope.ingest.base import EASTMONEY_KLINE, host_breaker
+from factor_scope.ingest.prices import _em_start
 from factor_scope.store import Reading
 
 logger = logging.getLogger(__name__)
@@ -26,7 +29,7 @@ SERIES = "trading_activity"
 def _from_bars(
     code: str, bars: Iterable[Mapping[str, Any]], *, fetched_at: str, since: str | None = None
 ) -> list[Reading]:
-    """Map AkShare's ETF daily bars (日期 / 换手率 / 成交额) to Readings — the pure core of live.
+    """Map the K-line client's domain bars (``{date, turnover, amount}``) to Readings — live's core.
 
     ``since`` is the incremental-fetch watermark: only bars strictly newer than it become rows, so a
     re-pull that overlaps the stored history writes nothing already held.
@@ -36,37 +39,43 @@ def _from_bars(
         Reading(
             series=SERIES,
             key=code,
-            as_of=str(bar["日期"]),
+            as_of=str(bar["date"]),
             fetched_at=fetched_at,
-            payload={"turnover": float(bar["换手率"]), "amount": float(bar["成交额"])},
+            payload={"turnover": float(bar["turnover"]), "amount": float(bar["amount"])},
         )
         for bar in bars
-        if since is None or str(bar["日期"]) > since
+        if since is None or str(bar["date"]) > since
     ]
 
 
 def fetch_live(
-    board: Mapping[str, Any], code: str, *, fetched_at: str, since: str | None = None
+    board: Mapping[str, Any],
+    code: str,
+    *,
+    fetched_at: str,
+    since: str | None = None,
+    impersonate: str = "chrome",
 ) -> list[Reading]:
-    """Pull a fund's daily turnover + traded value via AkShare. Requires `live` + network.
+    """Pull a fund's daily turnover + traded value via EastMoney's K-line. Requires `live`.
 
     ``since`` is the latest ``as_of`` already stored for this code: when set, the request starts the
-    day after it (AkShare's ``start_date``) so the multi-year history is fetched once and each later
-    night pulls only the new sessions — turning the nightly re-pull from quadratic to linear.
+    day after it (the K-line ``beg``) so the multi-year history is fetched once and each later night
+    pulls only the new sessions — turning the nightly re-pull from quadratic to linear; a cold pull
+    seeds the same bounded window the NAV leg uses (:func:`prices._em_start`), anchored on the run
+    date, rather than the full history that would burst the shared host on the first night.
 
-    EastMoney's per-fund history is primary; when its history host refuses the request, the current
-    session's turnover + traded value come from the shared whole-market spot ``board`` (the single
-    per-run snapshot) instead, so a block on one host degrades the crowding surface to today's bar
-    rather than dropping the fund entirely.
+    EastMoney's per-fund history is primary, fetched through the browser-impersonating
+    :mod:`eastmoney` K-line client that defeats the ``push2his`` reset; when that host refuses the
+    request, the current session's turnover + traded value come from the shared whole-market spot
+    ``board`` (the single per-run snapshot) instead, so a block on one host degrades the crowding
+    surface to today's bar rather than dropping the fund entirely.
     """
-
-    import akshare as ak
 
     if host_breaker.is_open(EASTMONEY_KLINE):  # host known-blocked → skip it, use the spot board
         return _spot_bar(board, code, fetched_at=fetched_at, since=since)
-    kwargs = {"start_date": _start_date(since)} if since is not None else {}
+    beg = _em_start(fetched_at, since)
     try:
-        frame = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="", **kwargs)
+        bars = eastmoney.kline(code, beg=beg, impersonate=impersonate)
         host_breaker.record_success(EASTMONEY_KLINE)
     except Exception as exc:
         host_breaker.record_failure(EASTMONEY_KLINE)
@@ -76,14 +85,7 @@ def fetch_live(
             exc,
         )
         return _spot_bar(board, code, fetched_at=fetched_at, since=since)
-    bars = (bar for _, bar in frame.iterrows())
     return _from_bars(code, bars, fetched_at=fetched_at, since=since)
-
-
-def _start_date(since: str) -> str:
-    """The AkShare ``start_date`` (``YYYYMMDD``) one day past the watermark — only newer bars."""
-
-    return (date.fromisoformat(since) + timedelta(days=1)).strftime("%Y%m%d")
 
 
 def _spot_bar(
@@ -109,9 +111,9 @@ def _spot_reading(
     """
 
     bar = {
-        "日期": _spot_date(row["数据日期"]),
-        "换手率": row["换手率"],
-        "成交额": row["成交额"],
+        "date": _spot_date(row["数据日期"]),
+        "turnover": row["换手率"],
+        "amount": row["成交额"],
     }
     return [
         reading.model_copy(update={"payload": {**reading.payload, "provisional": True}})

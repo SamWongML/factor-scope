@@ -130,7 +130,11 @@ class LiveFeed:
     def activity(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
         pace_between_calls(self._pace_seconds)
         return trading_activity.fetch_live(
-            self._spot_board, code, fetched_at=fetched_at, since=since
+            self._spot_board,
+            code,
+            fetched_at=fetched_at,
+            since=since,
+            impersonate=self._impersonate,
         )
 
     def valuation(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
