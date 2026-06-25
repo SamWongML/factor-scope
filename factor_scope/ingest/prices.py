@@ -18,7 +18,7 @@ from datetime import timedelta
 from statistics import median
 from typing import Any
 
-from factor_scope.ingest.base import day_after, run_date, spot_date
+from factor_scope.ingest.base import day_after, run_date
 from factor_scope.store import Reading
 
 SERIES = "prices"
@@ -113,20 +113,20 @@ def from_kline(
 def spot_reading(
     board: Mapping[str, Any], code: str, *, fetched_at: str, settled: bool, floor: str | None
 ) -> list[Reading]:
-    """One fund's current-session NAV (``最新价``) from the shared whole-market spot ``board``.
+    """One fund's current-session NAV (the board's ``nav``) from the shared whole-market spot board.
 
     Steady state reads the current bar off the cheap batch board rather than a per-code ``push2his``
     pull. A bar whose session date is the closed trading session (``settled``) records as settled
     NAV history and advances the watermark; otherwise it is tagged ``provisional`` so the floor
     (:func:`markets.ashare._series_watermarks`) skips it and a later K-line pull backfills. The
-    provenance tag stays ``akshare`` — the board's ``最新价`` is the same raw market-close basis the
+    provenance tag stays ``akshare`` — the board's ``nav`` is the same raw market-close basis the
     K-line leg stores. No rows for a code absent from the board (e.g. delisted).
     """
 
     row = board.get(code)
     if row is None:
         return []
-    bars = [{"as_of": spot_date(row["数据日期"]), "nav": float(row["最新价"])}]
+    bars = [{"as_of": row["date"], "nav": row["nav"]}]
     readings = _to_readings(code, bars, fetched_at=fetched_at, floor=floor)
     if settled:
         return readings

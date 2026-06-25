@@ -16,6 +16,7 @@ import os
 
 import pytest
 
+from factor_scope.config import Config
 from factor_scope.ingest import (
     baostock,
     demand,
@@ -28,8 +29,9 @@ from factor_scope.ingest import (
     fundamentals,
     mootdx,
     prices,
-    trading_activity,
 )
+from factor_scope.ingest.feed import LiveFeed, get_feed
+from factor_scope.store import DuckDBStore
 
 pytestmark = pytest.mark.integration
 
@@ -195,19 +197,40 @@ def test_fundamentals_live_smoke() -> None:
 
 
 @skip_unless_live
-def test_trading_activity_live_smoke() -> None:
-    # The activity history leg rides the same browser-impersonating K-line client as the NAV leg —
-    # one fetch feeds both. A window of {turnover, amount} bars comes back (the push2his reset
-    # defeated), not the single provisional bar the spot-board fallback yields when impersonation
-    # fails. The same ``bars`` carry the NAV leg's close, proving the one-call-feeds-both contract.
-    bars = eastmoney.kline(_PROBE, beg=prices._em_start(_RUN_STAMP, None))
-    readings = trading_activity.from_kline(_PROBE, bars, fetched_at=_RUN_STAMP)
-    assert len(readings) > 1  # a history window via impersonation, not the one-bar spot fallback
-    assert all(r.key == _PROBE for r in readings)
-    assert all(r.payload.keys() == {"turnover", "amount"} for r in readings)  # history, untagged
-    assert all(r.payload["turnover"] >= 0 and r.payload["amount"] >= 0 for r in readings)
-    stamps = [r.as_of for r in readings]
+def test_trading_activity_live_drives_the_feed_and_one_pull_feeds_both_legs(monkeypatch) -> None:
+    # The production path, not a direct mapper call: feed.activity → _em → spot-vs-deep → the
+    # browser-impersonating K-line client. A cold code (empty store) deep-pulls ONE push2his window
+    # that feeds BOTH legs — so a deep-pull fund costs one request, not two — and the run's
+    # configured impersonation profile reaches the real client. A window of {turnover, amount} bars
+    # (not the single provisional spot-board bar the fallback yields when impersonation fails)
+    # proves the reset was defeated on the live activity path.
+    real_kline = eastmoney.kline
+    seen: dict = {"calls": 0}
+
+    def counting_kline(code, *, beg, impersonate="chrome"):
+        seen["calls"] += 1
+        seen["impersonate"] = impersonate
+        return real_kline(code, beg=beg, impersonate=impersonate)
+
+    monkeypatch.setattr(eastmoney, "kline", counting_kline)
+    config = Config(source="live", live_pacing_seconds=0.0)
+    store = DuckDBStore(":memory:")  # empty → the probe reads cold → one deep pull seeds both legs
+    try:
+        feed = get_feed(config, store)
+        assert isinstance(feed, LiveFeed)  # a live config selects the store-aware online feed
+        activity = feed.activity(_PROBE, fetched_at=_RUN_STAMP)  # the universe-loop entry
+        nav = feed._em(_PROBE, fetched_at=_RUN_STAMP).nav  # the price loop reuses the SAME memo
+    finally:
+        store.close()
+    assert seen["calls"] == 1  # one push2his pull fed both legs, not one per leg
+    assert seen["impersonate"] == config.eastmoney_impersonate  # the configured profile threaded
+    assert len(activity) > 1  # a settled-history window via impersonation, not the spot fallback
+    assert all(r.key == _PROBE for r in activity)
+    assert all(r.payload.keys() == {"turnover", "amount"} for r in activity)  # history, untagged
+    assert all(r.payload["turnover"] >= 0 and r.payload["amount"] >= 0 for r in activity)
+    stamps = [r.as_of for r in activity]
     assert stamps == sorted(stamps)  # oldest-first, matching the NAV leg's window contract
+    assert [r.as_of for r in nav] == stamps  # both legs are the one shared window — same sessions
 
 
 @skip_unless_live

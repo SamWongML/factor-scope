@@ -8,6 +8,7 @@ network. ``get_feed`` selects the cassettes offline and the live adapters online
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -206,9 +207,9 @@ def _warm(code: str, latest: str = "2026-06-24") -> list[Reading]:
 def _board(
     code: str = "561010", *, on: str = CLOSED, price: float = 0.918, turnover: float = 5.0
 ) -> dict[str, Any]:
-    """A one-row spot board — the snapshot the feed shares across the legs that read it."""
+    """A one-row normalised domain spot board — the snapshot the feed shares across its legs."""
 
-    return {code: {"数据日期": on, "最新价": price, "换手率": turnover, "成交额": 1_000_000.0}}
+    return {code: {"date": on, "nav": price, "turnover": turnover, "amount": 1_000_000.0}}
 
 
 def _em_bar(d: str, *, close: float = 0.9, turnover: float = 4.0, amount: float = 2.0) -> dict:
@@ -337,9 +338,13 @@ def test_one_kline_call_feeds_both_legs_across_the_universe_and_price_loops(monk
     assert act and nav  # both legs got readings from the single fetch
 
 
-def test_a_deep_pull_failure_backs_nav_onto_sina_and_activity_onto_the_spot_board(monkeypatch):
+def test_a_deep_pull_failure_backs_nav_onto_sina_and_activity_onto_the_spot_board(
+    monkeypatch, caplog
+):
     # On a push2his refusal the breaker records, the NAV leg falls to Sina's settled close, and the
-    # activity leg to the current (provisional) spot bar — a block degrades, not drops.
+    # activity leg to the current (provisional) spot bar — a block degrades, not drops. The
+    # degradation must also log loudly, naming the blocked code: a silent fallback could hide a host
+    # blocked for weeks behind today's bar — the exact failure mode CLAUDE.md's guardrails forbid.
     _fake_kline(monkeypatch, error=ConnectionError("push2his reset"))
     monkeypatch.setattr(
         "factor_scope.ingest.prices.sina",
@@ -350,10 +355,13 @@ def test_a_deep_pull_failure_backs_nav_onto_sina_and_activity_onto_the_spot_boar
     )
     breaker = _HostBreaker(threshold=5)
     monkeypatch.setattr(feed_mod, "host_breaker", breaker)
-    em = _live(_FakeStore([]), _board())._em("561010", fetched_at=RUN_AT)
+    with caplog.at_level(logging.WARNING, logger="factor_scope.ingest.feed"):
+        em = _live(_FakeStore([]), _board())._em("561010", fetched_at=RUN_AT)
     assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
     assert em.nav[0].payload["nav"] == 0.7  # NAV backed onto Sina
     assert em.activity[0].payload["provisional"] is True  # activity fell to the current spot bar
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("561010" in msg for msg in warned)  # the blocked code is named in the warning
 
 
 def test_an_open_breaker_skips_the_kline_and_uses_the_fallbacks(monkeypatch) -> None:

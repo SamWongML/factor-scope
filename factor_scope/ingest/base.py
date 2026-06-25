@@ -35,8 +35,8 @@ def day_after(since: str) -> date:
 def spot_date(value: Any) -> str:
     """A spot-board session date as ISO ``YYYY-MM-DD`` — it arrives as a pandas Timestamp.
 
-    Shared by the price and trading-activity legs, which both read the current bar off the same
-    whole-market spot board (``数据日期``) when the per-fund history pull is skipped.
+    Used by the board normalizer (:func:`factor_scope.ingest.etf_scale._board_row`) to ISO-stamp the
+    shared spot board's session date once at its edge, so every downstream leg reads a domain date.
     """
 
     if hasattr(value, "strftime"):

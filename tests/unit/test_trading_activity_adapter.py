@@ -10,7 +10,6 @@ fallback live in ``tests/unit/test_feed.py`` (the LiveFeed seam); the offline re
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 import pytest
@@ -52,14 +51,14 @@ def test_from_kline_keeps_only_bars_past_the_floor() -> None:
 
 
 def _row(*, turnover: float = 5.15, amount: float = 12095104.0) -> dict[str, Any]:
-    """One whole-market spot-board row (Chinese keys, date as a pandas-style Timestamp)."""
+    """One normalised domain spot-board row (the shape ``etf_scale._board_row`` emits)."""
 
-    return {"数据日期": date(2026, 6, 16), "换手率": turnover, "成交额": amount}
+    return {"date": "2026-06-16", "turnover": turnover, "amount": amount}
 
 
 def test_spot_reading_maps_the_session_turnover_and_traded_value() -> None:
-    # the spot board carries the date as a pandas Timestamp; it normalises to the same ISO as_of
-    # and the same Reading shape as the history path, so the current-bar leg is a drop-in.
+    # the normalised board carries the ISO session date and the activity fields directly; the
+    # current-bar leg maps them to the same Reading shape as the history path, so it is a drop-in.
     rows = trading_activity.spot_reading(
         {"561010": _row()}, "561010", fetched_at=FETCHED_AT, settled=True, floor=None
     )

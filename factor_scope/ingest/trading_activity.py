@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from factor_scope.ingest.base import spot_date
 from factor_scope.store import Reading
 
 SERIES = "trading_activity"
@@ -62,7 +61,7 @@ def spot_reading(
     row = board.get(code)
     if row is None:
         return []
-    bar = {"date": spot_date(row["数据日期"]), "turnover": row["换手率"], "amount": row["成交额"]}
+    bar = {"date": row["date"], "turnover": row["turnover"], "amount": row["amount"]}
     readings = from_kline(code, [bar], fetched_at=fetched_at, floor=floor)
     if settled:
         return readings

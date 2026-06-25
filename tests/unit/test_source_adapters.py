@@ -67,9 +67,9 @@ def test_from_kline_keeps_only_bars_past_the_floor() -> None:
 
 
 def _spot_row(price: float = 0.918) -> dict:
-    """One whole-market spot-board row carrying the current bar — ``最新价`` is the NAV basis."""
+    """One normalised domain spot-board row carrying the current bar — ``nav`` is the NAV basis."""
 
-    return {"数据日期": "2026-06-16", "最新价": price}
+    return {"date": "2026-06-16", "nav": price}
 
 
 def test_spot_reading_maps_latest_price_to_nav_settled() -> None:

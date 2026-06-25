@@ -79,14 +79,15 @@ def _stub_adapters(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(fred, "fetch_live", lambda series_id, *, fetched_at: [])
-    # One shared spot board per run, carrying the current-bar fields the universe/scale legs read
-    # and the per-fund legs fall back to (最新价 → NAV, 换手率/成交额 → activity) on a K-line miss.
+    # One shared spot board per run, normalised to domain keys at its edge (etf_scale._board_row),
+    # carrying the current-bar fields the universe/scale legs read and the per-fund legs fall back
+    # to (nav, plus turnover/amount for activity) on a K-line miss.
     monkeypatch.setattr(
         etf_scale,
         "fetch_spot_board",
         lambda: {
-            code: {"代码": code, "数据日期": "2026-06-05",
-                   "最新价": 1.0, "换手率": 3.1, "成交额": 2.8}
+            code: {"code": code, "date": "2026-06-05",
+                   "nav": 1.0, "turnover": 3.1, "amount": 2.8}
             for code, _ in _UNIVERSE
         },
     )

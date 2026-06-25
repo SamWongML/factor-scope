@@ -34,7 +34,7 @@ from factor_scope.ingest import (
     prices,
     trading_activity,
 )
-from factor_scope.ingest.base import EASTMONEY_KLINE, host_breaker, run_date, spot_date
+from factor_scope.ingest.base import EASTMONEY_KLINE, host_breaker, run_date
 from factor_scope.store import PointInTimeStore, Reading
 
 logger = logging.getLogger(__name__)
@@ -345,7 +345,7 @@ class LiveFeed:
         return prices._floor(fetched_at, self._watermarks(series, as_of).get(code))
 
     def _settled(self, code: str, closed: date | None) -> bool:
-        """Is the spot bar a settled session — its ``数据日期`` the expected closed trading session?
+        """Is the spot bar a settled session — its session ``date`` the expected closed session?
 
         True at the post-close (22:00) schedule on a trading day, so the cheap board bar records as
         settled history and advances the watermark. An intraday/holiday/weekend run whose board date
@@ -355,7 +355,7 @@ class LiveFeed:
         if closed is None:
             return False
         row = self._spot_board.get(code)
-        return row is not None and spot_date(row["数据日期"]) == closed.isoformat()
+        return row is not None and row["date"] == closed.isoformat()
 
     def _watermarks(self, series: str, as_of: str) -> dict[str, str]:
         """Latest *settled* ``as_of`` per code in ``series`` knowable at the run — the deep floor.
