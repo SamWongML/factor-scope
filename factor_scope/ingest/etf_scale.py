@@ -20,6 +20,19 @@ from factor_scope.store import Reading
 SERIES = "etf_scale"
 
 
+def _board_float(value: Any) -> float:
+    """``float`` that degrades a missing (None) cell to NaN rather than raising at the board's edge.
+
+    AkShare usually yields NaN for a missing numeric cell (and ``float(nan)`` is fine), but an
+    occasional None would raise — and this row is the *shared* board's edge, so one bad cell would
+    otherwise kill the whole board build and every fund's universe/scale/current-bar leg, not just
+    that row. A missing value degrades to NaN — the same absent state a NaN cell already yields —
+    kept like any other invalid reading, never dropped or raised (CLAUDE.md: inputs degrade).
+    """
+
+    return float("nan") if value is None else float(value)
+
+
 def _board_row(row: Mapping[str, Any]) -> dict[str, Any]:
     """Normalise one raw AkShare spot row (Chinese columns) to the shared domain board row.
 
@@ -33,11 +46,11 @@ def _board_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "code": str(row["代码"]),
         "date": spot_date(row["数据日期"]),
-        "nav": float(row["最新价"]),
-        "turnover": float(row["换手率"]),
-        "amount": float(row["成交额"]),
-        "aum": float(row["总市值"]),
-        "shares": float(row["最新份额"]),
+        "nav": _board_float(row["最新价"]),
+        "turnover": _board_float(row["换手率"]),
+        "amount": _board_float(row["成交额"]),
+        "aum": _board_float(row["总市值"]),
+        "shares": _board_float(row["最新份额"]),
     }
 
 

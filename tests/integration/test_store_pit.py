@@ -52,6 +52,30 @@ def test_read_as_of_picks_one_row_per_key() -> None:
         assert [(r.key, r.payload["nav"]) for r in latest] == [("A", 1.5), ("B", 9.0)]
 
 
+def test_read_as_of_excluding_skips_flagged_rows_before_the_per_key_collapse() -> None:
+    # The watermark wants the latest *settled* row per key, but a provisional spot estimate can sit
+    # on top of settled history. Post-filtering read_as_of can't recover it (the key already
+    # collapsed to its one latest-overall row); excluding the flag *inside* the windowed read does.
+    with DuckDBStore() as store:
+        store.append(
+            [
+                _reading("X", "2026-01-01", 1.0),
+                _reading("X", "2026-03-01", 2.0),  # the latest settled bar
+                Reading(series="prices", key="X", as_of="2026-03-05", fetched_at="t",
+                        payload={"nav": 9.0, "provisional": True}),  # a provisional bar on top
+                Reading(series="prices", key="Y", as_of="2026-03-05", fetched_at="t",
+                        payload={"nav": 5.0, "provisional": True}),  # Y: a provisional bar only
+            ]
+        )
+        # Plain: the latest-overall row wins, provisional included — the current-estimate read.
+        plain = store.read_as_of("prices", "2026-03-31")
+        assert {r.key: r.payload["nav"] for r in plain} == {"X": 9.0, "Y": 5.0}
+        # excluding: provisional rows are skipped *before* the per-key collapse, so X surfaces its
+        # latest settled bar and Y — provisional-only — drops out (it has no settled history).
+        settled = store.read_as_of("prices", "2026-03-31", excluding="provisional")
+        assert {r.key: r.payload["nav"] for r in settled} == {"X": 2.0}
+
+
 def test_persists_across_connections(tmp_path) -> None:
     path = tmp_path / "store.duckdb"
     with DuckDBStore(path) as store:

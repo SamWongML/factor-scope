@@ -83,6 +83,30 @@ def test_point_in_time_read_spanning_hot_and_cold_matches_all_hot(tmp_path) -> N
         tiered.close()
 
 
+def test_read_as_of_excluding_spans_hot_and_cold(tmp_path) -> None:
+    # Settled history can live in cold Parquet while a fresh provisional bar sits in the hot table;
+    # ``excluding`` must skip the provisional row across the unioned relation and surface the latest
+    # settled bar from cold — proving the payload predicate works over hot + cold alike.
+    cold = tmp_path / "cold"
+    store = DuckDBStore(tmp_path / "tiered.duckdb", cold_dir=cold)
+    try:
+        store.append(
+            [
+                _reading("A", "2023-02-01", 1.0),
+                _reading("A", "2024-02-01", 2.0),  # the latest settled bar
+                Reading(series="prices", key="A", as_of="2025-02-01", fetched_at="t",
+                        payload={"nav": 9.0, "provisional": True}),  # provisional, stays hot
+            ]
+        )
+        store.tier_cold("2025-01-01")  # both settled bars go cold; the provisional one stays hot
+        plain = store.read_as_of("prices", "2025-06-01")
+        assert [(r.key, r.payload["nav"]) for r in plain] == [("A", 9.0)]  # provisional (hot) wins
+        settled = store.read_as_of("prices", "2025-06-01", excluding="provisional")
+        assert [(r.key, r.payload["nav"]) for r in settled] == [("A", 2.0)]  # latest settled (cold)
+    finally:
+        store.close()
+
+
 def test_tier_cold_is_incremental_across_runs(tmp_path) -> None:
     cold = tmp_path / "cold"
     store = DuckDBStore(tmp_path / "store.duckdb", cold_dir=cold)

@@ -48,8 +48,15 @@ class PointInTimeStore(Protocol):
     def append(self, readings: Iterable[Reading]) -> int:
         """Append rows; return how many were written. Never updates or deletes."""
 
-    def read_as_of(self, series: str, as_of: str) -> list[Reading]:
-        """Per key in ``series``, the latest row with ``as_of <= as_of`` (ordered by key)."""
+    def read_as_of(
+        self, series: str, as_of: str, *, excluding: str | None = None
+    ) -> list[Reading]:
+        """Per key in ``series``, the latest row with ``as_of <= as_of`` (ordered by key).
+
+        ``excluding`` names a payload boolean flag whose truthy rows are skipped *before* the
+        per-key collapse, so the latest row that is **not** so flagged surfaces — e.g. the latest
+        settled bar even when a provisional spot estimate sits on top of it.
+        """
 
     def history(self, series: str, key: str | None = None) -> list[Reading]:
         """Every row for ``series`` (optionally one ``key``), oldest first — the audit trail."""
@@ -173,14 +180,25 @@ class DuckDBStore:
             self._con.execute("DROP TABLE IF EXISTS _incoming")
         return self.count() - before
 
-    def read_as_of(self, series: str, as_of: str) -> list[Reading]:
+    def read_as_of(
+        self, series: str, as_of: str, *, excluding: str | None = None
+    ) -> list[Reading]:
+        skip = ""
+        params: list[str] = [series, as_of]
+        if excluding is not None:
+            # Drop rows whose payload flags ``excluding`` truthy *before* the per-key collapse, so
+            # the latest unflagged row surfaces (the latest settled bar, not a provisional one above
+            # it). This is the one read that looks inside the payload JSON; it stays a VARCHAR in
+            # both the hot table and cold Parquet, so the predicate spans the unioned relation.
+            skip = "AND NOT coalesce(json_extract(payload, ?)::BOOLEAN, false)"
+            params.append(f"$.{excluding}")
         query = f"""
         SELECT {_COLS} FROM {self._readings()}
-        WHERE series = ? AND as_of <= ?
+        WHERE series = ? AND as_of <= ? {skip}
         QUALIFY row_number() OVER (PARTITION BY key ORDER BY as_of DESC, fetched_at DESC) = 1
         ORDER BY key
         """
-        rows = self._con.execute(query, [series, as_of]).fetchall()
+        rows = self._con.execute(query, params).fetchall()
         return [self._to_reading(row) for row in rows]
 
     def history(self, series: str, key: str | None = None) -> list[Reading]:
