@@ -361,8 +361,10 @@ class LiveFeed:
     def _watermarks(self, series: str, as_of: str) -> dict[str, str]:
         """Latest *settled* ``as_of`` per code in ``series`` knowable at the run — the deep floor.
 
-        Provisional spot bars are skipped (like ``markets._series_watermarks``), so an outage that
-        fell back to the board doesn't read as settled history. Memoised: one store read per series.
+        The store skips provisional spot bars at the read (``excluding``), so a settled bar isn't
+        hidden by a provisional one layered on top of it — an outage that fell back to the board
+        leaves the floor on the last settled session rather than reading as no history at all.
+        Memoised: one store read per series.
         """
 
         if series not in self._watermark_cache:
@@ -371,8 +373,7 @@ class LiveFeed:
             else:
                 self._watermark_cache[series] = {
                     r.key: r.as_of
-                    for r in self._store.read_as_of(series, as_of)
-                    if not r.payload.get("provisional")
+                    for r in self._store.read_as_of(series, as_of, excluding="provisional")
                 }
         return self._watermark_cache[series]
 

@@ -158,17 +158,14 @@ def _series_watermarks(store: PointInTimeStore | None, series: str, as_of: str) 
     (a standalone ``gather`` call), so the first pull takes full history.
 
     Provisional readings (a spot-board current-session estimate, not a settled history bar) are
-    skipped, so an outage that fell back to the spot board does not advance the floor — the next
-    history pull backfills the sessions it missed instead of starting past them.
+    skipped at the store read (``excluding``), so a settled bar isn't hidden by a provisional one
+    layered on top: an outage that fell back to the spot board leaves the floor on the last settled
+    session, and the next history pull backfills the sessions it missed from there.
     """
 
     if store is None:
         return {}
-    return {
-        r.key: r.as_of
-        for r in store.read_as_of(series, as_of)
-        if not r.payload.get("provisional")
-    }
+    return {r.key: r.as_of for r in store.read_as_of(series, as_of, excluding="provisional")}
 
 
 def _holdings_watermarks(store: PointInTimeStore | None, as_of: str) -> dict[str, str]:

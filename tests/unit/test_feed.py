@@ -178,12 +178,17 @@ class _FakeStore:
     def __init__(self, readings: list[Reading]) -> None:
         self._readings = readings
 
-    def read_as_of(self, series: str, as_of: str) -> list[Reading]:
+    def read_as_of(
+        self, series: str, as_of: str, *, excluding: str | None = None
+    ) -> list[Reading]:
         latest: dict[str, Reading] = {}
         for r in self._readings:
-            if r.series == series and r.as_of <= as_of:
-                if r.key not in latest or r.as_of > latest[r.key].as_of:
-                    latest[r.key] = r
+            if r.series != series or r.as_of > as_of:
+                continue
+            if excluding is not None and r.payload.get(excluding):
+                continue  # skip flagged rows before the per-key collapse, like the real store
+            if r.key not in latest or r.as_of > latest[r.key].as_of:
+                latest[r.key] = r
         return list(latest.values())
 
 
@@ -194,6 +199,15 @@ def _hist(series: str, code: str, dates: list[str]) -> list[Reading]:
         Reading(series=series, key=code, as_of=d, fetched_at=f"{d}T22:00:00Z", payload={"v": 1.0})
         for d in dates
     ]
+
+
+def _provisional(series: str, code: str, date: str) -> Reading:
+    """A provisional spot bar — a current-session estimate layered over settled history."""
+
+    return Reading(
+        series=series, key=code, as_of=date, fetched_at=f"{date}T22:00:00Z",
+        payload={"v": 1.0, "provisional": True},
+    )
 
 
 def _warm(code: str, latest: str = "2026-06-24") -> list[Reading]:
@@ -334,6 +348,24 @@ def test_spot_bar_is_provisional_when_the_board_date_is_not_the_closed_session(m
     em = feed._em("561010", fetched_at=RUN_AT)
     assert em.nav[0].as_of == "2026-06-24" and em.nav[0].payload["provisional"] is True
     assert em.activity[0].payload["provisional"] is True
+
+
+def test_a_provisional_bar_does_not_mask_the_settled_watermark_into_a_re_seed(monkeypatch) -> None:
+    # Last night the board was intraday, so a provisional spot bar sits on top of settled history.
+    # The settled bar beneath must still set the watermark — else it reads as no history and tonight
+    # forces a full cold re-seed of the whole window instead of staying on the cheap spot board.
+    captured: dict = {}
+    _forbid_kline(monkeypatch, captured)
+    settled = _hist(prices.SERIES, "561010", [SEEDED, "2026-06-23"]) + _hist(
+        trading_activity.SERIES, "561010", [SEEDED, "2026-06-23"]
+    )
+    masking = [
+        _provisional(prices.SERIES, "561010", "2026-06-24"),
+        _provisional(trading_activity.SERIES, "561010", "2026-06-24"),
+    ]
+    em = _live(_FakeStore(settled + masking), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured.get("calls", 0) == 0  # settled watermark seen → warm, no per-code re-seed
+    assert em.nav and em.activity  # served from the shared spot board
 
 
 def test_one_kline_call_feeds_both_legs_across_the_universe_and_price_loops(monkeypatch) -> None:

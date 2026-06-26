@@ -225,10 +225,14 @@ def test_offline_reingest_over_unchanged_cassettes_writes_nothing(tmp_path) -> N
     assert bars == sorted(bars) and len(bars) == len(set(bars))  # each session stored exactly once
 
 
-def test_a_provisional_spot_bar_does_not_set_the_history_floor(tmp_path) -> None:
-    # A spot-board bar is the current session only — were it to set the incremental floor, the next
-    # history pull would start past it and never backfill the sessions the outage skipped. Tagged
-    # provisional, it is excluded from the floor, so a recovered history pull self-heals the gap.
+def test_a_provisional_spot_bar_does_not_advance_the_floor_past_the_last_settled_bar(
+    tmp_path,
+) -> None:
+    # A spot-board bar is the current session only — were it to advance the incremental floor, the
+    # next history pull would start past it and never backfill the sessions the outage skipped.
+    # Tagged provisional, it leaves the floor on the last *settled* bar, so a recovered history pull
+    # backfills the gap incrementally from there — not a full re-seed because the provisional bar
+    # hid the settled history beneath it.
     store = DuckDBStore(tmp_path / "store.duckdb")
     try:
         store.append(
@@ -244,4 +248,4 @@ def test_a_provisional_spot_bar_does_not_set_the_history_floor(tmp_path) -> None
         floors = ashare._series_watermarks(store, trading_activity.SERIES, "2026-06-12")
     finally:
         store.close()
-    assert _FUND not in floors  # no floor → the recovered history pull backfills from scratch
+    assert floors[_FUND] == "2026-06-10"  # the last settled bar, not the provisional 2026-06-12
