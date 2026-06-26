@@ -512,3 +512,120 @@ def test_a_feed_reused_across_run_stamps_fails_loudly_instead_of_returning_stale
     feed._em("561010", fetched_at=RUN_AT)  # binds the feed to this run's stamp (memoising 561010)
     with pytest.raises(RuntimeError, match="single-run"):
         feed._em("561010", fetched_at="2026-06-26T22:00:00Z")  # a second run's stamp → loud failure
+
+
+# --- The per-run deep-pull cap: bounded backfill, tier-priority self-capping, deferral log ---
+
+
+def _board_multi(codes: list[str], *, on: str = CLOSED) -> dict[str, Any]:
+    """A multi-row spot board (one settled row per code) — the snapshot a run streams over."""
+
+    return {code: _board(code, on=on)[code] for code in codes}
+
+
+def _recording_kline(monkeypatch, *, bars: list[dict] | None = None) -> list[str]:
+    """Mock the K-line client to record (in arrival order) every code it was actually pulled for."""
+
+    pulled: list[str] = []
+
+    def kline(code: str, *, beg: str, impersonate: str = "chrome") -> list[dict]:
+        pulled.append(code)
+        return bars or []
+
+    monkeypatch.setattr("factor_scope.ingest.eastmoney.kline", kline)
+    return pulled
+
+
+def test_the_deep_pull_cap_bounds_per_run_kline_calls(monkeypatch) -> None:
+    # A cold universe larger than the cap: the feed self-caps deep pulls at the budget, so the
+    # per-run push2his history calls never exceed it — the cap is the load-shape's defense-in-depth
+    # bound (independent of impersonation) against a first-ever cold start firing a fresh burst.
+    pulled = _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore([]), _board_multi(["A", "B", "C"]), cap=2)
+    for code in ("A", "B", "C"):
+        feed._em(code, fetched_at=RUN_AT)
+    assert pulled == ["A", "B"]  # the budget binds at 2; the third cold code makes no history call
+
+
+def test_codes_over_the_cap_fall_to_the_fresh_spot_bar(monkeypatch) -> None:
+    # The over-cap cold code is not dropped: it still gets a fresh current bar off the board,
+    # settled at the post-close run (advancing the watermark) — only its deep seeding is deferred.
+    _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore([]), _board_multi(["A", "B", "C"]), cap=2)
+    feed._em("A", fetched_at=RUN_AT)
+    feed._em("B", fetched_at=RUN_AT)  # exhaust the budget
+    over = feed._em("C", fetched_at=RUN_AT)
+    assert [r.as_of for r in over.nav] == [CLOSED]  # served from the spot board, current session
+    assert over.nav[0].payload["nav"] == 0.918 and over.activity[0].payload["turnover"] == 5.0
+    assert all("provisional" not in r.payload for r in over.nav + over.activity)  # settled-on-close
+
+
+def test_the_cap_grants_the_budget_in_arrival_order(monkeypatch) -> None:
+    # Greedy self-cap: the budget goes to the codes that arrive first. The market streams them in
+    # tier priority (book/core before probation), so this is what seeds book/core before the tail.
+    pulled = _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore([]), _board_multi(["core1", "core2", "prob1", "prob2"]), cap=2)
+    for code in ("core1", "core2", "prob1", "prob2"):  # the tier-priority stream order
+        feed._em(code, fetched_at=RUN_AT)
+    assert pulled == ["core1", "core2"]  # the first two arrivals seed; the probation tail defers
+
+
+def test_a_warm_fund_does_not_spend_the_deep_pull_budget(monkeypatch) -> None:
+    # Steady state spends nothing: a warm fund reads the board, so the budget is reserved entirely
+    # for the cold-start/gap funds that actually need a per-code pull.
+    pulled = _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    store = _FakeStore(_warm("warm1") + _warm("warm2"))  # both warm
+    feed = _live(store, _board_multi(["warm1", "warm2", "cold1"]), cap=1)
+    for code in ("warm1", "warm2", "cold1"):
+        feed._em(code, fetched_at=RUN_AT)
+    assert pulled == ["cold1"]  # the warm funds cost no budget; the one cold fund spends it
+
+
+def test_the_deferred_count_is_logged_at_run_end(monkeypatch, caplog) -> None:
+    # When the cap binds, a single run-level line reports how many funds were deferred to the
+    # board — nothing is silently dropped, and the operator sees recovery progressing over nights.
+    _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore([]), _board_multi(["A", "B", "C", "D"]), cap=1)
+    for code in ("A", "B", "C", "D"):
+        feed._em(code, fetched_at=RUN_AT)
+    with caplog.at_level(logging.WARNING, logger="factor_scope.ingest.feed"):
+        feed.log_backfill_deferral()
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 1 and "3" in warned[0]  # cap 1 over a 4-cold universe → 3 deferred
+
+
+def test_no_deferral_is_logged_when_the_cap_is_not_hit(monkeypatch, caplog) -> None:
+    # Steady state: every fund fit within the budget (or read the board), so the run-end report is
+    # silent — the deferral line is a real signal, not nightly noise.
+    _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore([]), _board_multi(["A", "B"]), cap=5)
+    for code in ("A", "B"):
+        feed._em(code, fetched_at=RUN_AT)
+    with caplog.at_level(logging.WARNING, logger="factor_scope.ingest.feed"):
+        feed.log_backfill_deferral()
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]  # nothing deferred
+
+
+def test_cold_start_converges_over_multiple_runs(monkeypatch) -> None:
+    # The whole point of the cap: a cold universe larger than the budget seeds over several nights.
+    # One fresh feed per run (single-run lifetime), the store accruing each night's seeded history;
+    # cap=1 over three cold funds seeds exactly one new fund per night, converging in three runs.
+    universe = ["A", "B", "C"]
+    board = _board_multi(universe)
+    seeded: list[Reading] = []  # the store accrues the deep-pulled funds' history across runs
+    pulled_each_run: list[list[str]] = []
+    for _ in range(len(universe)):
+        pulled = _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+        feed = _live(_FakeStore(list(seeded)), board, cap=1)
+        for code in universe:
+            feed._em(code, fetched_at=RUN_AT)
+        pulled_each_run.append(list(pulled))
+        for code in pulled:  # the fund seeded tonight is warm (full history) for the next run
+            seeded += _warm(code)
+    assert pulled_each_run == [["A"], ["B"], ["C"]]  # one new fund seeded per night, in order
+    # Fully seeded now: a fourth run needs no per-code history call at all.
+    final_pull = _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore(list(seeded)), board, cap=1)
+    for code in universe:
+        feed._em(code, fetched_at=RUN_AT)
+    assert final_pull == []  # converged — steady state makes zero per-code history calls

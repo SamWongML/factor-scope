@@ -14,12 +14,19 @@ from factor_scope.config import Config
 from factor_scope.contract import ListName
 from factor_scope.ingest.feed import Feed
 from factor_scope.markets import ComposedMarket, get_market
+from factor_scope.markets.ashare import (
+    AShareUniverse,
+    _fetch_codes_by_priority,
+    _fetch_universe_codes,
+)
 from factor_scope.pipeline import build_dashboard
 from factor_scope.store import PointInTimeStore, Reading
 
 pytestmark = pytest.mark.unit
 
 AS_OF = "2026-06-05"
+FETCHED_AT = "2026-06-05T22:00:00Z"
+_SEASONED = "2021-01-20"  # well past the seasoning window as of AS_OF
 
 
 def test_get_market_selects_ashare_by_name() -> None:
@@ -158,3 +165,94 @@ def test_composed_market_threads_one_shared_feed_to_its_sources() -> None:
     assert len(feeds) == 2  # threaded to both sources: universe + prices
     assert feeds[0] is feeds[1]  # the same feed instance, one per run
     assert isinstance(feeds[0], Feed)  # the real transport (offline → CassetteFeed)
+
+
+# --- Tier-priority streaming: book/core seed before probation when the deep-pull cap binds ---
+
+
+def _univ(code: str, *, on_exchange: bool = True, inception: str = _SEASONED) -> Reading:
+    """A fund-universe membership row — the tier screen reads ``on_exchange`` + ``inception``."""
+
+    return Reading(
+        series="fund_universe",
+        key=code,
+        as_of=AS_OF,
+        fetched_at=FETCHED_AT,
+        payload={"name": code, "on_exchange": on_exchange, "inception": inception},
+    )
+
+
+def _scale(code: str, *, aum: float, amount: float) -> Reading:
+    """An ETF-scale row — the cheap spot-board fields (AUM + traded value) the tier screen reads."""
+
+    return Reading(
+        series="etf_scale",
+        key=code,
+        as_of=AS_OF,
+        fetched_at=FETCHED_AT,
+        payload={"aum": aum, "amount": amount},
+    )
+
+
+def test_fetch_codes_stream_book_and_core_before_probation() -> None:
+    # The stream order the store-aware feed self-caps against: the book (the breaker's required set)
+    # and the core tier come first, then probation; dead and off-exchange funds earn no fetch. So
+    # when the per-run deep-pull cap binds, the most important funds are seeded before the tail.
+    readings = [
+        _univ("BOOK1"), _scale("BOOK1", aum=3.0, amount=1.0),  # held → book, though probation-tier
+        _univ("CORE1"), _scale("CORE1", aum=68.0, amount=3.0),  # core
+        _univ("PROB1"), _scale("PROB1", aum=3.0, amount=1.0),  # probation (small but trading)
+        _univ("DEAD1"), _scale("DEAD1", aum=0.3, amount=0.0),  # dead → never fetched
+        _univ("CORE2"), _scale("CORE2", aum=50.0, amount=2.0),  # core
+        # off-exchange → no per-fund fetch even though its size would otherwise be core
+        _univ("OFF1", on_exchange=False), _scale("OFF1", aum=68.0, amount=3.0),
+    ]
+    ordered = _fetch_codes_by_priority(readings, AS_OF, book={"BOOK1"})
+    assert ordered == ["BOOK1", "CORE1", "CORE2", "PROB1"]  # book∪core (sorted), then probation
+    assert "DEAD1" not in ordered and "OFF1" not in ordered  # the dead/off-exchange earn no fetch
+    # Membership is exactly the non-dead on-exchange tier screen — priority adds only the ordering.
+    assert set(ordered) == _fetch_universe_codes(readings, AS_OF)
+
+
+class _RecordingFeed:
+    """A feed recording the order its per-fund (activity) leg is streamed — the deep-pull order."""
+
+    def __init__(self, universe: list[Reading], scale: list[Reading]) -> None:
+        self._universe = universe
+        self._scale = scale
+        self.activity_order: list[str] = []
+
+    def universe(self, *, as_of: str, fetched_at: str) -> list[Reading]:
+        return self._universe
+
+    def etf_scale(self, *, fetched_at: str) -> list[Reading]:
+        return self._scale
+
+    def holdings(self, fund: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        return []
+
+    def activity(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        self.activity_order.append(code)  # the deep-pull entry point — record the stream order
+        return []
+
+    def valuation(self, code: str, *, fetched_at: str, since: str | None = None) -> list[Reading]:
+        return []
+
+    def price_sources(
+        self, code: str, *, fetched_at: str, since: str | None = None
+    ) -> list[list[Reading]]:
+        return [[], [], []]
+
+    def log_backfill_deferral(self) -> None: ...
+
+
+def test_universe_gather_streams_core_before_probation() -> None:
+    # The market hands codes to the feed in tier priority: even with probation listed first in the
+    # universe read, the per-fund loop seeds the core fund before the probation one — so the feed's
+    # greedy self-cap spends its budget on core first.
+    feed = _RecordingFeed(
+        universe=[_univ("PROB1"), _univ("CORE1")],  # probation deliberately first in feed order
+        scale=[_scale("PROB1", aum=3.0, amount=1.0), _scale("CORE1", aum=68.0, amount=3.0)],
+    )
+    AShareUniverse().gather(Config(), as_of=AS_OF, fetched_at=FETCHED_AT, feed=feed, store=None)
+    assert feed.activity_order == ["CORE1", "PROB1"]  # core seeded first, regardless of feed order

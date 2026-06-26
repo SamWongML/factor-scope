@@ -86,73 +86,101 @@ class AShareUniverse:
         # delisting detection and the tier screen — so they have no safe empty fallback. They are
         # bounded (retry + per-attempt deadline) but not degraded: a hung host here is a loud,
         # bounded failure, not an unbounded stall (the run-level deadline can't fire synchronously).
-        universe = _bounded(lambda: feed.universe(as_of=as_of, fetched_at=fetched_at))
-        readings += universe
+        readings += _bounded(lambda: feed.universe(as_of=as_of, fetched_at=fetched_at))
         readings += _bounded(lambda: feed.etf_scale(fetched_at=fetched_at))
-        fetch_codes = _fetch_universe_codes(readings, as_of)
+        book = {r.key for r in readings if r.series == positions.SERIES}
+        # Stream the fetch codes in tier priority — book/core before probation. The store-aware feed
+        # spends its per-run deep-pull budget greedily as codes arrive, so the streaming order is
+        # what guarantees the breaker's required set and the core tier are seeded before the
+        # probation tail when the per-run cap binds. Membership is the same cheap tier screen.
+        ordered = _fetch_codes_by_priority(readings, as_of, book)
         activity_floor = _series_watermarks(store, trading_activity.SERIES, as_of)
         valuation_floor = _series_watermarks(store, fundamentals.SERIES, as_of)
         holdings_floor = _holdings_watermarks(store, as_of)
-        for fund in universe:
+        for code in ordered:  # core/probation ETFs → holdings, the look-through edges
             if deadline is not None and deadline.exceeded():
                 logger.warning(
                     "ingest: wall-clock budget exceeded; stopping the per-fund universe loop early "
                     "(partial-but-valid — the funds reached this run keep their refreshed legs)"
                 )
                 break
-            if fund.key in fetch_codes:  # core/probation ETFs → holdings, the look-through edges
-                # Each per-fund leg runs behind the same resilience boundary as the price sources:
-                # retry + a wall-clock deadline + a logged failover, so one fund's blocked or hung
-                # source degrades that factor to invalid rather than aborting the universe loop.
-                readings += _live_or_empty(
-                    feed.holdings,
-                    fund.key,
-                    source=fund_holdings.SERIES,
-                    fetched_at=fetched_at,
-                    since=holdings_floor.get(fund.key),
-                )
-                readings += _live_or_empty(
-                    feed.activity,
-                    fund.key,
-                    source=trading_activity.SERIES,
-                    fetched_at=fetched_at,
-                    since=activity_floor.get(fund.key),
-                )
-                readings += _live_or_empty(
-                    feed.valuation,
-                    fund.key,
-                    source=fundamentals.SERIES,
-                    fetched_at=fetched_at,
-                    since=valuation_floor.get(fund.key),
-                )
+            # Each per-fund leg runs behind the same resilience boundary as the price sources:
+            # retry + a wall-clock deadline + a logged failover, so one fund's blocked or hung
+            # source degrades that factor to invalid rather than aborting the universe loop.
+            readings += _live_or_empty(
+                feed.holdings,
+                code,
+                source=fund_holdings.SERIES,
+                fetched_at=fetched_at,
+                since=holdings_floor.get(code),
+            )
+            readings += _live_or_empty(
+                feed.activity,
+                code,
+                source=trading_activity.SERIES,
+                fetched_at=fetched_at,
+                since=activity_floor.get(code),
+            )
+            readings += _live_or_empty(
+                feed.valuation,
+                code,
+                source=fundamentals.SERIES,
+                fetched_at=fetched_at,
+                since=valuation_floor.get(code),
+            )
         return readings
 
 
-def _fetch_universe_codes(readings: list[Reading], as_of: str) -> set[str]:
-    """The on-exchange codes that earn the per-fund + deep-price fetch — all but the dead tier.
+def _tiered_fetch_codes(
+    readings: list[Reading], as_of: str, book: set[str]
+) -> tuple[list[str], list[str]]:
+    """``(book∪core, probation)`` on-exchange codes earning the per-fund fetch — dead tier excluded.
 
     The tier is a pure function of the cheap spot-board fields (AUM + traded value, both on the
     once-per-run ``etf_scale`` board) plus the fund's inception, so the whole universe is screened
     with no per-fund call: a seasoned, sub-floor, untraded zombie is dropped from the fetch set
     (still recorded in the universe/scale reads, just not deep-fetched), while core *and* the
     uncrowded probation candidates are kept — so discovery never goes blind to a small-but-improving
-    fund. The watermark/incremental pull (Phase-1) then keeps each kept fund's nightly cost linear.
+    fund. The split is the stream order the store-aware feed self-caps against: the book (the
+    breaker's required set) and the core tier are seeded before the probation tail when the per-run
+    deep-pull cap binds. Each tier is sorted for a deterministic, reproducible stream order.
     """
 
     scale = {r.key: r.payload for r in readings if r.series == etf_scale.SERIES}
-    fetch: set[str] = set()
+    core: list[str] = []
+    probation: list[str] = []
     for r in readings:
-        if r.series == fund_universe.SERIES and r.payload.get("on_exchange"):
-            row = scale.get(r.key, {})
-            tier = fund_universe.classify_tier(
-                aum=row.get("aum"),
-                amount=row.get("amount"),
-                inception=r.payload.get("inception"),
-                as_of=as_of,
-            )
-            if tier != "dead":
-                fetch.add(r.key)
-    return fetch
+        if r.series != fund_universe.SERIES or not r.payload.get("on_exchange"):
+            continue
+        row = scale.get(r.key, {})
+        tier = fund_universe.classify_tier(
+            aum=row.get("aum"),
+            amount=row.get("amount"),
+            inception=r.payload.get("inception"),
+            as_of=as_of,
+        )
+        if tier == "dead":
+            continue
+        (core if r.key in book or tier == "core" else probation).append(r.key)
+    return sorted(core), sorted(probation)
+
+
+def _fetch_codes_by_priority(readings: list[Reading], as_of: str, book: set[str]) -> list[str]:
+    """The fetch codes ordered book/core first, then probation — the tier-priority stream order."""
+
+    core, probation = _tiered_fetch_codes(readings, as_of, book)
+    return core + probation
+
+
+def _fetch_universe_codes(readings: list[Reading], as_of: str) -> set[str]:
+    """The on-exchange codes that earn the per-fund + deep-price fetch — all but the dead tier.
+
+    The membership set behind the tier-priority stream (:func:`_tiered_fetch_codes`); the book split
+    doesn't change *which* codes are fetched (only their order), so the set is independent of it.
+    """
+
+    core, probation = _tiered_fetch_codes(readings, as_of, book=set())
+    return set(core) | set(probation)
 
 
 def _series_watermarks(store: PointInTimeStore | None, series: str, as_of: str) -> dict[str, str]:
@@ -432,5 +460,6 @@ class AShareMarket:
         readings += _gather_demand(config, fetched_at=fetched_at)
         readings += _gather_edgar(config, fetched_at=fetched_at)
         readings += _gather_prior_calls(config, fetched_at=fetched_at)
+        feed.log_backfill_deferral()  # report any cold-start/gap seeding the per-run cap deferred
         _check_eastmoney_health()  # one run-level alarm if the K-line host blocked the burst
         return readings
