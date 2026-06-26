@@ -14,31 +14,53 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from factor_scope.ingest.base import spot_date
 from factor_scope.store import Reading
 
 SERIES = "etf_scale"
 
 
-def _from_rows(rows: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
-    """Map AkShare's ETF spot rows (代码 / 数据日期 / 总市值 / 最新份额 / 成交额) to Readings.
+def _board_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalise one raw AkShare spot row (Chinese columns) to the shared domain board row.
 
-    The pure core of live: ``aum``/``shares``/``amount`` are rebased to 亿 (the unit the scorecard
-    and the tier screen read), the feed's timestamp is truncated to its date, and the exchange is
-    read off the code prefix (5… is Shanghai, otherwise Shenzhen). ``amount`` is the day's traded
-    value (成交额) — the liquidity leg of the universe tier, free on the same once-per-run board.
+    The single source-vocabulary boundary: ``fund_etf_spot_em``'s columns (代码 / 数据日期 /
+    最新价 / 换手率 / 成交额 / 总市值 / 最新份额) are mapped once here to the domain keys every
+    downstream leg reads (scale, the price + activity current-bar fallbacks, and the settled-session
+    check), so no Chinese key leaks past the board's edge. Values stay in the source's raw units
+    (元/份); each consumer rebases (etf_scale → 亿; activity keeps the raw input).
+    """
+
+    return {
+        "code": str(row["代码"]),
+        "date": spot_date(row["数据日期"]),
+        "nav": float(row["最新价"]),
+        "turnover": float(row["换手率"]),
+        "amount": float(row["成交额"]),
+        "aum": float(row["总市值"]),
+        "shares": float(row["最新份额"]),
+    }
+
+
+def _from_rows(rows: Iterable[Mapping[str, Any]], *, fetched_at: str) -> list[Reading]:
+    """Map the normalised domain board rows to ETF-scale Readings.
+
+    ``aum``/``shares``/``amount`` are rebased to 亿 (the unit the scorecard and the tier screen
+    read) and the exchange is read off the code prefix (5… is Shanghai, otherwise Shenzhen).
+    ``amount`` is the day's traded value — the liquidity leg of the universe tier, free on the same
+    once-per-run board.
     """
 
     return [
         Reading(
             series=SERIES,
-            key=str(row["代码"]),
-            as_of=str(row["数据日期"])[:10],
+            key=row["code"],
+            as_of=row["date"],
             fetched_at=fetched_at,
             payload={
-                "exchange": "sse" if str(row["代码"]).startswith("5") else "szse",
-                "aum": float(row["总市值"]) / 1e8,
-                "shares": float(row["最新份额"]) / 1e8,
-                "amount": float(row["成交额"]) / 1e8,
+                "exchange": "sse" if row["code"].startswith("5") else "szse",
+                "aum": row["aum"] / 1e8,
+                "shares": row["shares"] / 1e8,
+                "amount": row["amount"] / 1e8,
             },
         )
         for row in rows
@@ -49,13 +71,18 @@ def fetch_spot_board() -> dict[str, Any]:  # pragma: no cover - live path
     """The whole-market on-exchange ETF spot board, indexed by fund code — one batch call per run.
 
     This single snapshot is the shared input the live feed hands to the universe-membership,
-    ETF-scale, and trading-activity-fallback legs, so ``fund_etf_spot_em`` is pulled once per run
-    rather than once per leg. Indexed by code so the per-fund fallback lookup is O(1).
+    ETF-scale, and per-fund current-bar legs, so ``fund_etf_spot_em`` is pulled once per run rather
+    than once per leg. Each raw row is normalised at this edge (:func:`_board_row`) so every
+    consumer reads domain keys; indexed by code so the per-fund lookup is O(1).
     """
 
     import akshare as ak
 
-    return {str(row["代码"]): row for _, row in ak.fund_etf_spot_em().iterrows()}
+    board: dict[str, Any] = {}
+    for _, raw in ak.fund_etf_spot_em().iterrows():
+        row = _board_row(raw)
+        board[row["code"]] = row
+    return board
 
 
 def fetch_live(board: Mapping[str, Any], *, fetched_at: str) -> list[Reading]:

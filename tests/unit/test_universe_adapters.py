@@ -133,16 +133,31 @@ def test_a_silent_feed_discloses_nothing() -> None:
     assert rows == []
 
 
-def test_etf_scale_maps_the_akshare_spot_columns() -> None:
-    # the live ETF spot feed (代码 / 数据日期 / 总市值 in 元 / 最新份额 in 份) maps to the same
-    # Reading shape as the fixture (aum/shares in 亿), pinned offline so the mapping is covered
-    # without the network. 数据日期 arrives as a timestamp; only its date is kept, and the exchange
-    # is read off the code prefix (5… is Shanghai, otherwise Shenzhen).
+def test_board_row_normalises_the_akshare_spot_columns_to_domain_keys() -> None:
+    # The single source-vocabulary boundary: one raw whole-market spot row (Chinese columns, a
+    # Timestamp date) is normalised once here to the shared domain row every downstream leg reads —
+    # so no Chinese key reaches the price / activity / scale / settled consumers. Units stay raw
+    # (元/份): each consumer rebases for itself (etf_scale → 亿; activity → the raw Amihud input).
+    raw = {
+        "代码": "561010", "数据日期": "2026-06-15 00:00:00", "最新价": 0.918,
+        "换手率": 5.15, "成交额": 800_000_000.0, "总市值": 6_800_000_000.0,
+        "最新份额": 4_000_000_000.0,
+    }
+    assert etf_scale._board_row(raw) == {
+        "code": "561010", "date": "2026-06-15", "nav": 0.918, "turnover": 5.15,
+        "amount": 800_000_000.0, "aum": 6_800_000_000.0, "shares": 4_000_000_000.0,
+    }
+
+
+def test_etf_scale_maps_the_domain_board_rows() -> None:
+    # The scale leg reads the normalised domain board (date already ISO; 总市值/最新份额/成交额 →
+    # aum/shares/amount, rebased to 亿) and reads the exchange off the code prefix (5… is Shanghai,
+    # otherwise Shenzhen). Pinned offline so the rebasing is covered without the network.
     rows = [
-        {"代码": "561010", "数据日期": "2026-06-15 00:00:00", "总市值": 6_800_000_000.0,
-         "最新份额": 4_000_000_000.0, "成交额": 800_000_000.0},
-        {"代码": "159755", "数据日期": "2026-06-15 00:00:00", "总市值": 4_600_000_000.0,
-         "最新份额": 4_200_000_000.0, "成交额": 50_000_000.0},
+        {"code": "561010", "date": "2026-06-15", "aum": 6_800_000_000.0,
+         "shares": 4_000_000_000.0, "amount": 800_000_000.0},
+        {"code": "159755", "date": "2026-06-15", "aum": 4_600_000_000.0,
+         "shares": 4_200_000_000.0, "amount": 50_000_000.0},
     ]
     sse, szse = etf_scale._from_rows(rows, fetched_at=FETCHED_AT)
     assert sse.series == etf_scale.SERIES
@@ -156,12 +171,13 @@ def test_etf_scale_maps_the_akshare_spot_columns() -> None:
 
 
 def test_etf_scale_fetch_live_maps_the_shared_board_values() -> None:
-    # The live ETF-scale leg reads the shared spot board (keyed by code) the feed pulls once per
-    # run and maps each row to a scale Reading — it never re-fetches a board of its own.
+    # The live ETF-scale leg reads the shared spot board (keyed by code, already normalised to
+    # domain keys) the feed pulls once per run and maps each row to a scale Reading — it never
+    # re-fetches a board of its own.
     board = {
         "561010": {
-            "代码": "561010", "数据日期": "2026-06-15 00:00:00",
-            "总市值": 6_800_000_000.0, "最新份额": 4_000_000_000.0, "成交额": 800_000_000.0,
+            "code": "561010", "date": "2026-06-15",
+            "aum": 6_800_000_000.0, "shares": 4_000_000_000.0, "amount": 800_000_000.0,
         },
     }
     readings = etf_scale.fetch_live(board, fetched_at=FETCHED_AT)

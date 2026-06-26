@@ -8,16 +8,29 @@ network. ``get_feed`` selects the cassettes offline and the live adapters online
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
 import pytest
 
 from factor_scope.config import Config
 from factor_scope.ingest import feed as feed_mod
+from factor_scope.ingest import prices, trading_activity
+from factor_scope.ingest.base import EASTMONEY_KLINE, _HostBreaker
 from factor_scope.ingest.feed import CassetteFeed, LiveFeed, get_feed
+from factor_scope.store import Reading
 
 pytestmark = pytest.mark.unit
 
 AS_OF = "2026-06-05"
 FETCHED_AT = "2026-06-05T22:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_breaker(monkeypatch) -> None:
+    """The K-line host breaker is a run-scoped global; give each test a fresh one for isolation."""
+
+    monkeypatch.setattr(feed_mod, "host_breaker", _HostBreaker())
 
 
 def _feed() -> CassetteFeed:
@@ -82,12 +95,10 @@ def test_live_feed_paces_between_per_fund_calls(monkeypatch) -> None:
     # the IP limiter; the delay is config-driven. (Offline cassettes never pace — see below.)
     paced: list[float] = []
     monkeypatch.setattr(feed_mod, "pace_between_calls", lambda seconds: paced.append(seconds))
-    monkeypatch.setattr("factor_scope.ingest.etf_scale.fetch_spot_board", dict)
     monkeypatch.setattr(
-        "factor_scope.ingest.trading_activity.fetch_live",
-        lambda board, code, *, fetched_at, since=None, impersonate="chrome": [],
+        "factor_scope.ingest.eastmoney.kline", lambda code, *, beg, impersonate="chrome": []
     )
-    live = get_feed(Config(source="live", live_pacing_seconds=0.7), store=None)
+    live = get_feed(Config(source="live", live_pacing_seconds=0.7), store=None)  # no store → cold
     assert isinstance(live, LiveFeed)
     live.activity("561010", fetched_at=FETCHED_AT)
     assert paced == [0.7]  # paced once with the configured delay, before the per-fund network call
@@ -95,15 +106,15 @@ def test_live_feed_paces_between_per_fund_calls(monkeypatch) -> None:
 
 def test_live_feed_threads_the_impersonation_profile_to_the_prices_leg(monkeypatch) -> None:
     # The EastMoney fingerprint is config-driven so it can be bumped when Chrome's TLS profile
-    # drifts; get_feed must thread Config.eastmoney_impersonate down to the price NAV leg (and only
-    # that leg — Baostock/Mootdx don't speak it).
+    # drifts; get_feed must thread Config.eastmoney_impersonate down to the shared K-line client the
+    # NAV leg rides (and only it — Baostock/Mootdx don't speak it).
     seen: dict[str, str] = {}
 
-    def fake_price(code, *, fetched_at, since=None, impersonate="chrome"):
+    def fake_kline(code, *, beg, impersonate="chrome"):
         seen["impersonate"] = impersonate
         return []
 
-    monkeypatch.setattr("factor_scope.ingest.prices.fetch_live", fake_price)
+    monkeypatch.setattr("factor_scope.ingest.eastmoney.kline", fake_kline)
     for leg in ("baostock", "mootdx"):
         monkeypatch.setattr(
             f"factor_scope.ingest.{leg}.fetch_live",
@@ -117,17 +128,16 @@ def test_live_feed_threads_the_impersonation_profile_to_the_prices_leg(monkeypat
 
 
 def test_live_feed_threads_the_impersonation_profile_to_the_activity_leg(monkeypatch) -> None:
-    # The activity history leg rides the same EastMoney K-line client as the NAV leg, so get_feed
-    # must thread Config.eastmoney_impersonate down to it too — else a bumped profile fixes NAV but
-    # leaves activity hitting the same host with the stale one (and tripping the shared breaker).
+    # The activity leg rides the same K-line client as the NAV leg (one fetch feeds both), so
+    # get_feed must thread Config.eastmoney_impersonate down to it too — else a bumped profile
+    # fixes NAV but leaves activity hitting the same host with the stale one.
     seen: dict[str, str] = {}
 
-    def fake_activity(board, code, *, fetched_at, since=None, impersonate="chrome"):
+    def fake_kline(code, *, beg, impersonate="chrome"):
         seen["impersonate"] = impersonate
         return []
 
-    monkeypatch.setattr("factor_scope.ingest.etf_scale.fetch_spot_board", dict)
-    monkeypatch.setattr("factor_scope.ingest.trading_activity.fetch_live", fake_activity)
+    monkeypatch.setattr("factor_scope.ingest.eastmoney.kline", fake_kline)
     live = get_feed(
         Config(source="live", eastmoney_impersonate="chrome131", live_pacing_seconds=0), store=None
     )
@@ -149,3 +159,228 @@ def test_price_sources_honour_the_since_watermark() -> None:
     floor = full[-2].as_of
     incremental = feed.price_sources("561010", fetched_at=FETCHED_AT, since=floor)
     assert all([r.as_of for r in leg] == [full[-1].as_of] for leg in incremental)  # newer-only
+
+
+# --- The store-aware load-shape seam: fake store + fake K-line client + fake spot board ---
+
+RUN_AT = "2026-06-25T22:00:00Z"  # a Thursday, post-close
+CLOSED = "2026-06-25"  # the expected closed trading session at the 22:00 run
+SEEDED = "2024-01-02"  # before the ~650-day seed floor → a fund with this bar has its window filled
+
+
+class _FakeStore:
+    """A minimal point-in-time store for the seam: ``read_as_of`` honours the as-of ceiling.
+
+    The feed reads the store twice per series — at the run date (the settled watermark) and at the
+    seed floor (whether the span reaches back the window) — so the fake only needs ``read_as_of``.
+    """
+
+    def __init__(self, readings: list[Reading]) -> None:
+        self._readings = readings
+
+    def read_as_of(self, series: str, as_of: str) -> list[Reading]:
+        latest: dict[str, Reading] = {}
+        for r in self._readings:
+            if r.series == series and r.as_of <= as_of:
+                if r.key not in latest or r.as_of > latest[r.key].as_of:
+                    latest[r.key] = r
+        return list(latest.values())
+
+
+def _hist(series: str, code: str, dates: list[str]) -> list[Reading]:
+    """Settled history rows for one code in one series (only ``as_of`` and provenance are read)."""
+
+    return [
+        Reading(series=series, key=code, as_of=d, fetched_at=f"{d}T22:00:00Z", payload={"v": 1.0})
+        for d in dates
+    ]
+
+
+def _warm(code: str, latest: str = "2026-06-24") -> list[Reading]:
+    """Both legs settled, reaching the seed window and current — the spot-only steady state."""
+
+    return _hist(prices.SERIES, code, [SEEDED, latest]) + _hist(
+        trading_activity.SERIES, code, [SEEDED, latest]
+    )
+
+
+def _board(
+    code: str = "561010", *, on: str = CLOSED, price: float = 0.918, turnover: float = 5.0
+) -> dict[str, Any]:
+    """A one-row normalised domain spot board — the snapshot the feed shares across its legs."""
+
+    return {code: {"date": on, "nav": price, "turnover": turnover, "amount": 1_000_000.0}}
+
+
+def _em_bar(d: str, *, close: float = 0.9, turnover: float = 4.0, amount: float = 2.0) -> dict:
+    """A domain bar as the K-line client returns it — one call carries close + turnover/amount."""
+
+    return {"date": d, "close": close, "turnover": turnover, "amount": amount}
+
+
+def _fake_kline(
+    monkeypatch,
+    *,
+    bars: list[dict] | None = None,
+    error: Exception | None = None,
+    captured: dict | None = None,
+) -> None:
+    """Mock the shared EastMoney K-line client and (optionally) record how it was called."""
+
+    def kline(code: str, *, beg: str, impersonate: str = "chrome") -> list[dict]:
+        if captured is not None:
+            captured["calls"] = captured.get("calls", 0) + 1
+            captured.update(code=code, beg=beg, impersonate=impersonate)
+        if error is not None:
+            raise error
+        return bars or []
+
+    monkeypatch.setattr("factor_scope.ingest.eastmoney.kline", kline)
+
+
+def _forbid_kline(monkeypatch, captured: dict | None = None) -> None:
+    """Mock the client to fail loudly if hit — for the warm and breaker-open paths."""
+
+    _fake_kline(monkeypatch, error=AssertionError("push2his must not be hit"), captured=captured)
+
+
+def _live(store: _FakeStore, board: dict[str, Any], **kwargs: Any) -> LiveFeed:
+    feed = LiveFeed(store, **kwargs)  # type: ignore[arg-type]
+    feed._spot = board  # pin the shared snapshot so the test never hits the network
+    return feed
+
+
+def test_steady_state_reads_the_spot_bar_settled_and_makes_no_kline_call(monkeypatch) -> None:
+    # The headline: with full, current history both legs read the current bar off the shared board
+    # and the run makes ~zero per-code push2his calls; the bar settles (advances the watermark).
+    captured: dict = {}
+    _forbid_kline(monkeypatch, captured)
+    em = _live(_FakeStore(_warm("561010")), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured.get("calls", 0) == 0  # zero per-code history calls in steady state
+    assert [r.as_of for r in em.nav] == [CLOSED] and em.nav[0].payload["nav"] == 0.918
+    assert [r.as_of for r in em.activity] == [CLOSED] and em.activity[0].payload["turnover"] == 5.0
+    assert all("provisional" not in r.payload for r in em.nav + em.activity)  # 数据日期 == closed
+
+
+def test_cold_start_deep_pulls_one_kline_for_both_legs(monkeypatch) -> None:
+    # No settled history → one K-line pull seeds the window, and the SAME bars feed both legs.
+    captured: dict = {}
+    _fake_kline(monkeypatch, bars=[_em_bar(CLOSED)], captured=captured)
+    em = _live(_FakeStore([]), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured["calls"] == 1  # one push2his pull, not two
+    assert captured["beg"] == prices._em_start(RUN_AT, None)  # the cold seed window
+    assert em.nav[0].payload["nav"] == 0.9  # close → nav
+    assert em.activity[0].payload == {"turnover": 4.0, "amount": 2.0}  # same call → activity
+
+
+def test_short_span_re_seeds_via_a_deep_pull(monkeypatch) -> None:
+    # History present and current, but none reaching back the seed window → cold, re-seeded
+    # from the window floor (so the 200-day-MA gate isn't blind), not just incrementally topped up.
+    captured: dict = {}
+    _fake_kline(monkeypatch, bars=[_em_bar(CLOSED)], captured=captured)
+    recent = _hist(prices.SERIES, "561010", ["2026-06-20", "2026-06-24"]) + _hist(
+        trading_activity.SERIES, "561010", ["2026-06-20", "2026-06-24"]
+    )
+    _live(_FakeStore(recent), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured["calls"] == 1
+    assert captured["beg"] == prices._em_start(RUN_AT, None)  # seed floor (re-seed), not watermark
+
+
+def test_gap_deep_pulls_incrementally_from_the_watermark(monkeypatch) -> None:
+    # Seeded but the latest settled bar is weeks behind the closed session → a gap pull
+    # backfilling from the watermark (day-after), not the seed window — recovery stays cheap.
+    captured: dict = {}
+    _fake_kline(monkeypatch, bars=[_em_bar(CLOSED)], captured=captured)
+    gapped = _hist(prices.SERIES, "561010", [SEEDED, "2026-06-05"]) + _hist(
+        trading_activity.SERIES, "561010", [SEEDED, "2026-06-05"]
+    )
+    _live(_FakeStore(gapped), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured["calls"] == 1
+    assert captured["beg"] == "20260606"  # the day after the watermark, not the seed floor
+
+
+def test_a_recent_fund_within_the_gap_tolerance_stays_on_the_spot_board(monkeypatch) -> None:
+    # One session behind (steady state — today not yet recorded) is within gap_sessions, so
+    # the fund stays on the cheap board rather than deep-pulling every night.
+    captured: dict = {}
+    _forbid_kline(monkeypatch, captured)
+    em = _live(_FakeStore(_warm("561010", latest="2026-06-24")), _board())._em(
+        "561010", fetched_at=RUN_AT
+    )
+    assert captured.get("calls", 0) == 0
+    assert em.nav and em.activity  # served from the board
+
+
+def test_spot_bar_is_provisional_when_the_board_date_is_not_the_closed_session(monkeypatch) -> None:
+    # A stale/intraday board (数据日期 != the closed session) is the current estimate, not settled
+    # history: both legs are tagged provisional so the floor skips them and a later pull backfills.
+    _forbid_kline(monkeypatch)
+    feed = _live(_FakeStore(_warm("561010", latest="2026-06-23")), _board(on="2026-06-24"))
+    em = feed._em("561010", fetched_at=RUN_AT)
+    assert em.nav[0].as_of == "2026-06-24" and em.nav[0].payload["provisional"] is True
+    assert em.activity[0].payload["provisional"] is True
+
+
+def test_one_kline_call_feeds_both_legs_across_the_universe_and_price_loops(monkeypatch) -> None:
+    # The activity (universe loop) and NAV (price loop) legs share ONE memoised fetch, so a
+    # fund costs a single push2his request even though two separate loops consume it.
+    captured: dict = {}
+    _fake_kline(monkeypatch, bars=[_em_bar(CLOSED)], captured=captured)
+    for leg in ("baostock", "mootdx"):
+        monkeypatch.setattr(
+            f"factor_scope.ingest.{leg}.fetch_live",
+            lambda code, *, fetched_at, since=None: [],
+        )
+    feed = _live(_FakeStore([]), _board(), pace_seconds=0)
+    act = feed.activity("561010", fetched_at=RUN_AT)  # universe loop
+    nav = feed.price_sources("561010", fetched_at=RUN_AT)[0]  # price loop reuses the memo
+    assert captured["calls"] == 1  # one shared pull, not one per leg
+    assert act and nav  # both legs got readings from the single fetch
+
+
+def test_a_deep_pull_failure_backs_nav_onto_sina_and_activity_onto_the_spot_board(
+    monkeypatch, caplog
+):
+    # On a push2his refusal the breaker records, the NAV leg falls to Sina's settled close, and the
+    # activity leg to the current (provisional) spot bar — a block degrades, not drops. The
+    # degradation must also log loudly, naming the blocked code: a silent fallback could hide a host
+    # blocked for weeks behind today's bar — the exact failure mode CLAUDE.md's guardrails forbid.
+    _fake_kline(monkeypatch, error=ConnectionError("push2his reset"))
+    monkeypatch.setattr(
+        "factor_scope.ingest.prices.sina",
+        lambda code, *, fetched_at, floor: [
+            Reading(series=prices.SERIES, key=code, as_of=CLOSED, fetched_at=fetched_at,
+                    payload={"nav": 0.7, "source": "akshare"})
+        ],
+    )
+    breaker = _HostBreaker(threshold=5)
+    monkeypatch.setattr(feed_mod, "host_breaker", breaker)
+    with caplog.at_level(logging.WARNING, logger="factor_scope.ingest.feed"):
+        em = _live(_FakeStore([]), _board())._em("561010", fetched_at=RUN_AT)
+    assert breaker.failures(EASTMONEY_KLINE) == 1  # the refusal counts toward tripping the breaker
+    assert em.nav[0].payload["nav"] == 0.7  # NAV backed onto Sina
+    assert em.activity[0].payload["provisional"] is True  # activity fell to the current spot bar
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("561010" in msg for msg in warned)  # the blocked code is named in the warning
+
+
+def test_an_open_breaker_skips_the_kline_and_uses_the_fallbacks(monkeypatch) -> None:
+    # Once the shared host has tripped open, a deep code goes straight to the fallbacks for the rest
+    # of the run rather than re-hitting a blocking IP per fund.
+    captured: dict = {}
+    _forbid_kline(monkeypatch, captured)
+    monkeypatch.setattr("factor_scope.ingest.prices.sina", lambda code, *, fetched_at, floor: [])
+    breaker = _HostBreaker(threshold=1)
+    breaker.record_failure(EASTMONEY_KLINE)  # tripped open
+    monkeypatch.setattr(feed_mod, "host_breaker", breaker)
+    em = _live(_FakeStore([]), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured.get("calls", 0) == 0  # the host was left untouched
+    assert em.activity[0].payload["provisional"] is True  # served by the spot board
+
+
+def test_a_warm_fund_absent_from_the_board_degrades_to_no_reading(monkeypatch) -> None:
+    # A delisted/absent code on the warm path isn't on the board → both surfaces degrade to no
+    # reading (the factors fall to invalid), never a crash.
+    _forbid_kline(monkeypatch)
+    em = _live(_FakeStore(_warm("561010")), {})._em("561010", fetched_at=RUN_AT)
+    assert em.nav == [] and em.activity == []

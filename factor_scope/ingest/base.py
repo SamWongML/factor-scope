@@ -13,6 +13,7 @@ import csv
 import io
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 
 class IngestError(ValueError):
@@ -29,6 +30,18 @@ def day_after(since: str) -> date:
     """
 
     return date.fromisoformat(since) + timedelta(days=1)
+
+
+def spot_date(value: Any) -> str:
+    """A spot-board session date as ISO ``YYYY-MM-DD`` — it arrives as a pandas Timestamp.
+
+    Used by the board normalizer (:func:`factor_scope.ingest.etf_scale._board_row`) to ISO-stamp the
+    shared spot board's session date once at its edge, so every downstream leg reads a domain date.
+    """
+
+    if hasattr(value, "strftime"):
+        return str(value.strftime("%Y-%m-%d"))
+    return str(value)[:10]
 
 
 def run_date(fetched_at: str) -> date | None:
