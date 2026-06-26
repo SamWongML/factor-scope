@@ -43,7 +43,12 @@ from factor_scope.ingest import (
     themes,
     trading_activity,
 )
-from factor_scope.ingest.base import fetched_at_for, fetched_at_now, host_breaker
+from factor_scope.ingest.base import (
+    fetched_at_for,
+    fetched_at_now,
+    host_breaker,
+    settled_watermarks,
+)
 from factor_scope.ingest.feed import Feed, get_feed
 from factor_scope.store import PointInTimeStore, Reading
 
@@ -151,21 +156,16 @@ def _fetch_universe_codes(readings: list[Reading], as_of: str) -> set[str]:
 
 
 def _series_watermarks(store: PointInTimeStore | None, series: str, as_of: str) -> dict[str, str]:
-    """The newest stored ``as_of`` per key in ``series`` knowable as of the run — the fetch floor.
+    """The newest *settled* ``as_of`` per key in ``series`` — the per-leg fetch floor.
 
-    Keyed by the adapter's own key (a fund code for trading activity / valuation), so a re-pull
-    starts just past what the append-only log already holds. Empty when there is no store to read
-    (a standalone ``gather`` call), so the first pull takes full history.
-
-    Provisional readings (a spot-board current-session estimate, not a settled history bar) are
-    skipped at the store read (``excluding``), so a settled bar isn't hidden by a provisional one
-    layered on top: an outage that fell back to the spot board leaves the floor on the last settled
-    session, and the next history pull backfills the sessions it missed from there.
+    The one watermark rule (:func:`ingest.base.settled_watermarks`), shared with the feed's
+    load-shape decision: keyed by the adapter's own key so a re-pull starts just past what the
+    append-only log already holds, provisional spot estimates skipped so a settled bar isn't hidden
+    by one layered on top, and empty when there is no store (a standalone ``gather`` takes full
+    history).
     """
 
-    if store is None:
-        return {}
-    return {r.key: r.as_of for r in store.read_as_of(series, as_of, excluding="provisional")}
+    return settled_watermarks(store, series, as_of)
 
 
 def _holdings_watermarks(store: PointInTimeStore | None, as_of: str) -> dict[str, str]:

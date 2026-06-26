@@ -15,6 +15,8 @@ from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from factor_scope.store import PointInTimeStore, Reading
+
 
 class IngestError(ValueError):
     """A source row could not be parsed into a Reading."""
@@ -42,6 +44,35 @@ def spot_date(value: Any) -> str:
     if hasattr(value, "strftime"):
         return str(value.strftime("%Y-%m-%d"))
     return str(value)[:10]
+
+
+def mark_provisional(readings: list[Reading]) -> list[Reading]:
+    """Tag each reading ``provisional`` — a current-session spot estimate, not settled history.
+
+    The marker lets the settled-watermark floor (:func:`settled_watermarks`) skip these rows, so a
+    later K-line pull backfills the real settled bar instead of starting past it. Shared by the
+    price and trading-activity spot-board legs so the flag name can't drift between them.
+    """
+
+    return [
+        reading.model_copy(update={"payload": {**reading.payload, "provisional": True}})
+        for reading in readings
+    ]
+
+
+def settled_watermarks(store: PointInTimeStore | None, series: str, as_of: str) -> dict[str, str]:
+    """Latest *settled* ``as_of`` per key in ``series`` at ``as_of`` — the incremental floor.
+
+    Provisional spot-board estimates are skipped at the store read (``excluding``), so a settled bar
+    isn't hidden by a provisional one layered on top of it: an outage that fell back to the board
+    leaves the floor on the last settled session, and the next K-line pull backfills from there.
+    The one watermark rule, shared by the feed's load-shape decision and the market's per-series
+    ``since`` floor so both legs of a run read the same floor.
+    """
+
+    if store is None:
+        return {}
+    return {r.key: r.as_of for r in store.read_as_of(series, as_of, excluding="provisional")}
 
 
 def run_date(fetched_at: str) -> date | None:

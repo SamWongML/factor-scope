@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from factor_scope.ingest.base import mark_provisional
 from factor_scope.store import Reading
 
 SERIES = "trading_activity"
@@ -63,9 +64,4 @@ def spot_reading(
         return []
     bar = {"date": row["date"], "turnover": row["turnover"], "amount": row["amount"]}
     readings = from_kline(code, [bar], fetched_at=fetched_at, floor=floor)
-    if settled:
-        return readings
-    return [
-        reading.model_copy(update={"payload": {**reading.payload, "provisional": True}})
-        for reading in readings
-    ]
+    return readings if settled else mark_provisional(readings)

@@ -34,7 +34,12 @@ from factor_scope.ingest import (
     prices,
     trading_activity,
 )
-from factor_scope.ingest.base import EASTMONEY_KLINE, host_breaker, run_date
+from factor_scope.ingest.base import (
+    EASTMONEY_KLINE,
+    host_breaker,
+    run_date,
+    settled_watermarks,
+)
 from factor_scope.store import PointInTimeStore, Reading
 
 logger = logging.getLogger(__name__)
@@ -51,6 +56,18 @@ class _EmReadings(NamedTuple):
 
     nav: list[Reading]
     activity: list[Reading]
+
+
+class _ShapeDecision(NamedTuple):
+    """One series' load decision for a code: the ``since`` floor, and whether to deep-pull.
+
+    ``since`` is the watermark bars must clear: ``None`` (re)seeds the full window, a date keeps
+    strictly past it. ``deep`` is whether a per-code K-line pull is needed; when False the spot
+    board serves the current bar, floored at ``since`` so an already-held session isn't rewritten.
+    """
+
+    since: str | None
+    deep: bool
 
 
 def _sessions_between(latest: date, closed: date) -> int:
@@ -224,25 +241,19 @@ class LiveFeed:
             return self._em_cache[code]
         closed = run_date(fetched_at)
         as_of = closed.isoformat() if closed is not None else fetched_at[:10]
-        seed_floor = (
-            (closed - timedelta(days=prices._SEED_CALENDAR_DAYS)).isoformat()
-            if closed is not None
-            else None
-        )
-        price_since, price_deep = self._load_shape(prices.SERIES, code, as_of, closed, seed_floor)
-        activity_since, activity_deep = self._load_shape(
-            trading_activity.SERIES, code, as_of, closed, seed_floor
-        )
+        seed_floor = prices._floor(fetched_at, None)  # the cold (re)seed floor
+        price = self._load_shape(prices.SERIES, code, as_of, closed, seed_floor)
+        activity = self._load_shape(trading_activity.SERIES, code, as_of, closed, seed_floor)
         # The K-line ``beg`` and the client-side floor both derive from the same per-leg ``since``,
         # so the window requested is the window kept — a re-seed backfills its early bars instead of
-        # clipping them at the recent watermark.
-        price_floor = prices._floor(fetched_at, price_since)
-        activity_floor = prices._floor(fetched_at, activity_since)
-        if price_deep or activity_deep:
+        # clipping them at the watermark. ``since`` None floors at the seed window, else past it.
+        price_floor = price.since if price.since is not None else seed_floor
+        activity_floor = activity.since if activity.since is not None else seed_floor
+        if price.deep or activity.deep:
             beg = min(
-                prices._em_start(fetched_at, since)
-                for since, deep in ((price_since, price_deep), (activity_since, activity_deep))
-                if deep
+                prices._em_start(fetched_at, shape.since)
+                for shape in (price, activity)
+                if shape.deep
             )
             result = self._deep(
                 code,
@@ -321,14 +332,8 @@ class LiveFeed:
 
     def _load_shape(
         self, series: str, code: str, as_of: str, closed: date | None, seed_floor: str | None
-    ) -> tuple[str | None, bool]:
-        """This series' load decision for ``code``: the ``since`` floor, and whether to deep-pull.
-
-        ``since`` is the watermark bars must clear — the K-line ``beg`` and the client-side floor
-        both derive from it, so the window requested is the window kept (``None`` (re)seeds the full
-        window; a date pulls/keeps strictly past it). ``deep`` is whether a per-code K-line pull is
-        needed; when False the spot board serves the current bar, floored at ``since`` so an already
-        held session isn't rewritten.
+    ) -> _ShapeDecision:
+        """This series' load :class:`_ShapeDecision` for ``code`` — its ``since`` floor + deep flag.
 
         Cold (no store, no real run date, no settled history, or a span that doesn't reach the seed
         window) (re)seeds from the ~650-day floor; a gap (> ``gap_sessions`` behind the closed
@@ -338,12 +343,12 @@ class LiveFeed:
 
         watermark = self._watermarks(series, as_of).get(code)
         if self._store is None or closed is None or seed_floor is None or watermark is None:
-            return None, True  # cold: seed the full window
+            return _ShapeDecision(None, True)  # cold: seed the full window
         if code not in self._seeded(series, seed_floor):
-            return None, True  # span shorter than the seed window → re-seed from the floor
+            return _ShapeDecision(None, True)  # span shorter than the seed window → re-seed
         if _sessions_between(date.fromisoformat(watermark), closed) > self._gap_sessions:
-            return watermark, True  # gap → incremental from the watermark
-        return watermark, False  # warm: the spot board supplies the current bar
+            return _ShapeDecision(watermark, True)  # gap → incremental from the watermark
+        return _ShapeDecision(watermark, False)  # warm: spot board serves the current bar
 
     def _settled(self, code: str, closed: date | None) -> bool:
         """Is the spot bar a settled session — its session ``date`` the expected closed session?
@@ -359,22 +364,13 @@ class LiveFeed:
         return row is not None and row["date"] == closed.isoformat()
 
     def _watermarks(self, series: str, as_of: str) -> dict[str, str]:
-        """Latest *settled* ``as_of`` per code in ``series`` knowable at the run — the deep floor.
+        """The settled watermark per code in ``series`` (:func:`ingest.base.settled_watermarks`).
 
-        The store skips provisional spot bars at the read (``excluding``), so a settled bar isn't
-        hidden by a provisional one layered on top of it — an outage that fell back to the board
-        leaves the floor on the last settled session rather than reading as no history at all.
-        Memoised: one store read per series.
+        Memoised: one store read per series, shared across the run's load-shape decisions.
         """
 
         if series not in self._watermark_cache:
-            if self._store is None:
-                self._watermark_cache[series] = {}
-            else:
-                self._watermark_cache[series] = {
-                    r.key: r.as_of
-                    for r in self._store.read_as_of(series, as_of, excluding="provisional")
-                }
+            self._watermark_cache[series] = settled_watermarks(self._store, series, as_of)
         return self._watermark_cache[series]
 
     def _seeded(self, series: str, seed_floor: str) -> set[str]:
@@ -386,11 +382,11 @@ class LiveFeed:
         """
 
         if series not in self._seeded_cache:
-            self._seeded_cache[series] = (
-                set()
-                if self._store is None
-                else {r.key for r in self._store.read_as_of(series, seed_floor)}
-            )
+            if self._store is None:
+                self._seeded_cache[series] = set()
+            else:
+                rows = self._store.read_as_of(series, seed_floor, excluding="provisional")
+                self._seeded_cache[series] = {r.key for r in rows}
         return self._seeded_cache[series]
 
 

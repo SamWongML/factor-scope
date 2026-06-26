@@ -18,7 +18,7 @@ from datetime import timedelta
 from statistics import median
 from typing import Any
 
-from factor_scope.ingest.base import day_after, run_date
+from factor_scope.ingest.base import day_after, mark_provisional, run_date
 from factor_scope.store import Reading
 
 SERIES = "prices"
@@ -128,12 +128,7 @@ def spot_reading(
         return []
     bars = [{"as_of": row["date"], "nav": row["nav"]}]
     readings = _to_readings(code, bars, fetched_at=fetched_at, floor=floor)
-    if settled:
-        return readings
-    return [
-        reading.model_copy(update={"payload": {**reading.payload, "provisional": True}})
-        for reading in readings
-    ]
+    return readings if settled else mark_provisional(readings)
 
 
 def sina(code: str, *, fetched_at: str, floor: str | None) -> list[Reading]:
