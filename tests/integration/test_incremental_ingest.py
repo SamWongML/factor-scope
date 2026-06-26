@@ -249,3 +249,34 @@ def test_a_provisional_spot_bar_does_not_advance_the_floor_past_the_last_settled
     finally:
         store.close()
     assert floors[_FUND] == "2026-06-10"  # the last settled bar, not the provisional 2026-06-12
+
+
+def test_a_settled_spot_bar_advances_the_watermark(tmp_path) -> None:
+    # The complement: a spot bar whose 数据日期 is the closed session is recorded *settled* (no
+    # provisional tag), so it advances the incremental floor like any history bar — steady state
+    # accrues real history off the cheap board and the next run stays warm instead of re-pulling.
+    # Built through the real spot_reading mapper (not a hand-stamped Reading), so a regression that
+    # mis-tagged a settled current bar provisional would freeze the watermark and be caught here.
+    settled = prices.spot_reading(
+        {_FUND: {"date": "2026-06-12", "nav": 0.9, "turnover": 2.0, "amount": 2.0}},
+        _FUND,
+        fetched_at="2026-06-12T22:00:00Z",
+        settled=True,
+        floor="2026-06-10",
+    )
+    assert [r.as_of for r in settled] == ["2026-06-12"]  # the closed-session bar mapped through…
+    assert "provisional" not in settled[0].payload  # …and recorded as real history, not an estimate
+    store = DuckDBStore(tmp_path / "store.duckdb")
+    try:
+        store.append(
+            [
+                Reading(series=prices.SERIES, key=_FUND, as_of="2026-06-10",
+                        fetched_at="2026-06-10T22:00:00Z",
+                        payload={"nav": 0.8, "source": "akshare"}),
+                *settled,
+            ]
+        )
+        floors = ashare._series_watermarks(store, prices.SERIES, "2026-06-12")
+    finally:
+        store.close()
+    assert floors[_FUND] == "2026-06-12"  # the floor advanced to the settled spot bar, not stuck

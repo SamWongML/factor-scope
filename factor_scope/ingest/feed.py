@@ -37,6 +37,7 @@ from factor_scope.ingest import (
 from factor_scope.ingest.base import (
     EASTMONEY_KLINE,
     host_breaker,
+    mark_provisional,
     run_date,
     settled_watermarks,
 )
@@ -84,6 +85,23 @@ def _sessions_between(latest: date, closed: date) -> int:
         return 0
     days = (closed - latest).days
     return sum(1 for n in range(1, days + 1) if (latest + timedelta(days=n)).weekday() < 5)
+
+
+def _settled_through(readings: list[Reading], through: str | None) -> list[Reading]:
+    """Tag any deep-leg bar dated past ``through`` (the board's last settled session) provisional.
+
+    The K-line window is settled history save for a current, still-forming bar an off-nominal
+    intraday pull can include — the bar past the board's last settled session. Tagging it
+    provisional (the spot leg's gate, shared) keeps the settled watermark on the real close, so a
+    later pull backfills it rather than starting past a non-final bar. ``through`` None (code absent
+    from the board) keeps every bar settled — no session to gate on. Bars are oldest-first, so the
+    settled prefix precedes the provisional tail and order is preserved.
+    """
+
+    if through is None:
+        return readings
+    settled = [r for r in readings if r.as_of <= through]
+    return settled + mark_provisional([r for r in readings if r.as_of > through])
 
 
 def pace_between_calls(seconds: float) -> None:
@@ -161,6 +179,7 @@ class LiveFeed:
         self._em_cache: dict[str, _EmReadings] = {}
         self._watermark_cache: dict[str, dict[str, str]] = {}
         self._seeded_cache: dict[str, set[str]] = {}
+        self._run_stamp: str | None = None
 
     @property
     def _spot_board(self) -> dict[str, Any]:
@@ -226,6 +245,23 @@ class LiveFeed:
 
         return self._em(code, fetched_at=fetched_at).nav
 
+    def _pin_run(self, fetched_at: str) -> None:
+        """Bind the feed to one run's stamp — the single-run lifetime its memo caches assume.
+
+        The per-code K-line memo, the per-series settled-watermark map, and the per-series seeded
+        set are keyed on code/series alone; that is correct only because one feed serves exactly one
+        run at one stamp (``as_of`` and the seed floor both derive from ``fetched_at``). Reusing a
+        feed across stamps would silently return the first run's reads, so a mismatch is a loud
+        failure, not a stale hit — the snapshot boundary, enforced rather than merely assumed.
+        """
+
+        if self._run_stamp is None:
+            self._run_stamp = fetched_at
+        elif self._run_stamp != fetched_at:
+            raise RuntimeError(
+                f"LiveFeed is single-run: bound to {self._run_stamp}, reused with {fetched_at}"
+            )
+
     def _em(self, code: str, *, fetched_at: str) -> _EmReadings:
         """One EastMoney fetch per code, feeding BOTH the NAV and trading-activity legs.
 
@@ -237,6 +273,7 @@ class LiveFeed:
         price loops share the single fetch.
         """
 
+        self._pin_run(fetched_at)  # the memo below is keyed on code alone — bind the run's stamp
         if code in self._em_cache:
             return self._em_cache[code]
         closed = run_date(fetched_at)
@@ -299,11 +336,17 @@ class LiveFeed:
             try:
                 bars = eastmoney.kline(code, beg=beg, impersonate=self._impersonate)
                 host_breaker.record_success(EASTMONEY_KLINE)
+                nav = prices.from_kline(code, bars, fetched_at=fetched_at, floor=nav_floor)
+                activity = trading_activity.from_kline(
+                    code, bars, fetched_at=fetched_at, floor=act_floor
+                )
+                # The current, still-forming bar (past the board's last settled session) is tagged
+                # provisional like the spot leg. The cutoff is read off the board only once a bar
+                # has landed, so an empty pull stays board-free (and network-free in isolation).
+                through = self._board_date(code) if nav or activity else None
                 return _EmReadings(
-                    nav=prices.from_kline(code, bars, fetched_at=fetched_at, floor=nav_floor),
-                    activity=trading_activity.from_kline(
-                        code, bars, fetched_at=fetched_at, floor=act_floor
-                    ),
+                    nav=_settled_through(nav, through),
+                    activity=_settled_through(activity, through),
                 )
             except Exception as exc:
                 host_breaker.record_failure(EASTMONEY_KLINE)
@@ -336,9 +379,11 @@ class LiveFeed:
         """This series' load :class:`_ShapeDecision` for ``code`` — its ``since`` floor + deep flag.
 
         Cold (no store, no real run date, no settled history, or a span that doesn't reach the seed
-        window) (re)seeds from the ~650-day floor; a gap (> ``gap_sessions`` behind the closed
-        session) pulls incrementally from the watermark; otherwise the spot board serves the current
-        session.
+        window) (re)seeds from the ~650-day floor; a gap (> ``gap_sessions`` behind the *board's*
+        last settled session) pulls incrementally from the watermark; else the spot board serves
+        the current session. The ceiling is the board's session date, not the wall clock, so an
+        exchange holiday — over which the board does not advance — keeps a warm fund on the cheap
+        board rather than firing a per-fund K-line that merely re-confirms no new session exists.
         """
 
         watermark = self._watermarks(series, as_of).get(code)
@@ -346,9 +391,24 @@ class LiveFeed:
             return _ShapeDecision(None, True)  # cold: seed the full window
         if code not in self._seeded(series, seed_floor):
             return _ShapeDecision(None, True)  # span shorter than the seed window → re-seed
-        if _sessions_between(date.fromisoformat(watermark), closed) > self._gap_sessions:
+        board = self._board_date(code)
+        ceiling = date.fromisoformat(board) if board is not None else closed
+        if _sessions_between(date.fromisoformat(watermark), ceiling) > self._gap_sessions:
             return _ShapeDecision(watermark, True)  # gap → incremental from the watermark
         return _ShapeDecision(watermark, False)  # warm: spot board serves the current bar
+
+    def _board_date(self, code: str) -> str | None:
+        """The board's session date (ISO) for ``code`` — the latest *settled* close it attests.
+
+        The spot board advances its session date only once a session has closed, so its date is the
+        last settled session: both the gap measure's holiday-aware ceiling (it does not move during
+        a closure) and the deep leg's settle cutoff (a K-line bar past it is the current, unsettled
+        session). ``None`` when the code is absent from the board, or its row carries no date — no
+        session reference to read.
+        """
+
+        row = self._spot_board.get(code)
+        return row.get("date") if row is not None else None
 
     def _settled(self, code: str, closed: date | None) -> bool:
         """Is the spot bar a settled session — its session ``date`` the expected closed session?
@@ -360,8 +420,7 @@ class LiveFeed:
 
         if closed is None:
             return False
-        row = self._spot_board.get(code)
-        return row is not None and row["date"] == closed.isoformat()
+        return self._board_date(code) == closed.isoformat()
 
     def _watermarks(self, series: str, as_of: str) -> dict[str, str]:
         """The settled watermark per code in ``series`` (:func:`ingest.base.settled_watermarks`).

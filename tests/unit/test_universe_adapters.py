@@ -8,6 +8,8 @@ in ``tests/unit/test_feed.py``.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from factor_scope.ingest import etf_scale, fund_universe
@@ -147,6 +149,21 @@ def test_board_row_normalises_the_akshare_spot_columns_to_domain_keys() -> None:
         "code": "561010", "date": "2026-06-15", "nav": 0.918, "turnover": 5.15,
         "amount": 800_000_000.0, "aum": 6_800_000_000.0, "shares": 4_000_000_000.0,
     }
+
+
+def test_board_row_degrades_a_missing_numeric_cell_to_nan_not_a_raise() -> None:
+    # The board is shared across every leg (universe, scale, current bar), so a row with a None
+    # numeric cell must not raise: float(None) would, killing the whole board build — every fund's
+    # universe/scale/current-bar leg, not just the bad row — counter to "invalid inputs degrade,
+    # never raise". A missing cell degrades to NaN, the same state a pandas-NaN cell already yields
+    # here, kept like any other absent reading rather than dropped.
+    raw = {
+        "代码": "561010", "数据日期": "2026-06-15 00:00:00", "最新价": None,
+        "换手率": None, "成交额": None, "总市值": None, "最新份额": None,
+    }
+    row = etf_scale._board_row(raw)
+    assert row["code"] == "561010" and row["date"] == "2026-06-15"  # identity + date still mapped
+    assert all(math.isnan(row[k]) for k in ("nav", "turnover", "amount", "aum", "shares"))
 
 
 def test_etf_scale_maps_the_domain_board_rows() -> None:

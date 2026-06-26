@@ -9,6 +9,7 @@ network. ``get_feed`` selects the cassettes offline and the live adapters online
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 import pytest
@@ -287,6 +288,25 @@ def test_cold_start_deep_pulls_one_kline_for_both_legs(monkeypatch) -> None:
     assert em.activity[0].payload == {"turnover": 4.0, "amount": 2.0}  # same call → activity
 
 
+def test_an_intraday_deep_pull_tags_the_unsettled_current_bar_provisional(monkeypatch) -> None:
+    # Off-nominal: a cold fund deep-pulled on an intraday (non-22:00) run. The K-line includes
+    # today's still-forming bar, but the board's session date is still yesterday's settled close —
+    # today has not settled. The deep path must tag the bar past the board's settled session
+    # provisional, exactly as the spot leg does: else it records a non-final bar as settled and
+    # advances the watermark past it, so tonight's post-close pull starts beyond the real close and
+    # never backfills it. Bars up to the settled session stay settled.
+    captured: dict = {}
+    settled_session = "2026-06-24"  # the board's last settled close; today (CLOSED) has not settled
+    _fake_kline(monkeypatch, bars=[_em_bar(settled_session), _em_bar(CLOSED)], captured=captured)
+    em = _live(_FakeStore([]), _board(on=settled_session))._em("561010", fetched_at=RUN_AT)
+    assert captured["calls"] == 1
+    settled = [r.as_of for r in em.nav if "provisional" not in r.payload]
+    provisional = [r.as_of for r in em.nav if r.payload.get("provisional")]
+    assert settled == [settled_session]  # the settled close is kept settled — it advances the floor
+    assert provisional == [CLOSED]  # the current bar past the board → provisional, floor skips it
+    assert [r.as_of for r in em.activity if r.payload.get("provisional")] == [CLOSED]  # both legs
+
+
 def test_short_span_re_seeds_via_a_deep_pull(monkeypatch) -> None:
     # History present and current, but none reaching back the seed window → cold, re-seeded
     # from the window floor (so the 200-day-MA gate isn't blind), not just incrementally topped up.
@@ -338,6 +358,23 @@ def test_a_recent_fund_within_the_gap_tolerance_stays_on_the_spot_board(monkeypa
     )
     assert captured.get("calls", 0) == 0
     assert em.nav and em.activity  # served from the board
+
+
+def test_a_holiday_cluster_keeps_a_warm_fund_on_the_spot_board(monkeypatch) -> None:
+    # During an A-share holiday cluster (Spring Festival / Golden Week) the wall clock runs several
+    # weekdays past the last trading session, but the spot board's session date does NOT advance —
+    # there are simply no new sessions. The gap measure must ride the board's session date, not the
+    # wall clock: else every warm fund reads as >gap_sessions behind and fires a per-fund push2his
+    # that returns nothing — the steady-state "~zero per-code calls" guarantee evaporating across
+    # the whole universe for every holiday night, the exact burst #106 removes.
+    captured: dict = {}
+    _forbid_kline(monkeypatch, captured)
+    last_session = "2026-02-13"  # the Friday before the week-long Spring Festival closure
+    holiday_run = "2026-02-20T22:00:00Z"  # the following Friday — 5 weekday-sessions of wall clock
+    feed = _live(_FakeStore(_warm("561010", latest=last_session)), _board(on=last_session))
+    em = feed._em("561010", fetched_at=holiday_run)
+    assert captured.get("calls", 0) == 0  # no deep pull despite a >gap_sessions wall-clock gap
+    assert em.nav == [] and em.activity == []  # board hasn't advanced past the watermark → no write
 
 
 def test_spot_bar_is_provisional_when_the_board_date_is_not_the_closed_session(monkeypatch) -> None:
@@ -431,3 +468,47 @@ def test_a_warm_fund_absent_from_the_board_degrades_to_no_reading(monkeypatch) -
     _forbid_kline(monkeypatch)
     em = _live(_FakeStore(_warm("561010")), {})._em("561010", fetched_at=RUN_AT)
     assert em.nav == [] and em.activity == []
+
+
+def test_sessions_between_counts_trading_weekdays_not_calendar_days() -> None:
+    # The gap measure gating spot-vs-deep must count Mon–Fri sessions, not calendar days: a fund
+    # stored Friday and checked Monday is ONE session behind (within the default tolerance, so it
+    # stays on the cheap board), not three — else the weekend alone would deep-pull every fund each
+    # Monday, the push2his burst the load-shape removes. (RUN_AT's 2026-06-25 is a Thursday.)
+    sessions_between = feed_mod._sessions_between
+    assert sessions_between(date(2026, 6, 26), date(2026, 6, 29)) == 1  # Fri → Mon: weekend skipped
+    assert sessions_between(date(2026, 6, 22), date(2026, 6, 23)) == 1  # Mon → Tue: one session
+    assert sessions_between(date(2026, 6, 19), date(2026, 6, 26)) == 5  # Fri → next Fri: a week
+    assert sessions_between(date(2026, 6, 25), date(2026, 6, 25)) == 0  # already current
+    assert sessions_between(date(2026, 6, 25), date(2026, 6, 24)) == 0  # skew: closed < latest
+
+
+def test_asymmetric_load_shape_floors_a_warm_leg_while_seeding_a_cold_one(monkeypatch) -> None:
+    # A fund can be warm on one leg and cold on the other (e.g. NAV history intact, activity history
+    # lost). The single shared K-line pull must floor EACH leg independently: the warm NAV leg keeps
+    # only bars past its watermark while the cold activity leg seeds the whole window — one fetch,
+    # two floors, no double-write on the warm leg and no dropped backfill on the cold one.
+    early = "2025-06-01"  # within the seed window, but older than the warm NAV watermark
+    captured: dict = {}
+    _fake_kline(monkeypatch, bars=[_em_bar(early), _em_bar(CLOSED)], captured=captured)
+    warm_nav_only = _hist(prices.SERIES, "561010", [SEEDED, "2026-06-24"])  # no activity history
+    em = _live(_FakeStore(warm_nav_only), _board())._em("561010", fetched_at=RUN_AT)
+    assert captured["calls"] == 1  # one shared pull feeds both legs despite their differing shapes
+    assert captured["beg"] == prices._em_start(RUN_AT, None)  # the cold (activity) leg's seed floor
+    assert [r.as_of for r in em.nav] == [CLOSED]  # warm NAV floored at its watermark — no re-write
+    assert [r.as_of for r in em.activity] == [early, CLOSED]  # cold activity seeded from the floor
+
+
+def test_a_feed_reused_across_run_stamps_fails_loudly_instead_of_returning_stale_reads(
+    monkeypatch,
+) -> None:
+    # The per-code K-line memo, the per-series settled-watermark map, and the per-series seeded set
+    # are keyed on code/series alone — correct only because one feed serves exactly one run at one
+    # stamp (the snapshot boundary). Reusing a feed across stamps would silently hand back the first
+    # run's readings/watermarks; binding the feed to its first stamp turns that latent staleness
+    # into a loud failure — even for an already-memoised code, the path that would go stale.
+    _forbid_kline(monkeypatch)
+    feed = _live(_FakeStore(_warm("561010")), _board())
+    feed._em("561010", fetched_at=RUN_AT)  # binds the feed to this run's stamp (memoising 561010)
+    with pytest.raises(RuntimeError, match="single-run"):
+        feed._em("561010", fetched_at="2026-06-26T22:00:00Z")  # a second run's stamp → loud failure

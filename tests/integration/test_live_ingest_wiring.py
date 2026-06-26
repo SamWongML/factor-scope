@@ -397,6 +397,72 @@ def test_gather_live_corroborates_prices_across_sources(monkeypatch) -> None:
     assert len(priced) == len(held)
 
 
+def test_gather_live_reconciles_the_warm_spot_bar_across_the_cohort(monkeypatch, tmp_path) -> None:
+    # AC4 on the WARM path: with seed-window history present, a fund's current bar comes off the
+    # shared spot board (no per-code push2his) yet is STILL reconciled against Baostock + Mootdx —
+    # the current-date cohort is {EastMoney-from-spot, baostock, mootdx}. Every other gather test
+    # runs store-less (always cold → the K-line leg); this one seeds a warm store, so the spot leg
+    # is the one that reconciles — the steady state the whole load-shape exists to reach.
+    from factor_scope.ingest import trading_activity
+    from factor_scope.store import DuckDBStore
+
+    _stub_adapters(monkeypatch)
+    # A live gather stamps the wall clock; pin it so the closed session is 2026-06-05 (matching the
+    # stubbed board date and the seeded watermark), keeping the warm/gap decision deterministic.
+    monkeypatch.setattr(
+        "factor_scope.markets.ashare.fetched_at_now", lambda: "2026-06-05T22:00:00Z"
+    )
+    pulled: list[str] = []
+    stub_kline = eastmoney.kline  # the in-stub client from _stub_adapters, not the network one
+
+    def tracking_kline(code, *, beg, impersonate="chrome"):
+        pulled.append(code)
+        return stub_kline(code, beg=beg, impersonate=impersonate)
+
+    monkeypatch.setattr(eastmoney, "kline", tracking_kline)
+    # Baostock + Mootdx corroborate the current session even past a watermark (they are watermarked
+    # too: a warm fund hands them yesterday's floor and they return today's bar) — so all three legs
+    # of the cohort meet on 2026-06-05, not just the spot one.
+    for source in (baostock, mootdx):
+        monkeypatch.setattr(
+            source,
+            "fetch_live",
+            lambda key, *, fetched_at, since=None: [
+                Reading(series="prices", key=key, as_of="2026-06-05", fetched_at=fetched_at,
+                        payload={"nav": 1.0})
+            ],
+        )
+    warm = ("561010", "588200")  # the on-exchange universe ETFs — always in the priced set
+    store = DuckDBStore(tmp_path / "store.duckdb")
+    try:
+        # Seed BOTH legs to the steady state for each warm ETF: a bar back at the seed floor + a
+        # current-1 settled bar, so _load_shape routes price *and* activity to the board (either leg
+        # cold would force the shared K-line pull). The book codes left cold still pull, as in prod.
+        seed: list[Reading] = []
+        for code in warm:
+            for series, payload in (
+                (prices.SERIES, {"nav": 1.0, "source": "akshare"}),
+                (trading_activity.SERIES, {"turnover": 1.0, "amount": 1.0}),
+            ):
+                seed += [
+                    Reading(series=series, key=code, as_of="2024-01-02",
+                            fetched_at="2024-01-02T22:00:00Z", payload=payload),
+                    Reading(series=series, key=code, as_of="2026-06-04",
+                            fetched_at="2026-06-04T22:00:00Z", payload=payload),
+                ]
+        store.append(seed)
+        readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05", store=store)
+    finally:
+        store.close()
+    priced = {r.key: r for r in readings if r.series == "prices"}
+    assert set(warm) <= priced.keys()  # both warm ETFs priced…
+    assert not set(warm) & set(pulled)  # …off the spot board — no per-code push2his for either
+    for code in warm:
+        assert priced[code].payload["nav"] == 1.0  # the spot bar, reconciled with the corroborators
+        assert priced[code].payload.get("source") == "akshare"  # spot leg canonical in a 3-way tie
+        assert "divergence" not in priced[code].payload  # all three agreed → no disagreement flag
+
+
 def test_gather_live_falls_back_to_baostock_when_eastmoney_is_down(monkeypatch, caplog) -> None:
     _stub_adapters(monkeypatch)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)  # don't really back off in the test
