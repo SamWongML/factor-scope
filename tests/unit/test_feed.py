@@ -286,6 +286,21 @@ def test_short_span_re_seeds_via_a_deep_pull(monkeypatch) -> None:
     assert captured["beg"] == prices._em_start(RUN_AT, None)  # seed floor (re-seed), not watermark
 
 
+def test_short_span_re_seed_keeps_the_early_history_it_backfills(monkeypatch) -> None:
+    # A re-seed pulls the full window precisely to extend the span back to the seed floor, so the
+    # early bars it returns (older than the current watermark) must be KEPT, not clipped at the
+    # watermark — clipping them would discard the backfill, leaving the span short and the fund
+    # accruing one bar a night (the slow path the seed window exists to avoid), gate still blind.
+    early = "2025-06-01"  # within the re-seed window, but older than the current watermark
+    _fake_kline(monkeypatch, bars=[_em_bar(early), _em_bar(CLOSED)])
+    short = _hist(prices.SERIES, "561010", ["2026-06-20", "2026-06-24"]) + _hist(
+        trading_activity.SERIES, "561010", ["2026-06-20", "2026-06-24"]
+    )
+    em = _live(_FakeStore(short), _board())._em("561010", fetched_at=RUN_AT)
+    assert early in [r.as_of for r in em.nav]  # the backfilled NAV bar survives the floor
+    assert early in [r.as_of for r in em.activity]  # and the same on the shared activity leg
+
+
 def test_gap_deep_pulls_incrementally_from_the_watermark(monkeypatch) -> None:
     # Seeded but the latest settled bar is weeks behind the closed session → a gap pull
     # backfilling from the watermark (day-after), not the seed window — recovery stays cheap.

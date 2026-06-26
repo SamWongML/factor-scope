@@ -229,14 +229,21 @@ class LiveFeed:
             if closed is not None
             else None
         )
-        price_start = self._deep_start(prices.SERIES, code, as_of, closed, seed_floor, fetched_at)
-        activity_start = self._deep_start(
-            trading_activity.SERIES, code, as_of, closed, seed_floor, fetched_at
+        price_since, price_deep = self._load_shape(prices.SERIES, code, as_of, closed, seed_floor)
+        activity_since, activity_deep = self._load_shape(
+            trading_activity.SERIES, code, as_of, closed, seed_floor
         )
-        price_floor = self._mapping_floor(prices.SERIES, code, as_of, fetched_at)
-        activity_floor = self._mapping_floor(trading_activity.SERIES, code, as_of, fetched_at)
-        if price_start is not None or activity_start is not None:
-            beg = min(s for s in (price_start, activity_start) if s is not None)
+        # The K-line ``beg`` and the client-side floor both derive from the same per-leg ``since``,
+        # so the window requested is the window kept — a re-seed backfills its early bars instead of
+        # clipping them at the recent watermark.
+        price_floor = prices._floor(fetched_at, price_since)
+        activity_floor = prices._floor(fetched_at, activity_since)
+        if price_deep or activity_deep:
+            beg = min(
+                prices._em_start(fetched_at, since)
+                for since, deep in ((price_since, price_deep), (activity_since, activity_deep))
+                if deep
+            )
             result = self._deep(
                 code,
                 beg=beg,
@@ -312,37 +319,31 @@ class LiveFeed:
             )
             return []
 
-    def _deep_start(
-        self,
-        series: str,
-        code: str,
-        as_of: str,
-        closed: date | None,
-        seed_floor: str | None,
-        fetched_at: str,
-    ) -> str | None:
-        """The K-line ``beg`` this series needs, or ``None`` if the current bar reads off the board.
+    def _load_shape(
+        self, series: str, code: str, as_of: str, closed: date | None, seed_floor: str | None
+    ) -> tuple[str | None, bool]:
+        """This series' load decision for ``code``: the ``since`` floor, and whether to deep-pull.
+
+        ``since`` is the watermark bars must clear — the K-line ``beg`` and the client-side floor
+        both derive from it, so the window requested is the window kept (``None`` (re)seeds the full
+        window; a date pulls/keeps strictly past it). ``deep`` is whether a per-code K-line pull is
+        needed; when False the spot board serves the current bar, floored at ``since`` so an already
+        held session isn't rewritten.
 
         Cold (no store, no real run date, no settled history, or a span that doesn't reach the seed
-        window) seeds from the ~650-day floor; a gap (> ``gap_sessions`` behind the closed session)
-        pulls incrementally from the watermark; otherwise the spot board serves the current session.
+        window) (re)seeds from the ~650-day floor; a gap (> ``gap_sessions`` behind the closed
+        session) pulls incrementally from the watermark; otherwise the spot board serves the current
+        session.
         """
 
         watermark = self._watermarks(series, as_of).get(code)
         if self._store is None or closed is None or seed_floor is None or watermark is None:
-            return prices._em_start(fetched_at, None)  # cold: seed the full window
+            return None, True  # cold: seed the full window
         if code not in self._seeded(series, seed_floor):
-            return prices._em_start(fetched_at, None)  # span shorter than the seed window → re-seed
+            return None, True  # span shorter than the seed window → re-seed from the floor
         if _sessions_between(date.fromisoformat(watermark), closed) > self._gap_sessions:
-            return prices._em_start(fetched_at, watermark)  # gap → incremental from the watermark
-        return None  # warm: the spot board supplies the current bar
-
-    def _mapping_floor(
-        self, series: str, code: str, as_of: str, fetched_at: str
-    ) -> str | None:
-        """The client-side floor bars must clear: the watermark, else the seed window (cold)."""
-
-        return prices._floor(fetched_at, self._watermarks(series, as_of).get(code))
+            return watermark, True  # gap → incremental from the watermark
+        return watermark, False  # warm: the spot board supplies the current bar
 
     def _settled(self, code: str, closed: date | None) -> bool:
         """Is the spot bar a settled session — its session ``date`` the expected closed session?
