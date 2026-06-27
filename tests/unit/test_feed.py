@@ -629,3 +629,21 @@ def test_cold_start_converges_over_multiple_runs(monkeypatch) -> None:
     for code in universe:
         feed._em(code, fetched_at=RUN_AT)
     assert final_pull == []  # converged — steady state makes zero per-code history calls
+
+
+def test_a_blocked_kline_host_does_not_spend_the_deep_pull_budget(monkeypatch, caplog) -> None:
+    # When the K-line breaker is already open no push2his pull is possible regardless of the cap, so
+    # a deep-wanting code must NOT spend the per-run budget on a call it cannot make: the budget
+    # stays reserved for codes the host can serve, and the cap-deferral log stays a cap signal —
+    # not the host outage, which the run-level health alarm reports separately.
+    _forbid_kline(monkeypatch)  # the breaker is open → the host must not be hit at all
+    monkeypatch.setattr("factor_scope.ingest.prices.sina", lambda code, *, fetched_at, floor: [])
+    breaker = _HostBreaker(threshold=1)
+    breaker.record_failure(EASTMONEY_KLINE)  # tripped open before the run
+    monkeypatch.setattr(feed_mod, "host_breaker", breaker)
+    feed = _live(_FakeStore([]), _board_multi(["A", "B", "C"]), cap=1)
+    for code in ("A", "B", "C"):  # three cold codes, all blocked by the open breaker
+        feed._em(code, fetched_at=RUN_AT)
+    with caplog.at_level(logging.WARNING, logger="factor_scope.ingest.feed"):
+        feed.log_backfill_deferral()
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]  # the cap never bound

@@ -143,15 +143,19 @@ def _tiered_fetch_codes(
     uncrowded probation candidates are kept — so discovery never goes blind to a small-but-improving
     fund. The split is the stream order the store-aware feed self-caps against: the book (the
     breaker's required set) and the core tier are seeded before the probation tail when the per-run
-    deep-pull cap binds. Each tier is sorted for a deterministic, reproducible stream order.
+    deep-pull cap binds — a held code the screen never saw (off-exchange, or not yet listed) joins
+    core too, so the required set seeds first even from outside the screen. Each tier is sorted for
+    a deterministic, reproducible stream order.
     """
 
     scale = {r.key: r.payload for r in readings if r.series == etf_scale.SERIES}
     core: list[str] = []
     probation: list[str] = []
+    on_exchange: set[str] = set()
     for r in readings:
         if r.series != fund_universe.SERIES or not r.payload.get("on_exchange"):
             continue
+        on_exchange.add(r.key)
         row = scale.get(r.key, {})
         tier = fund_universe.classify_tier(
             aum=row.get("aum"),
@@ -162,6 +166,10 @@ def _tiered_fetch_codes(
         if tier == "dead":
             continue
         (core if r.key in book or tier == "core" else probation).append(r.key)
+    # A held code the on-exchange screen never saw — off-exchange, or not yet on the universe board
+    # — is still the breaker's required set, so it joins the core priority rather than leaving its
+    # deep pull to the alphabetical price loop after probation has already spent the per-run budget.
+    core.extend(book - on_exchange)
     return sorted(core), sorted(probation)
 
 
@@ -173,10 +181,11 @@ def _fetch_codes_by_priority(readings: list[Reading], as_of: str, book: set[str]
 
 
 def _fetch_universe_codes(readings: list[Reading], as_of: str) -> set[str]:
-    """The on-exchange codes that earn the per-fund + deep-price fetch — all but the dead tier.
+    """The on-exchange screen membership — the non-dead, on-exchange codes that earn the fetch.
 
-    The membership set behind the tier-priority stream (:func:`_tiered_fetch_codes`); the book split
-    doesn't change *which* codes are fetched (only their order), so the set is independent of it.
+    Passes the empty book to :func:`_tiered_fetch_codes` to get the pure tier screen: a held code
+    the screen missed is front-loaded onto the priority *stream* (so it seeds first), but it reaches
+    pricing through the ``book`` union at the call site, so this membership stays the screen alone.
     """
 
     core, probation = _tiered_fetch_codes(readings, as_of, book=set())

@@ -74,7 +74,8 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
         ]
 
     def fake_valuation(code, *, fetched_at, since=None):
-        seen[fundamentals.SERIES].append(since)
+        if code == _FUND:  # record the watermark for the tracked fund only (held funds also pull)
+            seen[fundamentals.SERIES].append(since)
         return [
             Reading(series=fundamentals.SERIES, key=code, as_of=d, fetched_at=fetched_at,
                     payload={"pe": 42.5})
@@ -82,7 +83,8 @@ def _stub_adapters(monkeypatch) -> dict[str, list[str | None]]:
         ]
 
     def fake_holdings(fund, *, fetched_at, since=None):
-        seen[fund_holdings.SERIES].append(since)
+        if fund == _FUND:  # record the watermark for the tracked fund only (held funds also pull)
+            seen[fund_holdings.SERIES].append(since)
         return [
             Reading(series=fund_holdings.SERIES, key=f"{fund}/X", as_of=q, fetched_at=fetched_at,
                     payload={"fund": fund, "holding": "X", "weight": 0.1})
@@ -151,12 +153,14 @@ def test_second_ingest_pulls_only_newer_bars(monkeypatch, tmp_path) -> None:
     )
     paths = {"store_path": tmp_path / "store.duckdb", "graph_path": tmp_path / "graph.duckdb"}
 
-    # Night one: the store is empty, so every series is pulled from scratch (no watermark).
+    # Night one: the store is empty, so every series is pulled from scratch (no watermark). Counts
+    # span all three held funds (positions.csv) — the tracked 561010 plus 515880/588200, which are
+    # held but outside this run's universe read, so they stream with core priority and pull too.
     nightly_ingest(Config(source="live", as_of="2026-06-30", **paths))
     assert _counts(paths["store_path"]) == {
-        trading_activity.SERIES: 2,  # 06-29, 06-30
-        fundamentals.SERIES: 2,  # 06-29, 06-30
-        fund_holdings.SERIES: 2,  # 2026-03-31, 2026-06-30
+        trading_activity.SERIES: 6,  # 06-29, 06-30 × 3 held funds
+        fundamentals.SERIES: 6,  # 06-29, 06-30 × 3
+        fund_holdings.SERIES: 6,  # 2026-03-31, 2026-06-30 × 3
     }
     assert seen[fundamentals.SERIES] == [None]  # holdings/valuation still pass incremental since
     assert seen[fund_holdings.SERIES] == [None]
@@ -175,9 +179,9 @@ def test_second_ingest_pulls_only_newer_bars(monkeypatch, tmp_path) -> None:
         prices._em_start("2026-09-30T22:00:00Z", None),
     ]
     assert _counts(paths["store_path"]) == {
-        trading_activity.SERIES: 4,  # + 09-29, 09-30 (the gap is backfilled, not just last night)
-        fundamentals.SERIES: 4,  # + 09-29, 09-30
-        fund_holdings.SERIES: 3,  # + the new 2026-09-30 quarter only
+        trading_activity.SERIES: 12,  # + 09-29, 09-30 × 3 (the gap is backfilled, not just last)
+        fundamentals.SERIES: 12,  # + 09-29, 09-30 × 3
+        fund_holdings.SERIES: 9,  # + the new 2026-09-30 quarter only, × 3
     }
 
     store = DuckDBStore(paths["store_path"])

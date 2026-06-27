@@ -295,7 +295,14 @@ class LiveFeed:
         # clipping them at the watermark. ``since`` None floors at the seed window, else past it.
         price_floor = price.since if price.since is not None else seed_floor
         activity_floor = activity.since if activity.since is not None else seed_floor
-        if (price.deep or activity.deep) and self._grant_deep_pull():
+        # A deep pull runs when the host is reachable and the per-run budget grants it. When the
+        # K-line breaker is already open no push2his pull is possible, so spend no budget on a call
+        # that can't be made — the code still enters ``_deep`` for its Sina/spot fallback. The cap
+        # therefore bounds real pulls only, and its deferral log stays a signal about the cap, not
+        # the host outage (which :func:`ingest._check_eastmoney_health` reports separately).
+        if (price.deep or activity.deep) and (
+            host_breaker.is_open(EASTMONEY_KLINE) or self._grant_deep_pull()
+        ):
             beg = min(
                 prices._em_start(fetched_at, shape.since)
                 for shape in (price, activity)
@@ -335,7 +342,8 @@ class LiveFeed:
     def _grant_deep_pull(self) -> bool:
         """Spend one unit of the per-run deep-pull budget, or defer when it is exhausted.
 
-        Called only once a code's load-shape wants a deep pull. The cap bounds per-run ``push2his``
+        Called once a code's load-shape wants a deep pull and the K-line host is reachable (an open
+        breaker can make no pull, so it spends no budget). The cap bounds per-run ``push2his``
         history calls — the defense-in-depth guarantee that holds even if impersonation fails: codes
         arrive in tier priority (book/core before probation), so the budget seeds the most important
         funds first. A code that wants a deep pull after the budget is spent is **deferred** — it

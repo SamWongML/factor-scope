@@ -214,6 +214,22 @@ def test_fetch_codes_stream_book_and_core_before_probation() -> None:
     assert set(ordered) == _fetch_universe_codes(readings, AS_OF)
 
 
+def test_a_held_code_off_the_on_exchange_screen_still_streams_with_core_priority() -> None:
+    # A held fund the on-exchange screen never saw — off-exchange, or not yet on the universe board
+    # — is still the breaker's required set. It must stream with book/core priority so the per-run
+    # cap seeds it before the probation tail, not leave its deep pull to the price loop.
+    readings = [
+        _univ("CORE1"), _scale("CORE1", aum=68.0, amount=3.0),  # core
+        _univ("PROB1"), _scale("PROB1", aum=3.0, amount=1.0),  # probation
+        # OFFBOOK is held but trades off-exchange; MISSING is held but absent from the universe.
+        _univ("OFFBOOK", on_exchange=False), _scale("OFFBOOK", aum=68.0, amount=3.0),
+    ]
+    ordered = _fetch_codes_by_priority(readings, AS_OF, book={"OFFBOOK", "MISSING"})
+    assert "OFFBOOK" in ordered and "MISSING" in ordered  # neither held code is dropped
+    assert ordered.index("OFFBOOK") < ordered.index("PROB1")  # off-exchange held before probation
+    assert ordered.index("MISSING") < ordered.index("PROB1")  # universe-absent held too
+
+
 class _RecordingFeed:
     """A feed recording the order its per-fund (activity) leg is streamed — the deep-pull order."""
 
@@ -249,10 +265,13 @@ class _RecordingFeed:
 def test_universe_gather_streams_core_before_probation() -> None:
     # The market hands codes to the feed in tier priority: even with probation listed first in the
     # universe read, the per-fund loop seeds the core fund before the probation one — so the feed's
-    # greedy self-cap spends its budget on core first.
+    # greedy self-cap spends its budget on core first. The held book (the breaker's required set,
+    # from positions.csv) leads the stream; the probation tail is seeded last.
     feed = _RecordingFeed(
         universe=[_univ("PROB1"), _univ("CORE1")],  # probation deliberately first in feed order
         scale=[_scale("PROB1", aum=3.0, amount=1.0), _scale("CORE1", aum=68.0, amount=3.0)],
     )
     AShareUniverse().gather(Config(), as_of=AS_OF, fetched_at=FETCHED_AT, feed=feed, store=None)
-    assert feed.activity_order == ["CORE1", "PROB1"]  # core seeded first, regardless of feed order
+    order = feed.activity_order
+    assert order.index("CORE1") < order.index("PROB1")  # core before probation, feed order aside
+    assert order[-1] == "PROB1"  # the probation tail is seeded last, after the book and core
