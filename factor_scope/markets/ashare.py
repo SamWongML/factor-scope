@@ -76,7 +76,7 @@ class AShareUniverse:
         feed: Feed,
         store: PointInTimeStore | None = None,
         deadline: IngestDeadline | None = None,
-    ) -> list[Reading]:
+    ) -> tuple[list[Reading], list[str]]:
         readings: list[Reading] = list(
             positions.load_fixture(
                 config.fixtures_dir / positions.FIXTURE, as_of=as_of, fetched_at=fetched_at
@@ -128,29 +128,29 @@ class AShareUniverse:
                 fetched_at=fetched_at,
                 since=valuation_floor.get(code),
             )
-        return readings
+        # Hand the tier-priority stream back so the price leg reuses this one tier pass for its
+        # fetch set (``book`` ∪ these codes) rather than re-screening the whole universe.
+        return readings, ordered
 
 
-def _tiered_fetch_codes(
-    readings: list[Reading], as_of: str, book: set[str]
-) -> tuple[list[str], list[str]]:
-    """``(book∪core, probation)`` on-exchange codes earning the per-fund fetch — dead tier excluded.
+def _fetch_codes_by_priority(readings: list[Reading], as_of: str, book: set[str]) -> list[str]:
+    """The fetch codes streamed book/core first, then probation — the tier-priority stream order.
 
     The tier is a pure function of the cheap spot-board fields (AUM + traded value, both on the
     once-per-run ``etf_scale`` board) plus the fund's inception, so the whole universe is screened
     with no per-fund call: a seasoned, sub-floor, untraded zombie is dropped from the fetch set
     (still recorded in the universe/scale reads, just not deep-fetched), while core *and* the
     uncrowded probation candidates are kept — so discovery never goes blind to a small-but-improving
-    fund. The split is the stream order the store-aware feed self-caps against: the book (the
-    breaker's required set) and the core tier are seeded before the probation tail when the per-run
-    deep-pull cap binds — a held code the screen never saw (off-exchange, or not yet listed) joins
-    core too, so the required set seeds first even from outside the screen. Each tier is sorted for
-    a deterministic, reproducible stream order.
+    fund. The book (the breaker's required set) and the core tier stream before the probation tail,
+    so the store-aware feed seeds the most important funds first when the per-run deep-pull cap
+    binds; a held code the screen never saw (off-exchange, or not yet listed) joins core too, so the
+    required set seeds first even from outside the screen. Each tier is sorted and deduped for a
+    deterministic, reproducible stream order — a code disclosed twice earns one fetch, not two.
     """
 
     scale = {r.key: r.payload for r in readings if r.series == etf_scale.SERIES}
-    core: list[str] = []
-    probation: list[str] = []
+    core: set[str] = set()
+    probation: set[str] = set()
     on_exchange: set[str] = set()
     for r in readings:
         if r.series != fund_universe.SERIES or not r.payload.get("on_exchange"):
@@ -165,31 +165,9 @@ def _tiered_fetch_codes(
         )
         if tier == "dead":
             continue
-        (core if r.key in book or tier == "core" else probation).append(r.key)
-    # A held code the on-exchange screen never saw — off-exchange, or not yet on the universe board
-    # — is still the breaker's required set, so it joins the core priority rather than leaving its
-    # deep pull to the alphabetical price loop after probation has already spent the per-run budget.
-    core.extend(book - on_exchange)
-    return sorted(core), sorted(probation)
-
-
-def _fetch_codes_by_priority(readings: list[Reading], as_of: str, book: set[str]) -> list[str]:
-    """The fetch codes ordered book/core first, then probation — the tier-priority stream order."""
-
-    core, probation = _tiered_fetch_codes(readings, as_of, book)
-    return core + probation
-
-
-def _fetch_universe_codes(readings: list[Reading], as_of: str) -> set[str]:
-    """The on-exchange screen membership — the non-dead, on-exchange codes that earn the fetch.
-
-    Passes the empty book to :func:`_tiered_fetch_codes` to get the pure tier screen: a held code
-    the screen missed is front-loaded onto the priority *stream* (so it seeds first), but it reaches
-    pricing through the ``book`` union at the call site, so this membership stays the screen alone.
-    """
-
-    core, probation = _tiered_fetch_codes(readings, as_of, book=set())
-    return set(core) | set(probation)
+        (core if r.key in book or tier == "core" else probation).add(r.key)
+    core |= book - on_exchange  # a held code the screen never saw still seeds with core priority
+    return sorted(core) + sorted(probation - core)
 
 
 def _series_watermarks(store: PointInTimeStore | None, series: str, as_of: str) -> dict[str, str]:
@@ -445,15 +423,16 @@ class AShareMarket:
         # One store-aware feed for the whole run, threaded through both legs: it fetches the shared
         # spot board once and carries the store for the per-code load-shape decision.
         feed = get_feed(config, store)
-        readings = AShareUniverse().gather(
+        readings, ordered = AShareUniverse().gather(
             config, as_of=as_of, fetched_at=fetched_at, feed=feed, store=store, deadline=deadline
         )
         # Price the held book *and* the fetched (non-dead) universe: the funnel reasons over
         # candidate funds' NAVs (the trend gate, the launch-at-peak run-up, the return-correlation
         # mapping), not just the held codes — but a dead-tier zombie earns no deep-price pull, so
-        # push2his burst shrinks with the per-fund loop. The book is the breaker's required set.
+        # push2his burst shrinks with the per-fund loop. The book is the breaker's required set;
+        # ``ordered`` is the universe leg's tier screen, reused here so it runs once per run.
         book = [r.key for r in readings if r.series == positions.SERIES]
-        codes = sorted(set(book) | _fetch_universe_codes(readings, as_of))
+        codes = sorted(set(book) | set(ordered))
         readings += ASharePrices().gather(
             config,
             codes,

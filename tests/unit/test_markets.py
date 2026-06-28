@@ -14,11 +14,7 @@ from factor_scope.config import Config
 from factor_scope.contract import ListName
 from factor_scope.ingest.feed import Feed
 from factor_scope.markets import ComposedMarket, get_market
-from factor_scope.markets.ashare import (
-    AShareUniverse,
-    _fetch_codes_by_priority,
-    _fetch_universe_codes,
-)
+from factor_scope.markets.ashare import AShareUniverse, _fetch_codes_by_priority
 from factor_scope.pipeline import build_dashboard
 from factor_scope.store import PointInTimeStore, Reading
 
@@ -210,8 +206,6 @@ def test_fetch_codes_stream_book_and_core_before_probation() -> None:
     ordered = _fetch_codes_by_priority(readings, AS_OF, book={"BOOK1"})
     assert ordered == ["BOOK1", "CORE1", "CORE2", "PROB1"]  # book∪core (sorted), then probation
     assert "DEAD1" not in ordered and "OFF1" not in ordered  # the dead/off-exchange earn no fetch
-    # Membership is exactly the non-dead on-exchange tier screen — priority adds only the ordering.
-    assert set(ordered) == _fetch_universe_codes(readings, AS_OF)
 
 
 def test_a_held_code_off_the_on_exchange_screen_still_streams_with_core_priority() -> None:
@@ -275,3 +269,15 @@ def test_universe_gather_streams_core_before_probation() -> None:
     order = feed.activity_order
     assert order.index("CORE1") < order.index("PROB1")  # core before probation, feed order aside
     assert order[-1] == "PROB1"  # the probation tail is seeded last, after the book and core
+
+
+def test_a_duplicate_universe_row_is_fetched_once() -> None:
+    # A code disclosed twice in one universe read (a re-fetch reaching the same as_of) earns one
+    # per-fund fetch, not two: the tier-priority stream dedups, so its holdings/activity/valuation
+    # legs — and its slice of the per-run deep-pull budget — are spent once, not doubled.
+    feed = _RecordingFeed(
+        universe=[_univ("DUP1"), _univ("DUP1")],  # the same code disclosed twice in one read
+        scale=[_scale("DUP1", aum=68.0, amount=3.0)],
+    )
+    AShareUniverse().gather(Config(), as_of=AS_OF, fetched_at=FETCHED_AT, feed=feed, store=None)
+    assert feed.activity_order.count("DUP1") == 1  # streamed once despite the duplicate row
