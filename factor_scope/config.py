@@ -170,6 +170,16 @@ class Config:
     # tolerates a small hole; lower it to 1 to backfill every missed session, raise it to defer more
     # to the cheap board. A fund more than this far behind (or never seeded) takes a deep pull.
     eastmoney_gap_sessions: int = 2
+    # The per-run cap on deep EastMoney K-line (push2his) history pulls — the load-shape's
+    # defense-in-depth bound, independent of impersonation. Cold-start seeding and gap-fill are
+    # limited to this many per-code pulls per run, so a first-ever cold start or a long-outage
+    # recovery never fires a fresh push2his burst: the universe seeds over roughly
+    # ⌈universe / cap⌉ nights and steady state is one batch board call plus at most this many
+    # per-code calls. Codes streamed past the budget (in tier priority, so book/core seed first)
+    # fall to the fresh spot bar and their seeding defers to a later night (reported in the run
+    # log). Raise it to seed faster, lower it to stay more conservatively under the throttle.
+    # Live-only — the offline cassette path ignores it.
+    eastmoney_deep_pull_cap: int = 80
     # An overall wall-clock budget (seconds) for one live ingest gather — the run-level backstop
     # above the per-read deadline, so no single wedged source (e.g. a silent TDX server on the
     # Mootdx leg) can stall a nightly run indefinitely. Once exceeded, the per-fund/per-code loops

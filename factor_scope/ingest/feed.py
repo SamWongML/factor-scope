@@ -147,6 +147,8 @@ class Feed(Protocol):
         self, code: str, *, fetched_at: str, since: str | None = None
     ) -> list[list[Reading]]: ...
 
+    def log_backfill_deferral(self) -> None: ...
+
 
 class LiveFeed:
     """The online edge — the network adapters, each lazily importing its heavy dependency.
@@ -170,11 +172,15 @@ class LiveFeed:
         *,
         impersonate: str = "chrome",
         gap_sessions: int = 2,
+        cap: int = 80,
     ) -> None:
         self._store = store
         self._pace_seconds = pace_seconds
         self._impersonate = impersonate
         self._gap_sessions = gap_sessions
+        self._cap = cap
+        self._budget = cap  # the per-run deep-pull budget, spent greedily as cold/gap codes arrive
+        self._deferred = 0  # cold/gap codes routed to the board because the budget was exhausted
         self._spot: dict[str, Any] | None = None
         self._em_cache: dict[str, _EmReadings] = {}
         self._watermark_cache: dict[str, dict[str, str]] = {}
@@ -269,7 +275,10 @@ class LiveFeed:
         a span that doesn't reach back the seed window) or **gapped** (more than ``gap_sessions``
         sessions behind the closed session) takes one ``push2his`` K-line pull that seeds/backfills
         both legs; every other code reads its current bar off the shared spot board — so steady
-        state makes ~zero per-code history calls. Memoised per code so the universe (activity) and
+        state makes ~zero per-code history calls. The deep pulls are **capped per run**
+        (:meth:`_grant_deep_pull`): codes arrive in tier priority and the budget is spent greedily,
+        so once it is exhausted the remaining cold/gap codes fall to the board too — bounding the
+        per-run history burst even on a cold start. Memoised per code so the universe (activity) and
         price loops share the single fetch.
         """
 
@@ -286,7 +295,14 @@ class LiveFeed:
         # clipping them at the watermark. ``since`` None floors at the seed window, else past it.
         price_floor = price.since if price.since is not None else seed_floor
         activity_floor = activity.since if activity.since is not None else seed_floor
-        if price.deep or activity.deep:
+        # A deep pull runs when the host is reachable and the per-run budget grants it. When the
+        # K-line breaker is already open no push2his pull is possible, so spend no budget on a call
+        # that can't be made — the code still enters ``_deep`` for its Sina/spot fallback. The cap
+        # therefore bounds real pulls only, and its deferral log stays a signal about the cap, not
+        # the host outage (which :func:`ingest._check_eastmoney_health` reports separately).
+        if (price.deep or activity.deep) and (
+            host_breaker.is_open(EASTMONEY_KLINE) or self._grant_deep_pull()
+        ):
             beg = min(
                 prices._em_start(fetched_at, shape.since)
                 for shape in (price, activity)
@@ -300,6 +316,9 @@ class LiveFeed:
                 act_floor=activity_floor,
             )
         else:
+            # Warm (the board serves the current session), or a cold/gap code deferred because the
+            # per-run deep-pull budget is spent — either way the current bar comes off the board,
+            # floored per leg, and (when deferred) its seeding resumes a later night.
             settled = self._settled(code, closed)
             result = _EmReadings(
                 nav=prices.spot_reading(
@@ -319,6 +338,43 @@ class LiveFeed:
             )
         self._em_cache[code] = result
         return result
+
+    def _grant_deep_pull(self) -> bool:
+        """Spend one unit of the per-run deep-pull budget, or defer when it is exhausted.
+
+        Called once a code's load-shape wants a deep pull and the K-line host is reachable (an open
+        breaker can make no pull, so it spends no budget). The cap bounds per-run ``push2his``
+        history calls — the defense-in-depth guarantee that holds even if impersonation fails: codes
+        arrive in tier priority (book/core before probation), so the budget seeds the most important
+        funds first. A code that wants a deep pull after the budget is spent is **deferred** — it
+        falls to the fresh spot bar and its K-line seeding resumes a later night — and counted for
+        the run-end deferral report (:meth:`log_backfill_deferral`).
+        """
+
+        if self._budget > 0:
+            self._budget -= 1
+            return True
+        self._deferred += 1
+        return False
+
+    def log_backfill_deferral(self) -> None:
+        """Surface one run-level line when the deep-pull cap deferred cold-start/gap seeding.
+
+        Called once at run end (by the market gather). When the per-run cap bound, the cold-start or
+        gap codes streamed past the budget fell to the fresh spot bar and their K-line seeding is
+        deferred to a later night; this reports that count so the operator can see cold start and
+        outage recovery progressing across nights — nothing is silently dropped. Silent when nothing
+        was deferred (the steady-state common case), so the line stays a real signal, not noise.
+        """
+
+        if self._deferred:
+            logger.warning(
+                "ingest: EastMoney deep-pull cap (%d) reached — %d cold-start/gap fund(s) deferred "
+                "to the spot board this run; their K-line seeding resumes a later night (the "
+                "universe converges over multiple runs, nothing dropped)",
+                self._cap,
+                self._deferred,
+            )
 
     def _deep(
         self, code: str, *, beg: str, fetched_at: str, nav_floor: str | None, act_floor: str | None
@@ -570,6 +626,9 @@ class CassetteFeed:
             for source in (prices.SOURCE, baostock.SOURCE, mootdx.SOURCE)
         ]
 
+    def log_backfill_deferral(self) -> None:
+        """No-op offline: the cassette replays recorded bars with no cap or deep-pull deferral."""
+
 
 def get_feed(config: Config, store: PointInTimeStore | None) -> Feed:
     """The online network adapters by default; the committed recordings in the offline test mode.
@@ -584,5 +643,6 @@ def get_feed(config: Config, store: PointInTimeStore | None) -> Feed:
             pace_seconds=config.live_pacing_seconds,
             impersonate=config.eastmoney_impersonate,
             gap_sessions=config.eastmoney_gap_sessions,
+            cap=config.eastmoney_deep_pull_cap,
         )
     return CassetteFeed(config.fixtures_dir / "cassettes")

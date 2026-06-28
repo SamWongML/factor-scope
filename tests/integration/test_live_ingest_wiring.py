@@ -34,7 +34,8 @@ from factor_scope.store import Reading
 pytestmark = pytest.mark.integration
 
 # A small live universe stand-in: two on-exchange ETFs (whose holdings the graph needs) + one
-# off-exchange fund (no holdings refresh). The held positions fixture is priced independently.
+# off-exchange fund (no holdings refresh). A held position outside this universe (515880, in
+# positions.csv) is still refreshed — the breaker's required set streams with the core priority.
 _UNIVERSE = (("561010", True), ("588200", True), ("000001", False))
 
 
@@ -199,16 +200,18 @@ def test_gather_live_refreshes_holdings_for_each_on_exchange_etf(monkeypatch) ->
     readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
 
     on_exchange = {code for code, on_exchange in _UNIVERSE if on_exchange}
+    # The per-fund legs cover the on-exchange universe ETFs plus the held book: 515880 is held (in
+    # positions.csv) but outside this run's universe read, so it is refreshed too — the breaker's
+    # required set is never left to the priced-only path. (000001 is off-exchange → no holdings.)
+    fetched = on_exchange | {"515880"}
     refreshed = {r.payload["fund"] for r in readings if r.series == "fund_holdings"}
-    # one live holdings refresh per on-exchange ETF (the off-exchange fund discloses none) — so the
-    # graph rebuilds from the universe's live disclosures, not just the held book.
-    assert refreshed == on_exchange
-    # the crowding surface (turnover + traded value) is pulled for the same on-exchange ETFs
+    assert refreshed == fetched
+    # the crowding surface (turnover + traded value) is pulled for the same funds
     activity = {r.key for r in readings if r.series == "trading_activity"}
-    assert activity == on_exchange
-    # …as is each ETF's valuation history (the valuation factor's PE surface)
+    assert activity == fetched
+    # …as is each fund's valuation history (the valuation factor's PE surface)
     valued = {r.key for r in readings if r.series == "fundamentals"}
-    assert valued == on_exchange
+    assert valued == fetched
     # and the book-wide end-demand dial is pulled once for the whole run
     assert [r for r in readings if r.series == "demand"]
 
@@ -281,7 +284,9 @@ def test_gather_live_trims_dead_funds_but_fetches_core_and_probation(monkeypatch
     readings = AShareMarket().gather(Config(source="live"), as_of="2026-06-05")
 
     activity = {r.key for r in readings if r.series == "trading_activity"}
-    assert activity == {"561010", "159001"}  # the dead 159002 trimmed; discovery candidates kept
+    # the dead 159002 is trimmed; the discovery candidates plus the held book (515880/588200, in
+    # positions.csv but outside this run's universe read) all earn their per-fund legs.
+    assert activity == {"561010", "159001", "515880", "588200"}
     priced = {r.key for r in readings if r.series == "prices"}
     assert "159002" not in priced  # nor does the zombie pay the deep-price (push2his) pull
     assert {"561010", "159001"} <= priced
