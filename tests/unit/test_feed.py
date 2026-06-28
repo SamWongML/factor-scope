@@ -547,6 +547,17 @@ def test_the_deep_pull_cap_bounds_per_run_kline_calls(monkeypatch) -> None:
     assert pulled == ["A", "B"]  # the budget binds at 2; the third cold code makes no history call
 
 
+def test_a_zero_cap_defers_every_cold_code(monkeypatch) -> None:
+    # The cap's lower boundary: cap=0 reserves no deep-pull budget, so the very first cold code is
+    # deferred and not a single push2his call is made — the ``_budget > 0`` grant has no fencepost
+    # slack that would let one pull leak through before a zero cap binds.
+    pulled = _recording_kline(monkeypatch, bars=[_em_bar(CLOSED)])
+    feed = _live(_FakeStore([]), _board_multi(["A", "B"]), cap=0)
+    for code in ("A", "B"):
+        feed._em(code, fetched_at=RUN_AT)
+    assert pulled == []  # zero budget → zero deep pulls, from the first code on
+
+
 def test_codes_over_the_cap_fall_to_the_fresh_spot_bar(monkeypatch) -> None:
     # The over-cap cold code is not dropped: it still gets a fresh current bar off the board,
     # settled at the post-close run (advancing the watermark) — only its deep seeding is deferred.
@@ -556,6 +567,7 @@ def test_codes_over_the_cap_fall_to_the_fresh_spot_bar(monkeypatch) -> None:
     feed._em("B", fetched_at=RUN_AT)  # exhaust the budget
     over = feed._em("C", fetched_at=RUN_AT)
     assert [r.as_of for r in over.nav] == [CLOSED]  # served from the spot board, current session
+    assert [r.as_of for r in over.activity] == [CLOSED]  # the shared activity leg, same session
     assert over.nav[0].payload["nav"] == 0.918 and over.activity[0].payload["turnover"] == 5.0
     assert all("provisional" not in r.payload for r in over.nav + over.activity)  # settled-on-close
 
@@ -591,7 +603,9 @@ def test_the_deferred_count_is_logged_at_run_end(monkeypatch, caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="factor_scope.ingest.feed"):
         feed.log_backfill_deferral()
     warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warned) == 1 and "3" in warned[0]  # cap 1 over a 4-cold universe → 3 deferred
+    # Anchor the count to its slot — a bare "3" would also match the cap value if the format args
+    # were transposed; "3 cold-start/gap" pins it to the deferred-count position in the message.
+    assert len(warned) == 1 and "3 cold-start/gap fund(s) deferred" in warned[0]  # 4 cold, cap 1
 
 
 def test_no_deferral_is_logged_when_the_cap_is_not_hit(monkeypatch, caplog) -> None:
