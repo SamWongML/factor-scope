@@ -134,6 +134,50 @@ def test_fund_holdings_first_year_is_the_watermark_year_else_the_run_year() -> N
     assert fund_holdings._first_year("2026-06-30", "2026-09-30T22:00:00Z") == 2026
 
 
+def test_fund_holdings_maps_the_quarter_label_to_an_iso_quarter_end() -> None:
+    # AkShare's 季度 column is a report-period *label* ("2026年1季度股票投资明细"), not a date. The
+    # store keys point-in-time on ``as_of`` and the graph windows are ISO dates, so the label must
+    # become the quarter-END date — Q1 → 03-31 — never land in ``as_of`` raw.
+    rows = [{"季度": "2026年1季度股票投资明细", "股票名称": "中际旭创", "占净值比例": 9.4}]
+    [reading] = fund_holdings.from_portfolio("561010", rows, fetched_at="t")
+    assert reading.as_of == "2026-03-31"  # Q1 label → quarter-end ISO date
+    assert reading.payload["holding"] == "中际旭创"
+    assert reading.payload["weight"] == pytest.approx(0.094)  # 9.4% → 0.094
+    assert reading.payload["fund"] == "561010"
+
+
+def test_fund_holdings_each_quarter_maps_to_its_quarter_end() -> None:
+    rows = [
+        {"季度": "2026年1季度股票投资明细", "股票名称": "S", "占净值比例": 1.0},
+        {"季度": "2026年2季度股票投资明细", "股票名称": "S", "占净值比例": 1.0},
+        {"季度": "2026年3季度股票投资明细", "股票名称": "S", "占净值比例": 1.0},
+        {"季度": "2026年4季度股票投资明细", "股票名称": "S", "占净值比例": 1.0},
+    ]
+    assert [r.as_of for r in fund_holdings.from_portfolio("F", rows, fetched_at="t")] == [
+        "2026-03-31", "2026-06-30", "2026-09-30", "2026-12-31",
+    ]
+
+
+def test_fund_holdings_drops_quarters_at_or_before_the_watermark() -> None:
+    # The incremental re-pull compares quarter-END dates against the ISO watermark — so a quarter at
+    # or before what is already stored is dropped and only a newly disclosed one is appended.
+    rows = [
+        {"季度": "2026年1季度股票投资明细", "股票名称": "S", "占净值比例": 1.0},
+        {"季度": "2026年2季度股票投资明细", "股票名称": "S", "占净值比例": 1.0},
+    ]
+    out = fund_holdings.from_portfolio("F", rows, fetched_at="t", floor="2026-03-31")
+    assert [r.as_of for r in out] == ["2026-06-30"]  # Q1 == floor dropped; Q2 kept
+
+
+def test_fund_holdings_unparseable_quarter_label_raises() -> None:
+    # A label that is not a recognised report period is a schema drift — raise (the leg degrades per
+    # fund) rather than poison the point-in-time store with a non-date ``as_of``.
+    with pytest.raises(IngestError, match="quarter label"):
+        fund_holdings.from_portfolio(
+            "F", [{"季度": "n/a", "股票名称": "S", "占净值比例": 1.0}], fetched_at="t"
+        )
+
+
 def test_fred_keys_by_series_id() -> None:
     readings = fred.parse("series_id,as_of,value\nDGS10,2026-06-04,4.21\n", fetched_at="x")
     assert readings[0].key == "DGS10"

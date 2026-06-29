@@ -8,13 +8,16 @@ A-share fixture gather still produces every series the artifact reads (no behavi
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from factor_scope.config import Config
 from factor_scope.contract import ListName
+from factor_scope.ingest import IngestDeadline
 from factor_scope.ingest.feed import Feed
 from factor_scope.markets import ComposedMarket, get_market
-from factor_scope.markets.ashare import AShareUniverse, _fetch_codes_by_priority
+from factor_scope.markets.ashare import ASharePrices, AShareUniverse, _fetch_codes_by_priority
 from factor_scope.pipeline import build_dashboard
 from factor_scope.store import PointInTimeStore, Reading
 
@@ -281,3 +284,52 @@ def test_a_duplicate_universe_row_is_fetched_once() -> None:
     )
     AShareUniverse().gather(Config(), as_of=AS_OF, fetched_at=FETCHED_AT, feed=feed, store=None)
     assert feed.activity_order.count("DUP1") == 1  # streamed once despite the duplicate row
+
+
+class _PricingFeed:
+    """A price feed that corroborates each code with one bar, recording the price-pull order."""
+
+    def __init__(self) -> None:
+        self.price_order: list[str] = []
+
+    def price_sources(
+        self, code: str, *, fetched_at: str, since: str | None = None
+    ) -> list[list[Reading]]:
+        self.price_order.append(code)  # the price-pull entry point — record the stream order
+        bar = Reading(
+            series="prices",
+            key=code,
+            as_of=AS_OF,
+            fetched_at=fetched_at,
+            payload={"nav": 1.5, "source": "akshare"},
+        )
+        return [[bar], [], []]
+
+
+def _counting_clock() -> Callable[[], float]:
+    """A clock that ticks one unit per read — drives a deadline that trips after N codes."""
+
+    ticks = iter(range(10_000))
+    return lambda: float(next(ticks))
+
+
+def test_price_leg_prices_the_book_before_the_universe_tail_under_a_deadline() -> None:
+    # The breaker's required set (the held book) must be priced first, so a deadline that truncates
+    # the price loop can't starve a held code that merely sorts last. The codes mirror the real
+    # trap: the Shanghai book code (5xxxxx) sorts after the whole Shenzhen 159xxx universe block,
+    # yet pricing it is the dashboard's core job — it must be reached before the universe tail.
+    feed = _PricingFeed()
+    deadline = IngestDeadline(2.5, clock=_counting_clock())  # trips after the 2nd code is priced
+    readings = ASharePrices().gather(
+        Config(),
+        ["159001", "159002", "561010"],
+        as_of=AS_OF,
+        fetched_at=FETCHED_AT,
+        feed=feed,
+        required=["561010"],
+        store=None,
+        deadline=deadline,
+    )
+    priced = {r.key for r in readings if r.series == "prices"}
+    assert "561010" in priced  # the held book code is reached, not starved by the deadline
+    assert feed.price_order[0] == "561010"  # required priced before the numeric-first universe tail
