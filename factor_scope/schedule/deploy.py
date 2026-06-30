@@ -9,7 +9,7 @@ Mac-mini production path; cron is the Linux alternative.
 from __future__ import annotations
 
 import plistlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,10 @@ DEFAULT_LABEL = "com.factor-scope.nightly"
 DEFAULT_PROGRAM = ("factor-scope", "nightly")
 # Theme discovery is its own, lighter-cadence job (weekly by convention); the same renderers run it.
 DISCOVER_PROGRAM = ("factor-scope", "discover")
+# The morning resume fires after the provider's rolling usage window has reset (~5h past a 22:00
+# nightly) yet before the open, so the items deferred overnight are argued in time to be scored.
+DEFAULT_RESUME_HOUR = 5
+DEFAULT_RESUME_MINUTE = 30
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,24 @@ class ScheduleSpec:
     working_directory: Path = field(default_factory=Path.cwd)
     stdout_path: Path = Path("out/nightly.out.log")
     stderr_path: Path = Path("out/nightly.err.log")
+
+
+def resume_spec(
+    spec: ScheduleSpec,
+    *,
+    hour: int = DEFAULT_RESUME_HOUR,
+    minute: int = DEFAULT_RESUME_MINUTE,
+) -> ScheduleSpec:
+    """The nightly's morning companion: re-run the same job once the usage window has reset.
+
+    A plain re-run *resumes* — ingest is skipped for an already-built night and the decided items
+    are served from the durable debate cache, so only the items deferred overnight (a provider quota
+    exhaustion or a budget cap) are argued and committed, before they would be scored. It shares
+    the nightly's program; only the label (suffixed so both install side by side) and the fire time
+    differ. When nothing is pending the re-run is a quick no-op.
+    """
+
+    return replace(spec, label=f"{spec.label}.resume", hour=hour, minute=minute)
 
 
 def render_cron_line(spec: ScheduleSpec) -> str:

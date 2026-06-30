@@ -7,7 +7,14 @@ produced simply read as "—".
 
 from __future__ import annotations
 
-from factor_scope.contract import Band, Dashboard, DashboardItem, ListName, Scorecard
+from factor_scope.contract import (
+    Band,
+    Dashboard,
+    DashboardItem,
+    DigestStatus,
+    ListName,
+    Scorecard,
+)
 
 _LIST_TITLES = {
     ListName.HOLDINGS: "HOLDINGS  (hold · trim · exit?)",
@@ -43,8 +50,13 @@ def _connections_line(item: DashboardItem) -> str | None:
 
 
 def _item_line(item: DashboardItem) -> str:
-    lean = item.lean.text if item.lean else "—"
-    conf = f"{item.lean.confidence:.2f}" if item.lean else "—"
+    deferred = item.digest_status is DigestStatus.DEFERRED
+    # A deferred item never reached the seats (provider quota / budget): show it as pending, not as
+    # its placeholder abstain lean, so the review surface can't read a non-decision as a no-bet.
+    lean = "Deferred — pending (provider capacity); resumes next run" if deferred else (
+        item.lean.text if item.lean else "—"
+    )
+    conf = "—" if deferred or not item.lean else f"{item.lean.confidence:.2f}"
     gain = f"{item.gain:+.1%}" if item.gain is not None else "—"
     gate = item.gate.value
     flag = " ⚠connections" if item.connections_flag else ""

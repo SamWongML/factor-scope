@@ -13,7 +13,12 @@ import pytest
 from typer.testing import CliRunner
 
 from factor_scope.cli import app
-from factor_scope.schedule import ScheduleSpec, render_cron_line, render_launchd_plist
+from factor_scope.schedule import (
+    ScheduleSpec,
+    render_cron_line,
+    render_launchd_plist,
+    resume_spec,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -117,3 +122,27 @@ def test_schedule_can_target_the_discover_job() -> None:
 def test_schedule_rejects_an_unknown_job() -> None:
     result = runner.invoke(app, ["schedule", "--job", "weekly"])
     assert result.exit_code != 0
+
+
+def test_resume_spec_re_runs_the_nightly_at_a_distinct_label_and_time() -> None:
+    # The morning companion to the nightly: a plain re-run that argues and commits the items
+    # deferred overnight (the provider's usage window having reset). It shares the nightly's
+    # program — a re-run resumes, ingest is skipped and the decided items are cache-served — but a
+    # distinct label installs it alongside the nightly, and it fires after the reset, pre-open.
+    resume = resume_spec(_spec(hour=22, minute=0), hour=5, minute=30)
+    assert resume.label == "com.factor-scope.nightly.resume"
+    assert (resume.hour, resume.minute) == (5, 30)
+    assert resume.program_arguments == ("factor-scope", "nightly")
+    assert render_cron_line(resume).startswith("30 5 * * *")
+    assert plistlib.loads(render_launchd_plist(resume).encode())["Label"].endswith(".resume")
+
+
+def test_schedule_command_can_emit_the_resume_slot() -> None:
+    result = runner.invoke(app, ["schedule", "--job", "resume", "--hour", "5", "--minute", "30"])
+    assert result.exit_code == 0, result.output
+    parsed = plistlib.loads(result.stdout.encode("utf-8"))
+    assert parsed["Label"].endswith(".resume")
+    assert parsed["StartCalendarInterval"] == {"Hour": 5, "Minute": 30}
+    program = parsed["ProgramArguments"]
+    assert Path(program[0]).is_absolute() and Path(program[0]).name == "factor-scope"
+    assert program[1] == "nightly"  # the resume is a plain nightly re-run

@@ -416,7 +416,8 @@ def schedule(
     ),
     job: str = typer.Option(
         "nightly",
-        help="Which job to schedule: nightly (the run) | discover (the weekly theme service).",
+        help="Which job to schedule: nightly (the run) | resume (the morning re-run that argues "
+        "items deferred overnight once the window resets) | discover (the weekly theme service).",
     ),
     label: str = typer.Option(
         "com.factor-scope.nightly", help="launchd job label (reverse-DNS)."
@@ -451,14 +452,16 @@ def schedule(
         ScheduleSpec,
         render_cron_line,
         render_launchd_plist,
+        resume_spec,
     )
 
-    if job == "nightly":
+    # The resume is the nightly program at a distinct label/time — its spec is derived below.
+    if job in {"nightly", "resume"}:
         program = DEFAULT_PROGRAM
     elif job == "discover":
         program = DISCOVER_PROGRAM
     else:
-        raise typer.BadParameter(f"unknown --job {job!r}; use 'nightly' or 'discover'")
+        raise typer.BadParameter(f"unknown --job {job!r}; use 'nightly', 'resume' or 'discover'")
 
     # launchd and cron run with a minimal PATH from a different cwd, so bake in the absolute path to
     # the executable (which() can resolve relative against a relative PATH entry — resolve it).
@@ -479,6 +482,8 @@ def schedule(
         stdout_path=stdout_path,
         stderr_path=stderr_path,
     )
+    if job == "resume":
+        spec = resume_spec(spec, hour=hour, minute=minute)
     if kind == "cron":
         text = render_cron_line(spec)
     elif kind == "launchd":

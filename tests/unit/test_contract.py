@@ -11,6 +11,7 @@ from factor_scope.contract import (
     DashboardIndex,
     DashboardIndexEntry,
     DashboardItem,
+    DigestStatus,
     FactorState,
     GateState,
     Lean,
@@ -33,6 +34,7 @@ def test_minimal_item_is_valid() -> None:
     assert item.evidence == []
     assert item.lean is None
     assert item.gate is GateState.UNKNOWN
+    assert item.digest_status is DigestStatus.DECIDED  # decided unless explicitly deferred
 
 
 def test_factor_state_band_and_validity() -> None:
@@ -119,7 +121,7 @@ def test_dashboard_roundtrips_through_json() -> None:
         snapshot_id="snap-abc123",
         items=[DashboardItem(item="通信ETF", list=ListName.WATCHLIST)],
     )
-    assert dash.schema_version == 2  # the frozen per-product-index contract surface
+    assert dash.schema_version == 3  # bumped for the per-item digest_status (decided | deferred)
     blob = dash.model_dump_json()
     restored = Dashboard.model_validate_json(blob)
     assert restored == dash
@@ -169,3 +171,5 @@ def test_json_schema_exports() -> None:
     # The per-product bull/bear index is part of the artifact contract.
     assert "BullBearIndex" in schema["$defs"]
     assert "index" in schema["$defs"]["DashboardItem"]["properties"]
+    # The decided/deferred status distinguishes a real call from a not-yet-processed (quota) item.
+    assert "digest_status" in schema["$defs"]["DashboardItem"]["properties"]

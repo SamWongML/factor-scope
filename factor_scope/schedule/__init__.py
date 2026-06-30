@@ -21,6 +21,7 @@ from factor_scope.schedule.deploy import (
     ScheduleSpec,
     render_cron_line,
     render_launchd_plist,
+    resume_spec,
 )
 from factor_scope.schedule.runlog import (
     DigestFailure,
@@ -38,5 +39,6 @@ __all__ = [
     "append_run_log",
     "render_cron_line",
     "render_launchd_plist",
+    "resume_spec",
     "summarize_run",
 ]

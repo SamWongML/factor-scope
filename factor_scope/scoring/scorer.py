@@ -95,6 +95,21 @@ def _forward_return(
     return exit_.as_of, exit_nav / entry_nav - 1.0
 
 
+def window_open(store: PointInTimeStore, code: str, as_of: str) -> bool:
+    """True once a price dated after ``as_of`` exists for ``code`` — the forward-return window has
+    opened, so the call's outcome is starting to become knowable.
+
+    The seal on committing a *new* call: a directional lean dated ``as_of`` is falsifiable only
+    while its forward return is not yet observable, so it may be committed only before this line. A
+    genuine call made within the window is already immutable; only a stale re-run (the store now
+    holding prices past ``as_of``) reaches here, and back-filling a call once the move is knowable
+    would be hindsight. In a forward-moving nightly the store never holds a price past the run date,
+    so this is ``False`` in normal operation and bites only the stale back-fill.
+    """
+
+    return any(r.as_of > as_of for r in store.history("prices", code))
+
+
 def score_call(
     call: Call, store: PointInTimeStore, run_as_of: str, *, flat_band: float = FLAT_BAND
 ) -> ScoredCall | None:

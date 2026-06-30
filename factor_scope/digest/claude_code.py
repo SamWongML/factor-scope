@@ -23,15 +23,29 @@ module) never shells out and the fake-only CI path stays offline.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from factor_scope.contract import LeanAction
 from factor_scope.cost import Usage
-from factor_scope.digest.provider import Case, DigestInput, Proposal, Side
+from factor_scope.digest.provider import Case, DigestInput, Proposal, QuotaExhausted, Side
 
 # The seat system prompts live in the committed agent definitions, never inline here — one source of
 # truth, so the prompts actually used and the committed agents can't drift apart.
 _AGENTS_DIR = Path(__file__).resolve().parents[2] / ".claude" / "agents"
+
+# A usage-quota exhaustion surfaces as a non-zero exit whose message names the spent usage window —
+# e.g. "Claude usage limit reached", "5-hour limit reached", "rate limit". Exit codes do NOT
+# distinguish quota from a crash, so it is detected from the message (loosely — the exact wording is
+# CLI-version-specific — but specifically enough not to fire on an ordinary crash). The reset hint,
+# when present ("resets 3am (UTC)"), is captured best-effort for the ops run log only.
+_QUOTA_SIGNAL = re.compile(r"usage limit|rate limit|limit reached|quota|too many requests", re.I)
+_RESET_HINT = re.compile(r"reset[s]?\b[^\n.]*", re.I)
+
+
+def _quota_reset_hint(text: str) -> str | None:
+    match = _RESET_HINT.search(text)
+    return match.group(0).strip() if match else None
 
 
 def _load_seat_prompt(name: str) -> str:
@@ -120,13 +134,25 @@ class ClaudeCodeProvider:
         return parsed
 
     def _invoke(self, cmd: list[str]) -> str:
-        """Shell out to the headless ``claude`` CLI, returning stdout. Lazy; never run offline."""
+        """Shell out to the headless ``claude`` CLI, returning stdout. Lazy; never run offline.
+
+        A usage-quota exhaustion (the rolling usage window is spent) is raised as
+        :class:`QuotaExhausted` so the caller defers the item and circuit-breaks the run rather than
+        retrying into a window that won't reset for hours. Any other non-zero exit propagates as the
+        ``CalledProcessError`` it is, degrading that one item to an ordinary abstain-with-error.
+        """
 
         import subprocess
 
-        completed = subprocess.run(  # noqa: S603 - user-selected provider
-            cmd, capture_output=True, text=True, timeout=self._timeout_s, check=True
-        )
+        try:
+            completed = subprocess.run(  # noqa: S603 - user-selected provider
+                cmd, capture_output=True, text=True, timeout=self._timeout_s, check=True
+            )
+        except subprocess.CalledProcessError as exc:
+            blob = f"{exc.stderr or ''}\n{exc.stdout or ''}"
+            if _QUOTA_SIGNAL.search(blob):
+                raise QuotaExhausted(_quota_reset_hint(blob)) from exc
+            raise
         return completed.stdout
 
 
