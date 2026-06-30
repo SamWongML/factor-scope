@@ -22,6 +22,7 @@ from factor_scope.scoring.scorer import (
     lean_direction,
     score_call,
     score_calls,
+    window_open,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "read_calls",
     "score_call",
     "score_calls",
+    "window_open",
 ]

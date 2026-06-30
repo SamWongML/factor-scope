@@ -27,7 +27,13 @@ from typing import Protocol
 from factor_scope.contract import Band, GateState, LeanAction, ListName
 from factor_scope.cost import BudgetGuard
 from factor_scope.digest.fake import FLAT_EPS
-from factor_scope.digest.provider import Case, DigestInput, LLMProvider, Proposal
+from factor_scope.digest.provider import (
+    Case,
+    DigestInput,
+    LLMProvider,
+    Proposal,
+    QuotaExhausted,
+)
 from factor_scope.scoring.scorecard import confidence_nudge, dampen_for_weak_pattern
 
 MIN_VALID_STATES = 2  # below this we are too blind to call
@@ -98,6 +104,10 @@ class DigestResult:
     invalidation: str | None
     state_pattern: tuple[str, ...]
     error: str | None = None
+    # Set when the item degraded because the provider's usage window is spent (not a one-off
+    # crash). The pipeline reads it to circuit-break the rest of the run — the remaining items defer
+    # without each paying a doomed seat call — and to mark the item deferred, not abstained.
+    quota_deferred: bool = False
     # The debate decomposition behind the lean — the two case strengths, the position-bias residual
     # the swap-and-average removed, and the synthesis seat's rubric. The pipeline reads these into
     # the artifact's per-product index; defaults cover the no-debate (blind/error) abstains.
@@ -364,6 +374,7 @@ def _abstain(
     tokens: tuple[str, ...],
     *,
     error: str | None = None,
+    quota_deferred: bool = False,
     bull_strength: float = 0.0,
     bear_strength: float = 0.0,
     order_residual: float = 0.0,
@@ -379,6 +390,8 @@ def _abstain(
         order_residual=order_residual,
         rubric=rubric,
     )
+    if quota_deferred:
+        result = replace(result, quota_deferred=True)
     return result if error is None else replace(result, error=error)
 
 
@@ -530,6 +543,11 @@ def digest_item(
         spent_before = len(provider.usage) if spend is not None else 0
         try:
             debate = _run_debate(provider, brief)
+        except QuotaExhausted as exc:
+            # The provider's usage window is spent — a deferred non-decision, not a one-off crash.
+            # Flag it so the pipeline circuit-breaks the run and marks the item deferred.
+            _charge_fresh(spend, provider, spent_before)
+            return _abstain(brief, tokens, error=_quota_error(exc), quota_deferred=True)
         except Exception as exc:  # noqa: BLE001 - any seat failure degrades; never abort the run
             _charge_fresh(spend, provider, spent_before)
             return _abstain(brief, tokens, error=f"{type(exc).__name__}: {exc}")
@@ -545,6 +563,29 @@ def _charge_fresh(spend: BudgetGuard | None, provider: LLMProvider, spent_before
 
     if spend is not None:
         spend.charge(sum(u.cost_usd for u in provider.usage[spent_before:]))
+
+
+def _quota_error(exc: QuotaExhausted) -> str:
+    """The ops-log message for a quota defer, carrying the reset hint when the provider gave one."""
+
+    return f"quota exhausted ({exc.reset_at})" if exc.reset_at else "quota exhausted"
+
+
+def deferred_for_quota(brief: DigestInput, *, reset_at: str | None = None) -> DigestResult:
+    """A quota-deferred non-decision for an item the run never reached — no provider call.
+
+    Once one item hits the usage-quota wall, the rest of the run is circuit-broken: each remaining
+    item gets this result instead of a doomed seat call. It is an abstain-with-error flagged
+    ``quota_deferred``, so the pipeline leaves it uncommitted (pending for the resume) and marks it
+    deferred — not abstained — in the artifact.
+    """
+
+    return _abstain(
+        brief,
+        state_tokens(brief),
+        error=_quota_error(QuotaExhausted(reset_at)),
+        quota_deferred=True,
+    )
 
 
 __all__ = [

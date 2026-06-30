@@ -126,3 +126,33 @@ def test_claude_code_failure_modes_degrade_to_abstain(
 
     assert result.action is LeanAction.ABSTAIN
     assert result.error is not None and error_kind in result.error
+    assert result.quota_deferred is False  # an ordinary crash is not a quota exhaustion
+
+
+def test_a_plan_quota_exhaustion_is_flagged_quota_deferred(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The provider's rolling usage window is spent: `claude -p` exits non-zero with a usage-limit
+    # message. Exit codes don't distinguish quota from a crash, so it's detected from the message
+    # and flagged quota_deferred — the item is a deferred non-decision (degraded, error-carrying),
+    # and the caller will circuit-break the rest of the run rather than retry into a closed window.
+    err = subprocess.CalledProcessError(
+        1, ["claude"], stderr="Claude usage limit reached · resets 3am (UTC)"
+    )
+    monkeypatch.setattr(subprocess, "run", _raises(err))
+
+    result = digest_item(ClaudeCodeProvider(), _seeing_brief())
+
+    assert result.action is LeanAction.ABSTAIN
+    assert result.quota_deferred is True
+    assert result.error is not None and "quota" in result.error.lower()
+
+
+def test_a_generic_nonzero_exit_is_not_misread_as_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A crash with no usage-limit signal must NOT be misclassified as a quota exhaustion: it stays
+    # an ordinary degrade (no circuit breaker), so one flaky call never silently defers the run.
+    err = subprocess.CalledProcessError(1, ["claude"], stderr="panic: segmentation fault")
+    monkeypatch.setattr(subprocess, "run", _raises(err))
+
+    result = digest_item(ClaudeCodeProvider(), _seeing_brief())
+
+    assert result.quota_deferred is False
+    assert result.error is not None and "CalledProcessError" in result.error

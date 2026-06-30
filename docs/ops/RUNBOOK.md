@@ -260,6 +260,30 @@ one consistent night). Run the Mac-mini in the market's timezone (Asia/Shanghai)
 matches the trading day; the 22:00 fire time is already local. Pass `--as-of YYYY-MM-DD` only to
 backfill a specific night.
 
+### The morning resume (quota-deferred items)
+
+The judgment seats run on a subscription plan whose usage allowance refills on a rolling ~5-hour
+window. If the nightly spends it before every item is argued, the unfinished items are **deferred**,
+not guessed: each is left **uncommitted** (no call-of-record) and marked `digest_status: deferred`
+in the artifact — a *pending* state, never read as an abstain (a real "no bet"). Holdings are argued
+first, so a cut falls on watchlist/emerging, and once the allowance is spent the run **circuit-breaks**
+the rest (no doomed seat calls into a closed window) and finishes on a partial-but-valid artifact.
+
+Install the **resume** companion to finish them once the window resets, before the open:
+
+```bash
+factor-scope schedule --job resume --hour 5 --minute 30 --working-dir "$PWD" \
+  -o ~/Library/LaunchAgents/com.factor-scope.nightly.resume.plist
+launchctl load ~/Library/LaunchAgents/com.factor-scope.nightly.resume.plist
+```
+
+The resume is a plain nightly re-run for the same night: ingest is skipped and the already-decided
+items are served from the durable debate cache, so only the deferred items are argued and committed
+— in time to be scored at the open. It is idempotent: a re-run with nothing pending is a quick no-op,
+and a committed call is never rewritten (a held item's call stays immutable). The resume is sealed to
+the scoring window — once a forward price exists for a night, no new call is committed for it, so a
+late or stale re-run can never back-fill a hindsight-dated call.
+
 ### Fund lifecycle dates on live data
 
 No AkShare feed announces fund lifecycle events, so the two dates the guardrails read are sourced
@@ -293,9 +317,11 @@ run's rollup (see *The run log*).
 
 Set a monthly ceiling with `Config.monthly_budget_usd` (default `None` = unlimited). The guard reads
 the ledger's **month-to-date** (the calendar month of the run's `as_of`, across *all* jobs) and, once
-the running total is crossed, **gracefully throttles**: the nightly's lower-priority items degrade to
-abstain-with-error `"monthly budget exhausted"` (holdings → watchlist → emerging order) and discovery
-stops assessing further themes. The run completes on a **partial-but-valid** artifact and the record
+the running total is crossed, **gracefully throttles**: the nightly's lower-priority items defer
+(holdings → watchlist → emerging order) and discovery stops assessing further themes. A budget-capped
+item is treated exactly like a quota-deferred one — left **uncommitted** (no call-of-record) and
+marked `digest_status: deferred` rather than recorded as a "no bet", so an unspent decision never
+pollutes the self-scoring record. The run completes on a **partial-but-valid** artifact and the record
 sets `budget_exhausted: true` — the cap lives outside the model, exactly like the trend gate.
 
 ## Morning review

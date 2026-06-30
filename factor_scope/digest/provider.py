@@ -28,6 +28,20 @@ from factor_scope.contract import (
 from factor_scope.cost import Usage
 
 
+class QuotaExhausted(RuntimeError):
+    """The provider's usage window is spent — seats will fail for hours until it resets.
+
+    Distinct from a transient crash: a short retry into a closed rolling window is wasted, so the
+    orchestrator degrades this item to a deferred non-decision and the pipeline circuit-breaks the
+    rest of the run, leaving the unfinished items uncommitted for a later resume. ``reset_at`` is a
+    best-effort, human-readable reset hint for the ops run log (often absent), never the artifact.
+    """
+
+    def __init__(self, reset_at: str | None = None) -> None:
+        super().__init__("provider usage quota exhausted")
+        self.reset_at = reset_at
+
+
 class Side(StrEnum):
     """The two seats of the debate (argue both sides, isolated)."""
 

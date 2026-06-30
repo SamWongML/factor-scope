@@ -27,6 +27,7 @@ from factor_scope.contract import (
     Connection,
     Dashboard,
     DashboardItem,
+    DigestStatus,
     Evidence,
     GateState,
     Lean,
@@ -46,6 +47,7 @@ from factor_scope.digest import (
     Debate,
     DigestInput,
     SeatBudget,
+    deferred_for_quota,
     digest_item,
     digest_key,
     get_provider,
@@ -85,7 +87,14 @@ from factor_scope.ingest.fund_universe import delisting_disclosures, still_liste
 from factor_scope.markets import Market, get_market
 from factor_scope.markets.ashare import preflight_live_credentials
 from factor_scope.schedule import DigestFailure, RunRecord, append_run_log, summarize_run
-from factor_scope.scoring import Call, build_scorecard, log_call, read_calls, score_calls
+from factor_scope.scoring import (
+    Call,
+    build_scorecard,
+    log_call,
+    read_calls,
+    score_calls,
+    window_open,
+)
 from factor_scope.store import DuckDBStore, PointInTimeStore, Reading
 from factor_scope.store.replica import publish_replica
 
@@ -488,8 +497,11 @@ def _attach_leans(
     # Idempotent on a durable store: never log a second call for a code already called tonight, so
     # re-running the same night can't double-count in next run's score (the store is append-only).
     logged_tonight = {c.call_id for c in read_calls(store, as_of) if c.as_of == as_of}
-    # Debate in priority order so a budget cut falls on the least-important names; the artifact's
-    # item order is unchanged (each item is enriched in place), only *which* items argue is ranked.
+    # Debate in priority order so a budget cut — or the usage-quota wall — falls on the
+    # least-important names; the artifact's item order is unchanged (each item is enriched in
+    # place), only *which* items argue (and which defer) is ranked. Once the usage window is spent,
+    # the breaker opens: the rest defer without each paying a doomed seat call into a closed window.
+    quota_broken = False
     for code, item in sorted(pairs, key=lambda p: _LIST_PRIORITY[p[1].list_name]):
         brief = DigestInput(
             code=code,
@@ -506,7 +518,11 @@ def _attach_leans(
             as_of=as_of,
             near_misses=near_misses.get(code, ()),
         )
-        result = digest_item(provider, brief, cache=cache, budget=budget, spend=spend)
+        if quota_broken:
+            result = deferred_for_quota(brief)
+        else:
+            result = digest_item(provider, brief, cache=cache, budget=budget, spend=spend)
+            quota_broken = result.quota_deferred
         item.lean = Lean(action=result.action, confidence=result.confidence, text=result.text)
         item.evolution = result.evolution
         item.flip_trigger = result.flip_trigger
@@ -518,10 +534,31 @@ def _attach_leans(
             order_residual=result.order_residual,
             rubric=[RubricScore(criterion=c, score=s) for c, s in result.rubric],
         )
-        if result.error is not None and digest_failures is not None:
-            digest_failures.append(DigestFailure(code=code, error=result.error))
+        # A non-decision (the seat never ran) is DEFERRED, not a no-bet: the lean above is a
+        # placeholder for display, but the status keeps a consumer from reading it as a real call.
+        item.digest_status = (
+            DigestStatus.DEFERRED if result.error is not None else DigestStatus.DECIDED
+        )
+        if result.error is not None:
+            # A non-decision: a seat failure (missing/timed-out/quota-exhausted ``claude``) or a
+            # budget cap degraded this item to abstain-with-error — the model never judged it. The
+            # display already degraded above, so the run completes on a sparser artifact; but commit
+            # *no* call-of-record, because the self-scoring loop grades only calls the model
+            # genuinely made. The item stays uncommitted (a "deferred"/pending non-decision) and a
+            # later run on the identical brief commits the real call as the first write through the
+            # per-night idempotency below.
+            if digest_failures is not None:
+                digest_failures.append(DigestFailure(code=code, error=result.error))
+            continue
         call_id = f"{code}:{as_of}"
         if call_id in logged_tonight:
+            continue
+        if window_open(store, code, as_of):
+            # The forward-return window for this night has already opened (a price dated after
+            # ``as_of`` exists), so committing a new call now would be a hindsight-dated back-fill.
+            # A genuine call made within the window is already logged (the idempotent check above);
+            # only a stale ``--as-of <past>`` re-run, whose store has moved on, reaches here — and
+            # it must not write a call whose outcome is becoming knowable. The artifact rebuilds.
             continue
         log_call(
             store,

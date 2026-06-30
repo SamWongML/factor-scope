@@ -55,6 +55,19 @@ class LeanAction(StrEnum):
     ABSTAIN = "abstain"  # too blind to call — abstain rather than guess
 
 
+class DigestStatus(StrEnum):
+    """Whether the model actually judged this item — the decided-vs-pending distinction.
+
+    A ``deferred`` item is **not** a no-bet: the seat never ran (a provider quota exhaustion or a
+    budget cap), so it carries no falsifiable call and is pending a resume. Keeping it distinct from
+    an ``abstain`` (a real, model-made "no bet") stops a consumer reading a not-yet-processed
+    item as a decision — the silent-omission trap.
+    """
+
+    DECIDED = "decided"  # the model judged it; its lean is a real (possibly abstain) call-of-record
+    DEFERRED = "deferred"  # the seat never ran (quota/budget) — uncommitted, pending the resume
+
+
 class FactorState(BaseModel):
     """A single descriptive factor *state* — never a fitted score."""
 
@@ -174,12 +187,15 @@ class DashboardItem(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     gate: GateState = GateState.UNKNOWN
     index: BullBearIndex | None = None  # the per-product debate decomposition (set once leaned)
+    # Whether the model judged this item (decided) or the seat never ran (deferred — a quota/budget
+    # non-decision, pending a resume). A deferred item's ``lean`` is a placeholder, not a call.
+    digest_status: DigestStatus = DigestStatus.DECIDED
 
 
 class Dashboard(BaseModel):
     """The dated morning artifact: one run → one dashboard.json."""
 
-    schema_version: int = 2  # v2 adds the per-product bull/bear index; the contract is now frozen
+    schema_version: int = 3  # bumped for the per-item digest_status (decided | deferred)
     as_of: str  # the as-of date the engine reasoned on (point-in-time)
     generated_at: str  # when this artifact was produced
     snapshot_id: str  # fingerprint of the frozen store state this run read (see store.snapshot_id)
@@ -267,6 +283,7 @@ __all__ = [
     "DashboardIndex",
     "DashboardIndexEntry",
     "DashboardItem",
+    "DigestStatus",
     "Evidence",
     "FactorState",
     "FundSeries",
