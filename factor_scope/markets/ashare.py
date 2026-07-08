@@ -230,7 +230,12 @@ class ASharePrices:
         degraded: list[str] = []  # book codes with no reconciled price — unpriced or flagged
         seen: set[str] = set()  # codes actually attempted (vs left unreached by a deadline trip)
         stopped_early = False
-        for code in sorted(set(codes)):
+        # Price the breaker's required set (the held book) first, then the rest of the tier-priority
+        # stream: a deadline that truncates the loop must not starve a held code that merely sorts
+        # late — a Shanghai 5xxxxx book code falls after the whole Shenzhen 159xxx universe block
+        # numerically, so a plain sort would price the universe tail and leave the book unpriced.
+        rest = [code for code in dict.fromkeys(codes) if code not in required_codes]
+        for code in sorted(required_codes) + rest:
             if deadline is not None and deadline.exceeded():
                 stopped_early = True
                 break
@@ -429,13 +434,13 @@ class AShareMarket:
         # Price the held book *and* the fetched (non-dead) universe: the funnel reasons over
         # candidate funds' NAVs (the trend gate, the launch-at-peak run-up, the return-correlation
         # mapping), not just the held codes — but a dead-tier zombie earns no deep-price pull, so
-        # push2his burst shrinks with the per-fund loop. The book is the breaker's required set;
-        # ``ordered`` is the universe leg's tier screen, reused here so it runs once per run.
+        # the push2his burst shrinks with the per-fund loop. The book is the breaker's required set;
+        # ``ordered`` is the universe leg's tier screen, handed through in priority order so the
+        # price loop keeps book-first, core-before-probation when a deadline binds (runs once/run).
         book = [r.key for r in readings if r.series == positions.SERIES]
-        codes = sorted(set(book) | set(ordered))
         readings += ASharePrices().gather(
             config,
-            codes,
+            ordered,
             as_of=as_of,
             fetched_at=fetched_at,
             feed=feed,

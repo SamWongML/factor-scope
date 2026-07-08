@@ -132,13 +132,20 @@ class LadybugGraphStore:
         if not rows:
             return 0
         before = self.count()
-        # MERGE the (idempotent) nodes, then MERGE one edge per disclosure identity — the endpoints
-        # plus (as_of, source, valid_from). ON CREATE SET writes the payload only on first insert,
-        # so re-ingesting the same disclosure is a no-op while a genuinely new disclosure (a new
-        # as_of) is a new row. Node and edge MERGEs are split so one (fund, security) pair can carry
-        # several disclosures.
-        self._con.execute("UNWIND $rows AS r MERGE (:Fund {code: r.fund})", {"rows": rows})
-        self._con.execute("UNWIND $rows AS r MERGE (:Security {code: r.security})", {"rows": rows})
+        # MERGE each distinct node once, then MERGE one edge per disclosure identity — the endpoints
+        # plus (as_of, source, valid_from). Deduping the node keys is load-bearing: a fund recurs
+        # once per holding, and MERGE over an UNWIND batch that repeats a key already on disk
+        # re-creates it (a duplicate-primary-key violation) instead of matching, so each (:Fund)/
+        # (:Security) code is unwound exactly once. ON CREATE SET writes the payload only on first
+        # insert, so re-ingesting the same disclosure is a no-op while a genuinely new disclosure (a
+        # new as_of) is a new row. Node and edge MERGEs are split so one (fund, security) pair can
+        # carry several disclosures.
+        funds = [{"code": c} for c in dict.fromkeys(r["fund"] for r in rows)]
+        securities = [{"code": c} for c in dict.fromkeys(r["security"] for r in rows)]
+        self._con.execute("UNWIND $rows AS r MERGE (:Fund {code: r.code})", {"rows": funds})
+        self._con.execute(
+            "UNWIND $rows AS r MERGE (:Security {code: r.code})", {"rows": securities}
+        )
         self._con.execute(
             "UNWIND $rows AS r MATCH (f:Fund {code: r.fund}), (s:Security {code: r.security}) "
             "MERGE (f)-[h:HOLDS {as_of: r.as_of, source: r.source, valid_from: r.valid_from}]->(s) "

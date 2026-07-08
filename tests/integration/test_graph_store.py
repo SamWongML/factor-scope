@@ -166,6 +166,30 @@ def test_build_graph_closes_a_window_when_a_holding_drops_out(tmp_path) -> None:
     store.close()
 
 
+def test_rebuilding_the_graph_with_a_recurring_fund_is_idempotent(tmp_path) -> None:
+    # Each night re-runs build_graph_from_store into the SAME durable graph. A fund discloses many
+    # holdings, so its :Fund node recurs across the edge batch; the node MERGE must match the node
+    # already on disk, never re-create it — else the second night raises a duplicate-key violation
+    # on (:Fund {code}) (the full-universe nightly crash). The rebuild is idempotent: no new edges,
+    # the count is stable, and the fund still resolves to its full holding set.
+    store = DuckDBStore(":memory:")
+    store.append(
+        [
+            Reading(series="fund_holdings", key=f"512170/S{i}", as_of=Q1, fetched_at="t",
+                    payload={"fund": "512170", "holding": f"S{i}", "weight": 0.01})
+            for i in range(40)
+        ]
+    )
+    path = tmp_path / "graph"
+    with LadybugGraphStore(path) as graph:
+        assert build_graph_from_store(graph, store) == 40  # first night: created
+    with LadybugGraphStore(path) as graph:
+        assert build_graph_from_store(graph, store) == 0  # second night: matched, not re-created
+        assert graph.count() == 40
+        assert len(graph.securities_of("512170", "2026-12-31")) == 40
+    store.close()
+
+
 def test_build_graph_includes_nport_edgar_but_not_13f(tmp_path) -> None:
     # US N-PORT fund/ETF holdings carry a weight → graph edges; 13F manager positions carry
     # only shares → not look-through edges (a 13F position has no weight to attribute).
